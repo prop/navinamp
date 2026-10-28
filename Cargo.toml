@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/navamp-audio"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+# Populated as shared dependencies emerge (e.g. symphonia, cpal for navamp-audio).

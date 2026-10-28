@@ -1,0 +1,13 @@
+# Node / frontend
+node_modules/
+dist/
+
+# Rust
+/target
+
+# OS
+.DS_Store
+
+# Logs
+logs/
+*.log

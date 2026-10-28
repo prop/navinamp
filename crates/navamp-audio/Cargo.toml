@@ -1,0 +1,7 @@
+[package]
+name = "navamp-audio"
+version.workspace = true
+edition.workspace = true
+description = "NavAmp audio engine: symphonia decode -> DSP -> ring buffer -> cpal output"
+
+[dependencies]
