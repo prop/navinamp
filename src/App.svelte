@@ -3,6 +3,12 @@
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
 
+  import SkinSurface from "./components/skin/SkinSurface.svelte";
+  import { listSkins, loadSkin } from "./lib/skin/load";
+  import { mockSkinPayload } from "./lib/skin/mock";
+  import { resolveLayout } from "./lib/skin/resolver";
+  import type { SkinPayload } from "./lib/skin/types";
+
   type AudioState = {
     status: "stopped" | "playing" | "paused";
     positionSecs: number;
@@ -103,6 +109,69 @@
   const position = $derived(
     Math.min(seeking ?? state.positionSecs, duration || Infinity),
   );
+
+  // --- skin preview: first installed .wal, else the built-in mock -----------
+
+  let skin = $state<SkinPayload | null>(null);
+  let skinError = $state<string | null>(null);
+  let skinSource = $state("");
+  let scale = $state(1);
+
+  async function loadInitialSkin(): Promise<SkinPayload> {
+    try {
+      const skins = await listSkins();
+      if (skins.length > 0) {
+        skinSource = `skin: ${skins[0].fileName}`;
+        return await loadSkin(skins[0].id);
+      }
+    } catch (e) {
+      // No skins installed (or the scan failed) — render the mock.
+      skinSource = `no installed skins (${e}; using mock)`;
+      return mockSkinPayload();
+    }
+    skinSource = "mock (no installed skins)";
+    return mockSkinPayload();
+  }
+
+  $effect(() => {
+    let cancelled = false;
+    loadInitialSkin()
+      .then((payload) => {
+        if (!cancelled) skin = payload;
+      })
+      .catch((e) => {
+        if (!cancelled) skinError = String(e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  const playerLayout = $derived(skin ? resolveLayout(skin, "main", "normal") : null);
+
+  // Standard Winamp button actions → audio IPC. PREV/NEXT need queue
+  // navigation (engine-side) and EJECT a file-open dialog — TODO until then.
+  function skinAction(action: string) {
+    switch (action) {
+      case "PLAY":
+        // TODO: with nothing loaded there is nothing to start; a real PLAY
+        // should (re)start the current track once a queue exists.
+        if (state.status === "paused") void cmd("audio_resume");
+        break;
+      case "PAUSE":
+        if (state.status === "playing") void cmd("audio_pause");
+        else if (state.status === "paused") void cmd("audio_resume");
+        break;
+      case "STOP":
+        void cmd("audio_stop");
+        break;
+      case "PREV":
+      case "NEXT":
+      case "EJECT":
+        // TODO: queue navigation / open-file dialog.
+        break;
+    }
+  }
 </script>
 
 <main>
@@ -165,6 +234,41 @@
       {/each}
     </ul>
   {/if}
+
+  <section class="skin-preview">
+    <h2>
+      skin preview
+      <span class="skin-name">{skin?.skin.params?.["name"] ?? "…"}</span>
+      <span class="skin-src">{skinSource}</span>
+    </h2>
+
+    <div class="row">
+      <button class:on={scale === 1} onclick={() => (scale = 1)}>1×</button>
+      <button class:on={scale === 2} onclick={() => (scale = 2)}>2×</button>
+      {#if (skin?.warnings.length ?? 0) + (playerLayout?.warnings.length ?? 0) > 0}
+        <span class="mono warn">
+          ⚠ {(skin?.warnings.length ?? 0) + (playerLayout?.warnings.length ?? 0)} warnings
+        </span>
+      {/if}
+    </div>
+
+    {#if playerLayout}
+      <SkinSurface
+        layout={playerLayout}
+        {scale}
+        {position}
+        {duration}
+        volume={state.volume}
+        onaction={skinAction}
+        onseek={(secs) => cmd("audio_seek", { secs })}
+        onvolume={(v) => cmd("audio_set_volume", { volume: v })}
+      />
+    {:else if skinError}
+      <p class="status warn">skin load failed: {skinError}</p>
+    {:else}
+      <p class="status">loading skin…</p>
+    {/if}
+  </section>
 </main>
 
 <style>
@@ -282,5 +386,44 @@
 
   .log li {
     white-space: nowrap;
+  }
+
+  .skin-preview {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #222;
+  }
+
+  .skin-preview h2 {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #707070;
+  }
+
+  .skin-name {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    color: #4f4f4f;
+  }
+
+  .skin-src {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    color: #3a5a3f;
+  }
+
+  button.on {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
   }
 </style>
