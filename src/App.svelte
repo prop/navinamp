@@ -4,10 +4,13 @@
   import { open } from "@tauri-apps/plugin-dialog";
 
   import SkinSurface from "./components/skin/SkinSurface.svelte";
+  import PlaylistEditor from "./components/PlaylistEditor.svelte";
   import { listSkins, loadSkin } from "./lib/skin/load";
   import { mockSkinPayload } from "./lib/skin/mock";
   import { resolveLayout } from "./lib/skin/resolver";
   import type { SkinPayload } from "./lib/skin/types";
+  import { queue, isAudioPath } from "./lib/player/queue.svelte";
+  import type { EngineEvent } from "./lib/player/queue.svelte";
 
   type AudioState = {
     status: "stopped" | "playing" | "paused";
@@ -16,12 +19,6 @@
     volume: number;
     underrunFrames: number;
   };
-
-  type EngineEvent =
-    | { type: "TrackStarted"; id: number; durationSecs: number | null }
-    | { type: "TrackFinished"; id: number }
-    | { type: "EndOfQueue" }
-    | { type: "Error"; id: number | null; msg: string };
 
   let state = $state<AudioState>({
     status: "stopped",
@@ -37,6 +34,9 @@
     log = [`${new Date().toLocaleTimeString()}  ${line}`, ...log].slice(0, 8);
   }
 
+  // Feed errors inside the queue module surface in the same log.
+  queue.setLog(logLine);
+
   async function refresh() {
     try {
       state = await invoke<AudioState>("audio_state");
@@ -51,24 +51,27 @@
     return () => clearInterval(timer);
   });
 
+  // Raw engine-event text for events the queue does not claim (it returns
+  // its own "queue[i] …" line for the ones it correlates).
+  function rawEngineLine(e: EngineEvent): string {
+    switch (e.type) {
+      case "TrackStarted":
+        return `▶ track #${e.id} started (${e.durationSecs?.toFixed(1) ?? "?"}s)`;
+      case "TrackFinished":
+        return `▪ track #${e.id} finished`;
+      case "EndOfQueue":
+        return "= end of queue";
+      case "Error":
+        return `✖ error${e.id != null ? ` (#${e.id})` : ""}: ${e.msg}`;
+    }
+  }
+
   // Engine events.
   $effect(() => {
     const unlisten = listen<EngineEvent>("audio-event", (ev) => {
       const e = ev.payload;
-      switch (e.type) {
-        case "TrackStarted":
-          logLine(`▶ track #${e.id} started (${e.durationSecs?.toFixed(1) ?? "?"}s)`);
-          break;
-        case "TrackFinished":
-          logLine(`▪ track #${e.id} finished`);
-          break;
-        case "EndOfQueue":
-          logLine("= end of queue");
-          break;
-        case "Error":
-          logLine(`✖ error${e.id != null ? ` (#${e.id})` : ""}: ${e.msg}`);
-          break;
-      }
+      const note = queue.handleEngineEvent(e);
+      logLine(note ?? rawEngineLine(e));
       void refresh();
     });
     return () => {
@@ -85,9 +88,13 @@
     void refresh();
   }
 
+  // The debug buttons below poke the engine directly (they are M1 probes of
+  // the IPC surface). Detaching the queue first keeps its feed-order
+  // correlation from mis-tracking a raw session's TrackStarted events.
   async function pickAndPlay() {
     const file = await open({ multiple: false, directory: false });
     if (typeof file === "string") {
+      queue.onStopped();
       await cmd("audio_play", { path: file });
     }
   }
@@ -95,7 +102,41 @@
   async function pickAndEnqueue() {
     const file = await open({ multiple: false, directory: false });
     if (typeof file === "string") {
+      queue.onStopped();
       await cmd("audio_enqueue", { path: file });
+    }
+  }
+
+  function stopEngine() {
+    queue.onStopped();
+    void cmd("audio_stop");
+  }
+
+  // Multi-select audio dialog shared by EJECT and the editor's ADD.
+  async function pickAudioPaths(): Promise<string[]> {
+    const res = await open({ multiple: true, directory: false });
+    const files = Array.isArray(res) ? res : res != null ? [res] : [];
+    return files.filter(isAudioPath);
+  }
+
+  // EJECT: append to the end of the queue; if nothing was ever loaded, spin
+  // up playback at the first added track.
+  async function eject() {
+    const paths = await pickAudioPaths();
+    if (paths.length === 0) return;
+    const wasUnloaded = queue.currentIndex === null;
+    const first = queue.add(paths);
+    if (wasUnloaded) queue.play(first);
+  }
+
+  // Playlist ADD: insert the picked files right after the current track.
+  async function addAfterCurrent() {
+    const paths = await pickAudioPaths();
+    if (paths.length === 0) return;
+    let at = queue.currentIndex == null ? queue.items.length : queue.currentIndex + 1;
+    for (const path of paths) {
+      queue.addNext(path, at);
+      at += 1;
     }
   }
 
@@ -149,26 +190,30 @@
 
   const playerLayout = $derived(skin ? resolveLayout(skin, "main", "normal") : null);
 
-  // Standard Winamp button actions → audio IPC. PREV/NEXT need queue
-  // navigation (engine-side) and EJECT a file-open dialog — TODO until then.
+  // Standard Winamp button actions → queue navigation / audio IPC.
   function skinAction(action: string) {
     switch (action) {
       case "PLAY":
-        // TODO: with nothing loaded there is nothing to start; a real PLAY
-        // should (re)start the current track once a queue exists.
         if (state.status === "paused") void cmd("audio_resume");
+        else if (state.status === "stopped" && queue.items.length > 0) {
+          queue.play(queue.currentIndex ?? 0);
+        }
         break;
       case "PAUSE":
         if (state.status === "playing") void cmd("audio_pause");
         else if (state.status === "paused") void cmd("audio_resume");
         break;
       case "STOP":
-        void cmd("audio_stop");
+        stopEngine();
         break;
       case "PREV":
+        queue.prev();
+        break;
       case "NEXT":
+        queue.next();
+        break;
       case "EJECT":
-        // TODO: queue navigation / open-file dialog.
+        void eject();
         break;
     }
   }
@@ -182,7 +227,7 @@
     <button onclick={pickAndEnqueue}>Enqueue…</button>
     <button onclick={() => cmd("audio_pause")} disabled={state.status !== "playing"}>Pause</button>
     <button onclick={() => cmd("audio_resume")} disabled={state.status !== "paused"}>Resume</button>
-    <button onclick={() => cmd("audio_stop")} disabled={state.status === "stopped"}>Stop</button>
+    <button onclick={stopEngine} disabled={state.status === "stopped"}>Stop</button>
   </div>
 
   <div class="row">
@@ -268,6 +313,27 @@
     {:else}
       <p class="status">loading skin…</p>
     {/if}
+  </section>
+
+  <section class="playlist">
+    <h2>playlist editor</h2>
+
+    <p class="mono queue-status">
+      <span>{queue.currentIndex == null ? "--" : queue.currentIndex + 1}/{queue.items.length}</span>
+      <button class:on={queue.shuffle} onclick={() => queue.toggleShuffle()}>shuffle</button>
+      <button class:on={queue.repeat !== "off"} onclick={() => queue.cycleRepeat()}>
+        repeat&nbsp;{queue.repeat}
+      </button>
+    </p>
+
+    <PlaylistEditor
+      items={queue.items}
+      currentIndex={queue.currentIndex}
+      onplay={(i) => queue.play(i)}
+      onremove={(i) => queue.remove(i)}
+      onmove={(from, to) => queue.move(from, to)}
+      onadd={addAfterCurrent}
+    />
   </section>
 </main>
 
@@ -399,7 +465,34 @@
     border-top: 1px solid #222;
   }
 
-  .skin-preview h2 {
+  .playlist {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #222;
+  }
+
+  .queue-status {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.75rem;
+    color: #a0a0a0;
+  }
+
+  .queue-status button {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+  }
+
+  .skin-preview h2,
+  .playlist h2 {
     margin: 0;
     font-size: 0.8rem;
     font-weight: 600;
