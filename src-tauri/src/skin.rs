@@ -1,0 +1,254 @@
+//! Skin bridge: wires `navamp-skin` into the Tauri shell.
+//!
+//! [`skin_list`] scans `<app-config-dir>/skins` for `.wal`/`.wsz` archives;
+//! [`skin_load`] opens one, parses the model and materializes its bitmap
+//! payloads (PNG data-URLs) in a single round trip. The last-loaded payload
+//! is cached by path + mtime so repeated loads (window re-opens, UI reloads)
+//! are cheap — replacing the file or touching it on disk invalidates the
+//! cache.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager, State};
+
+use navamp_skin::{Skin, SkinArchive, Warning, bitmap_payloads};
+
+/// Last successfully loaded payload, invalidated by path or mtime change.
+#[derive(Default)]
+pub struct SkinCache(Mutex<Option<CachedSkin>>);
+
+struct CachedSkin {
+    path: PathBuf,
+    mtime: SystemTime,
+    payload: SkinPayload,
+}
+
+/// One installable skin found in the skins folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkinInfo {
+    /// Bare file stem — the id accepted by [`skin_load`].
+    pub id: String,
+    /// File name including extension.
+    pub file_name: String,
+}
+
+/// Everything the UI needs to render one skin.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkinPayload {
+    /// The parsed model (`navamp_skin::Skin`) as JSON.
+    pub skin: serde_json::Value,
+    /// Bitmap id → PNG data-URL (`data:image/png;base64,...`).
+    pub images: HashMap<String, String>,
+    /// Parse + payload warnings; non-fatal by design, the UI surfaces them.
+    pub warnings: Vec<Warning>,
+}
+
+/// Lists the installable skins in `<app-config-dir>/skins`, sorted by id.
+/// The directory is created if it does not exist yet.
+#[tauri::command]
+pub fn skin_list(app: AppHandle) -> Result<Vec<SkinInfo>, String> {
+    let dir = skins_dir(&app)?;
+    list_skins(&dir)
+}
+
+/// Loads the skin with the given id (see [`SkinInfo::id`]).
+///
+/// Serves the cached payload when the file's path and mtime are unchanged;
+/// otherwise re-opens, re-parses and re-materializes the skin.
+#[tauri::command]
+pub fn skin_load(
+    id: String,
+    app: AppHandle,
+    cache: State<'_, SkinCache>,
+) -> Result<SkinPayload, String> {
+    validate_id(&id)?;
+    let dir = skins_dir(&app)?;
+    let file_name = find_skin(&dir, &id)?
+        .ok_or_else(|| format!("no skin with id `{id}` in {}", dir.display()))?;
+    let path = dir.join(&file_name);
+    let mtime = std::fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .map_err(|e| format!("cannot stat `{}`: {e}", path.display()))?;
+
+    let mut guard = cache.0.lock().unwrap();
+    if let Some(cached) = guard.as_ref()
+        && cached.path == path
+        && cached.mtime == mtime
+    {
+        return Ok(cached.payload.clone());
+    }
+    let payload = load_skin(&path)?;
+    *guard = Some(CachedSkin {
+        path,
+        mtime,
+        payload: payload.clone(),
+    });
+    Ok(payload)
+}
+
+/// The skins folder, created on first use.
+fn skins_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("no app config dir: {e}"))?
+        .join("skins");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create `{}`: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Rejects anything that is not a bare file stem, so an id can never escape
+/// the skins directory (no separators, no `.`/`..`, no NUL).
+fn validate_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.contains(['/', '\\', '\0']) || id == "." || id == ".." {
+        Err(format!("invalid skin id `{id}`"))
+    } else {
+        Ok(())
+    }
+}
+
+/// Scans one directory for `.wal`/`.wsz` files (extension matched
+/// case-insensitively), sorted by id then file name.
+fn list_skins(dir: &Path) -> Result<Vec<SkinInfo>, String> {
+    let mut skins: Vec<SkinInfo> = std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read `{}`: {e}", dir.display()))?
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            if !path.is_file() {
+                return None;
+            }
+            let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+            if ext != "wal" && ext != "wsz" {
+                return None;
+            }
+            Some(SkinInfo {
+                id: path.file_stem()?.to_string_lossy().into_owned(),
+                file_name: path.file_name()?.to_string_lossy().into_owned(),
+            })
+        })
+        .collect();
+    skins.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.file_name.cmp(&b.file_name)));
+    Ok(skins)
+}
+
+/// Finds the file name of the skin with this id, if installed.
+fn find_skin(dir: &Path, id: &str) -> Result<Option<String>, String> {
+    Ok(list_skins(dir)?
+        .into_iter()
+        .find(|skin| skin.id == id)
+        .map(|skin| skin.file_name))
+}
+
+/// Opens, parses and materializes one skin file.
+fn load_skin(path: &Path) -> Result<SkinPayload, String> {
+    let archive =
+        SkinArchive::open(path).map_err(|e| format!("cannot open `{}`: {e}", path.display()))?;
+    let (skin, mut warnings) = Skin::from_archive(&archive)
+        .map_err(|e| format!("cannot parse `{}`: {e}", path.display()))?;
+    let (images, image_warnings) = bitmap_payloads(&archive, &skin);
+    // `Skin::from_archive` already reports missing bitmap files; don't say it twice.
+    for warning in image_warnings {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+    let skin = serde_json::to_value(&skin).map_err(|e| format!("cannot serialize skin: {e}"))?;
+    Ok(SkinPayload {
+        skin,
+        images,
+        warnings,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn ids_must_be_bare_file_stems() {
+        for id in ["default", "my.skin", "Winamp3"] {
+            assert!(validate_id(id).is_ok(), "`{id}` should be accepted");
+        }
+        for id in [
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "..\\evil",
+            "a\0b",
+            "/etc/passwd",
+        ] {
+            assert!(validate_id(id).is_err(), "`{id}` should be rejected");
+        }
+    }
+
+    #[test]
+    fn listing_filters_by_extension_case_insensitively() {
+        let dir = std::env::temp_dir().join(format!("navamp-skin-list-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // a same-named marker so parallel runs can't collide on content checks
+        for name in ["Alpha.wal", "beta.WSZ", "note.txt", "README.md"] {
+            std::fs::write(dir.join(name), b"fake skin").unwrap();
+        }
+        std::fs::create_dir_all(dir.join("Subdir.wal")).unwrap();
+
+        let skins = list_skins(&dir).expect("list");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            skins,
+            vec![
+                SkinInfo {
+                    id: "Alpha".into(),
+                    file_name: "Alpha.wal".into(),
+                },
+                SkinInfo {
+                    id: "beta".into(),
+                    file_name: "beta.WSZ".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn loading_a_minimal_skin_yields_model_and_payloads() {
+        // A minimal but real .wal: valid skin.xml + a bitmap whose bytes are
+        // not a decodable image (so the payload half warns instead of failing).
+        let mut bytes = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            let xml = br#"<skin><elements><bitmap id="bg" file="bg.png"/></elements></skin>"#;
+            writer.start_file("skin.xml", options).unwrap();
+            writer.write_all(xml).unwrap();
+            writer.start_file("bg.png", options).unwrap();
+            writer.write_all(b"\x89PNG-fake").unwrap();
+            writer.finish().unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("navamp-skin-load-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("minimal.wal");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let payload = load_skin(&path).expect("load");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // the model crossed as JSON
+        assert_eq!(payload.skin["elements"]["bitmaps"][0]["id"], "bg");
+        // undecodable bytes -> warning, no image, no error
+        assert!(payload.images.is_empty());
+        assert!(
+            matches!(&payload.warnings[..], [Warning::ImageDecode { file, .. }] if file == "bg.png"),
+            "unexpected warnings: {:?}",
+            payload.warnings
+        );
+    }
+}

@@ -69,6 +69,22 @@ pub enum Warning {
     MalformedXml { file: String, message: String },
     /// Nesting or include depth exceeded the parser's safety limit.
     DepthLimit { file: String, message: String },
+    /// A bitmap file exists in the archive but its bytes could not be
+    /// decoded as PNG/BMP (or the cropped result could not be re-encoded).
+    /// The bitmap gets no image payload.
+    ImageDecode { file: String, message: String },
+    /// The `x`/`y`/`w`/`h` sub-rectangle of a bitmap lies (partly) outside
+    /// the decoded image; the bitmap gets no image payload.
+    CropOutOfRange {
+        bitmap: String,
+        file: String,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        image_width: u32,
+        image_height: u32,
+    },
 }
 
 impl fmt::Display for Warning {
@@ -131,6 +147,28 @@ impl fmt::Display for Warning {
             }
             Warning::DepthLimit { file, message } => {
                 write!(f, "depth limit in `{file}`: {message}")
+            }
+            Warning::ImageDecode { file, message } => {
+                write!(
+                    f,
+                    "file `{file}` could not be decoded as png/bmp: {message}"
+                )
+            }
+            Warning::CropOutOfRange {
+                bitmap,
+                file,
+                x,
+                y,
+                w,
+                h,
+                image_width,
+                image_height,
+            } => {
+                write!(
+                    f,
+                    "crop rect {w}x{h}+{x}+{y} of bitmap `{bitmap}` (file `{file}`) \
+                     is outside the {image_width}x{image_height} image"
+                )
             }
         }
     }

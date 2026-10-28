@@ -1,12 +1,13 @@
 # navamp-skin
 
-Wasabi (Winamp3) skin engine — **parsing half** for NavAmp.
+Wasabi (Winamp3) skin engine — **parsing + bitmap payloads** for NavAmp.
 
-Loads `.wal` skin archives and parses their XML into a normalized,
-serde-serializable model (`Skin`) that crosses IPC as JSON to the UI, which
-renders it with absolute positioning. This crate is deliberately **only a
-parser**: no rendering, no MAKI interpretation, no tauri/symphonia/audio
-dependencies, and no copyrighted assets (all test fixtures are synthetic and
+Loads `.wal` skin archives, parses their XML into a normalized,
+serde-serializable model (`Skin`) that crosses IPC as JSON to the UI, and
+materializes `<bitmap>` elements into PNG data-URLs (`bitmap_payloads`).
+The UI renders the model with absolute positioning. This crate deliberately
+does **no rendering, no MAKI interpretation, no tauri/symphonia/audio**,
+and ships no copyrighted assets (all test fixtures are synthetic and
 built in-test).
 
 ## Usage
@@ -28,6 +29,22 @@ let json = skin.to_json()?; // pretty JSON for the webview
   The archive is `Send + Sync`; file reads open a fresh ZIP reader per call.
 - Parsing never fails on skin *content* problems — those are `Warning`s.
   Only an unreadable archive or a malformed `skin.xml` yields `SkinError`.
+- `bitmap_payloads(&archive, &skin)` materializes every `<bitmap>` with a
+  `file` into a PNG **data-URL** (`data:image/png;base64,...`): bytes are
+  read case-insensitively, decoded as PNG/BMP, cropped to `x`/`y`/`w`/`h`
+  when present (absent extents run to the image edge), given Wasabi
+  color-key transparency for a `transparent` attribute, and re-encoded.
+  Missing/undecodable files, out-of-range crops and unparseable
+  `transparent` values are warnings (`MissingFile`, `ImageDecode`,
+  `CropOutOfRange`, `MalformedValue`), never fatal; that bitmap just gets
+  no payload. Duplicate ids keep the **first** payload. The `transparent`
+  color parses liberally: `#RRGGBB`, `RRGGBB`, `#RRGGBBAA` (alpha ignored),
+  `0x…` hex, or `R,G,B` / `R,G,B,A` decimals; an exact RGB match becomes
+  alpha 0 (classic skins' magic pink `255,0,255`). There is **no
+  downscaling on load** — payloads are 1:1 skin pixels and integer scaling
+  (1×/2× retina) is the renderer's job. Note `Skin::from_archive` already
+  reports missing bitmap files, so calling both yields that warning twice
+  unless the caller de-duplicates.
 
 ## Format notes
 
@@ -110,19 +127,33 @@ round-trippable, and `Skin::to_json()` is provided for IPC.
 
 ## Testing
 
-`cargo test -p navamp-skin` — 13 integration tests (`tests/skin_tests.rs`)
-plus a doctest. Fixtures are `.wal` archives written in-test with the `zip`
-writer. Coverage: full-model parse (incl. preserved unknown attrs/tags),
+`cargo test -p navamp-skin` — 13 parse-half integration tests
+(`tests/skin_tests.rs`) + 9 bitmap-payload integration tests
+(`tests/image_tests.rs`, fixtures are PNG/BMPs encoded in-test with the
+`image` crate) + unit tests for the color-key parser, plus doctests.
+Fixtures are `.wal` archives written in-test with the `zip` writer.
+Coverage: full-model parse (incl. preserved unknown attrs/tags),
 case-insensitive lookup, missing bitmap file → warning, dangling group →
 warning, group cycles → warnings, includes + include cycle, missing
-`skin.xml` → error, malformed numerics → warning + raw preserved, duplicate
-groupdef ids → warning, attribute-key casing tolerance, `SkinArchive::open`
-from disk, serde JSON round-trip equality.
+`skin.xml` → error, malformed numerics → warning + raw preserved,
+duplicate groupdef ids → warning, attribute-key casing tolerance,
+`SkinArchive::open` from disk, serde JSON round-trip equality;
+whole-image payloads sample-verified against source pixels, crop
+correctness (incl. x-only crops and case-differing file refs), magic-pink
+BMP → alpha transparency (all `transparent` notations), unparseable
+`transparent` → no-op warning, missing/undecodable files and out-of-range
+crops → warnings without payloads, duplicate bitmap ids keep the first
+payload, bitmaps without `file` are skipped silently.
 
 ## Known limitations
 
 - **MAKI (`<script>`) is preserved but not interpreted** — heavily scripted
   skins degrade to their static layout (per plan §3/§10).
+- Bitmap payloads are PNG/BMP-decode only (the `image` crate is built with
+  exactly those features); other formats warn and skip. Color-key
+  transparency is an exact RGB match — anti-aliased edges around magic
+  pink are not cleaned up, and no downscaling happens on load (the
+  renderer owns integer scaling).
 - Tag-name matching is case-sensitive: a hypothetical `<Bitmap>` is kept as
   a generic node with a warning, not parsed as a bitmap (see format notes).
 - Non-UTF-8 XML: quick-xml 0.42 stores attribute values as UTF-8; skins in
