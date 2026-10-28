@@ -5,12 +5,13 @@
 
   import SkinSurface from "./components/skin/SkinSurface.svelte";
   import PlaylistEditor from "./components/PlaylistEditor.svelte";
+  import MediaLibrary from "./components/MediaLibrary.svelte";
   import { listSkins, loadSkin } from "./lib/skin/load";
   import { mockSkinPayload } from "./lib/skin/mock";
   import { resolveLayout } from "./lib/skin/resolver";
   import type { SkinPayload } from "./lib/skin/types";
   import { queue, isAudioPath } from "./lib/player/queue.svelte";
-  import type { EngineEvent } from "./lib/player/queue.svelte";
+  import type { EngineEvent, QueueItemMeta } from "./lib/player/queue.svelte";
 
   type AudioState = {
     status: "stopped" | "playing" | "paused";
@@ -140,6 +141,19 @@
     }
   }
 
+  // Media Library queue hooks: enqueue fully-tagged tracks (M4).
+  function enqueueFromLibrary(metas: QueueItemMeta[]) {
+    if (metas.length === 0) return;
+    queue.addFromLibrary(metas);
+    logLine(`+ ${metas.length} track${metas.length === 1 ? "" : "s"} enqueued from library`);
+  }
+
+  function playFromLibrary(metas: QueueItemMeta[]) {
+    if (metas.length === 0) return;
+    const first = queue.addFromLibrary(metas);
+    queue.play(first);
+  }
+
   const fmt = (secs: number) => {
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
@@ -188,6 +202,10 @@
 
   const playerLayout = $derived(skin ? resolveLayout(skin, "main", "normal") : null);
 
+  // M6 will give the playlist editor / media library real OS windows; for
+  // now the skin's TOGGLE_PLAYLIST action flips this section's visibility.
+  let playlistVisible = $state(true);
+
   // Standard Winamp button actions → queue navigation / audio IPC.
   function skinAction(action: string) {
     switch (action) {
@@ -212,6 +230,9 @@
         break;
       case "EJECT":
         void eject();
+        break;
+      case "TOGGLE_PLAYLIST":
+        playlistVisible = !playlistVisible;
         break;
     }
   }
@@ -313,25 +334,37 @@
     {/if}
   </section>
 
-  <section class="playlist">
-    <h2>playlist editor</h2>
+  {#if playlistVisible}
+    <!-- M6: becomes a real OS window (edge-snapped like the player). -->
+    <section class="playlist">
+      <h2>playlist editor</h2>
 
-    <p class="mono queue-status">
-      <span>{queue.currentIndex == null ? "--" : queue.currentIndex + 1}/{queue.items.length}</span>
-      <button class:on={queue.shuffle} onclick={() => queue.toggleShuffle()}>shuffle</button>
-      <button class:on={queue.repeat !== "off"} onclick={() => queue.cycleRepeat()}>
-        repeat&nbsp;{queue.repeat}
-      </button>
-    </p>
+      <p class="mono queue-status">
+        <span>{queue.currentIndex == null ? "--" : queue.currentIndex + 1}/{queue.items.length}</span>
+        <button class:on={queue.shuffle} onclick={() => queue.toggleShuffle()}>shuffle</button>
+        <button class:on={queue.repeat !== "off"} onclick={() => queue.cycleRepeat()}>
+          repeat&nbsp;{queue.repeat}
+        </button>
+      </p>
 
-    <PlaylistEditor
-      items={queue.items}
-      currentIndex={queue.currentIndex}
-      onplay={(i) => queue.play(i)}
-      onremove={(i) => queue.remove(i)}
-      onmove={(from, to) => queue.move(from, to)}
-      onadd={addAfterCurrent}
-    />
+      <PlaylistEditor
+        items={queue.items}
+        currentIndex={queue.currentIndex}
+        onplay={(i) => queue.play(i)}
+        onremove={(i) => queue.remove(i)}
+        onmove={(from, to) => queue.move(from, to)}
+        onadd={addAfterCurrent}
+      />
+    </section>
+  {/if}
+
+  <section class="media-library">
+    <h2>media library</h2>
+
+    <MediaLibrary
+      onenqueue={enqueueFromLibrary}
+      onplaynow={playFromLibrary}
+      onlog={logLine} />
   </section>
 </main>
 
@@ -474,6 +507,17 @@
     border-top: 1px solid #222;
   }
 
+  .media-library {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #222;
+  }
+
   .queue-status {
     margin: 0;
     display: flex;
@@ -490,7 +534,8 @@
   }
 
   .skin-preview h2,
-  .playlist h2 {
+  .playlist h2,
+  .media-library h2 {
     margin: 0;
     font-size: 0.8rem;
     font-weight: 600;
