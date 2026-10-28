@@ -112,7 +112,8 @@ fn write_roots(path: &std::path::Path, roots: &[String]) -> Result<(), String> {
 }
 
 /// Runs `f` against the shared query connection, opening it on first use.
-fn with_library<T>(
+/// (Also used by `smart.rs` — the Smart View commands share this state.)
+pub(crate) fn with_library<T>(
     app: &AppHandle,
     state: &LibraryState,
     f: impl FnOnce(&Library) -> Result<T, String>,

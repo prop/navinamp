@@ -2,6 +2,7 @@ mod audio;
 mod commands;
 mod library;
 mod skin;
+mod smart;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,7 +33,12 @@ pub fn run() {
             library::library_album_tracks,
             library::library_tracks,
             library::library_stats,
-            library::library_roots
+            library::library_roots,
+            smart::smart_views_list,
+            smart::smart_view_save,
+            smart::smart_view_delete,
+            smart::smart_view_run,
+            smart::smart_view_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running NavAmp");

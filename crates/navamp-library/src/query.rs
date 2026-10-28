@@ -37,7 +37,10 @@ const TRACK_COLUMN_NAMES: &[&str] = &[
     "art_id",
 ];
 
-fn track_columns(prefix: &str) -> String {
+/// Column list for every `SELECT` on `tracks`; positionally mapped by
+/// [`track_from_row`]. With a prefix (`tracks.`) for joins where bare names
+/// would be ambiguous (the FTS search join). Shared with `smart.rs`.
+pub(super) fn track_columns(prefix: &str) -> String {
     TRACK_COLUMN_NAMES
         .iter()
         .map(|name| format!("{prefix}{name}"))
@@ -45,7 +48,9 @@ fn track_columns(prefix: &str) -> String {
         .join(", ")
 }
 
-fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
+/// Maps a `tracks` row (in [`track_columns`] order) to a [`Track`].
+/// Shared with `smart.rs`.
+pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
     Ok(Track {
         id: row.get(0)?,
         path: row.get(1)?,

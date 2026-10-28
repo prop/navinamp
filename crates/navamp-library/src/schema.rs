@@ -11,6 +11,8 @@
 //!   `tracks`, and plain-SQL readers never see a second copy drift.
 //! - `meta` is a tiny key/value table for scanner bookkeeping
 //!   (`last_scan_at`); it holds no track data.
+//! - `smart_views` stores Smart View definitions as JSON blobs (see
+//!   `smart.rs`); the scanner never touches it.
 
 /// Applies the full schema, idempotently.
 pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
@@ -79,6 +81,17 @@ END;
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- Saved Smart Views (Winamp3 media-library smart playlists). `def` holds
+-- the serialized SmartViewDef JSON and is the source of truth; `name` is
+-- denormalized for tree display and `position` is reserved for a future
+-- drag-reorder (list order is `position, id` — i.e. creation order today).
+CREATE TABLE IF NOT EXISTS smart_views (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    name     TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    def      TEXT NOT NULL
 );
 COMMIT;
 ";

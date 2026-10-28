@@ -96,18 +96,16 @@ fn send_if_running(state: &Audio, make: impl FnOnce() -> Command) -> Result<(), 
 }
 
 #[tauri::command]
-pub fn audio_play(
-    app: AppHandle,
-    state: State<'_, Audio>,
-    path: String,
-) -> Result<(), String> {
+pub fn audio_play(app: AppHandle, state: State<'_, Audio>, path: String) -> Result<(), String> {
     ensure_engine(&app, &state)?;
     send_if_running(&state, || Command::Play(TrackSource::File(path.into())))
 }
 
 #[tauri::command]
 pub fn audio_enqueue(state: State<'_, Audio>, path: String) -> Result<(), String> {
-    send_if_running(&state, || Command::EnqueueNext(TrackSource::File(path.into())))
+    send_if_running(&state, || {
+        Command::EnqueueNext(TrackSource::File(path.into()))
+    })
 }
 
 #[tauri::command]

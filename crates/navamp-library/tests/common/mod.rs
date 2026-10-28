@@ -53,6 +53,8 @@ pub fn mp3_bytes(frames: usize) -> Vec<u8> {
 }
 
 /// Canonical 16-bit stereo 44.1 kHz WAV of `secs` seconds (silence).
+/// (`#[allow]`: shared test module — not every test binary uses it.)
+#[allow(dead_code)]
 pub fn wav_bytes(secs: f64) -> Vec<u8> {
     let sample_rate: u32 = 44_100;
     let channels: u16 = 2;
