@@ -2,6 +2,28 @@
 name = "navamp-audio"
 version.workspace = true
 edition.workspace = true
-description = "NavAmp audio engine: symphonia decode -> DSP -> ring buffer -> cpal output"
+description = "NavAmp audio engine: symphonia decode -> DSP -> lock-free ring buffer -> cpal output"
+license = "MIT"
 
 [dependencies]
+# Container + codec support. Note: symphonia 0.5/0.6 has no released Opus decoder
+# (the `ogg` feature still enables the Ogg container, e.g. for Vorbis).
+symphonia = { version = "0.5.5", default-features = false, features = [
+    "aac",
+    "alac",
+    "flac",
+    "isomp4",
+    "mp3",
+    "ogg",
+    "pcm",
+    "vorbis",
+    "wav",
+] }
+cpal = "0.18"
+rubato = "5.0"
+crossbeam-channel = "0.5"
+thiserror = "2"
+
+[dev-dependencies]
+ctrlc = "3"
+crossbeam-channel = "0.5"
