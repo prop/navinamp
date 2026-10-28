@@ -161,17 +161,15 @@
   async function loadInitialSkin(): Promise<SkinPayload> {
     try {
       const skins = await listSkins();
-      if (skins.length > 0) {
-        skinSource = `skin: ${skins[0].fileName}`;
-        return await loadSkin(skins[0].id);
-      }
+      // Prefer a real installed skin; the built-in fallback is always listed.
+      const pick = skins.find((s) => s.id !== "fallback") ?? skins[0];
+      skinSource = `skin: ${pick.fileName}`;
+      return await loadSkin(pick.id);
     } catch (e) {
       // No skins installed (or the scan failed) — render the mock.
-      skinSource = `no installed skins (${e}; using mock)`;
+      skinSource = `skin load failed (${e}; using mock)`;
       return mockSkinPayload();
     }
-    skinSource = "mock (no installed skins)";
-    return mockSkinPayload();
   }
 
   $effect(() => {
