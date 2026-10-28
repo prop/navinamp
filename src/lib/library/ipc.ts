@@ -162,6 +162,8 @@ export interface SavedSmartView {
 export interface TrackQuery {
   artist?: string;
   genre?: string;
+  /** Filter by library source, e.g. `local` / `navidrome` (M5). */
+  source?: string;
   limit?: number;
   offset?: number;
 }

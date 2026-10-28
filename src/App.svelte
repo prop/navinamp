@@ -206,6 +206,11 @@
   // now the skin's TOGGLE_PLAYLIST action flips this section's visibility.
   let playlistVisible = $state(true);
 
+  // M6: the media library becomes its own OS window; for now the skin's
+  // TOGGLE_SHADE action doubles as its show/hide placeholder. The section
+  // stays mounted (display:none) so tree/scroll/star state survives.
+  let mediaLibraryVisible = $state(true);
+
   // Standard Winamp button actions → queue navigation / audio IPC.
   function skinAction(action: string) {
     switch (action) {
@@ -233,6 +238,11 @@
         break;
       case "TOGGLE_PLAYLIST":
         playlistVisible = !playlistVisible;
+        break;
+      // M6: real per-window shade modes; the shade toggle doubles as the
+      // media library show/hide placeholder until then.
+      case "TOGGLE_SHADE":
+        mediaLibraryVisible = !mediaLibraryVisible;
         break;
     }
   }
@@ -358,7 +368,9 @@
     </section>
   {/if}
 
-  <section class="media-library">
+  <!-- M6: becomes a real OS window (edge-snapped like the player); the
+       skin's TOGGLE_SHADE action flips visibility for now. -->
+  <section class="media-library" class:hidden={!mediaLibraryVisible}>
     <h2>media library</h2>
 
     <MediaLibrary
@@ -516,6 +528,10 @@
     gap: 0.75rem;
     padding-top: 1.5rem;
     border-top: 1px solid #222;
+  }
+
+  .media-library.hidden {
+    display: none;
   }
 
   .queue-status {

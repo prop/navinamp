@@ -18,7 +18,12 @@
    *    ordering), smart view → `smart_view_run`; a `dataVersion` bump re-runs
    *    the current node after a scan;
    *  · search overrides the pane with debounced (150 ms) `library_search`
-   *    results until cleared.
+   *    results until cleared;
+   *  · NAVIDROME group (M5): SERVER STATUS renders a status card pane
+   *    (connection state, live sync progress bar, last report, settings
+   *    shortcut) and REMOTE TRACKS lists every `source="navidrome"` row;
+   *    a `navidrome-synced` event refreshes stats/tree/pane (dataVersion)
+   *    so synced rows appear everywhere at once.
    *
    * The table renders every row but each row opts into
    * `content-visibility: auto` with a fixed 20px intrinsic size, so the
@@ -51,6 +56,19 @@
     type Track,
   } from "../lib/library/ipc";
   import { emptySmartViewDef } from "../lib/library/smartView";
+  import {
+    isSyncReport,
+    navidromeStar,
+    navidromeStatus,
+    navidromeSync,
+    onNavidromeProgress,
+    onNavidromeSynced,
+    REMOTE_SOURCE,
+    type NavidromeProgressPayload,
+    type NavidromeStatus,
+    type NavidromeSyncReport,
+  } from "../lib/navidrome/ipc";
+  import NavidromeSettings from "./NavidromeSettings.svelte";
   import type { QueueItemMeta } from "../lib/player/queue.svelte";
 
   interface Props {
@@ -71,10 +89,14 @@
     | { kind: "artist"; value: string }
     | { kind: "album"; value: string }
     | { kind: "genre"; value: string }
-    | { kind: "smart"; value: number };
+    | { kind: "smart"; value: number }
+    /** Navidrome SERVER STATUS card pane (no track list). */
+    | { kind: "server" }
+    /** All synced `source="navidrome"` rows. */
+    | { kind: "remote" };
 
   function selKey(s: Sel): string {
-    return s.kind === "all" ? "all" : `${s.kind}:${s.value}`;
+    return "value" in s ? `${s.kind}:${s.value}` : s.kind;
   }
 
   // ── master data (raw: replaced wholesale, never mutated in place) ─────────
@@ -92,7 +114,27 @@
   /** Bumped to force the current node's query to re-run (e.g. after a scan). */
   let dataVersion = $state(0);
 
-  let openGroups = $state({ artists: false, albums: false, genres: false, smart: true });
+  let openGroups = $state({
+    artists: false,
+    albums: false,
+    genres: false,
+    smart: true,
+    navidrome: false,
+  });
+
+  // ── source filter chip row (ALL / LOCAL / REMOTE) ─────────────────────────
+  // Applies to the ARTISTS / ALBUMS / GENRES groups only: tree children are
+  // derived from the filtered track list, and pane queries pass `source` to
+  // `library_tracks` where supported (plus a client-side re-filter, so an
+  // older backend that ignores the unknown arg still shows the right rows).
+
+  type SourceFilter = "all" | "local" | "navidrome";
+  let sourceFilter = $state.raw<SourceFilter>("all");
+  const SOURCE_CHIPS: { id: SourceFilter; label: string }[] = [
+    { id: "all", label: "ALL" },
+    { id: "local", label: "LOCAL" },
+    { id: "navidrome", label: "REMOTE" },
+  ];
 
   // ── node data (artist/album/genre/smart views load on selection) ─────────
 
@@ -101,11 +143,12 @@
   let nodeLoading = $state(false);
 
   $effect(() => {
-    // Track selection + dataVersion; re-runs the pane query on either.
+    // Track selection + dataVersion + source chip; re-runs the pane query.
     const sel = selection;
     void dataVersion;
+    void sourceFilter;
     let cancelled = false;
-    if (sel.kind === "all") {
+    if (sel.kind === "all" || sel.kind === "server") {
       nodeTracks = null;
       nodeError = null;
       nodeLoading = false;
@@ -118,21 +161,30 @@
     (async () => {
       try {
         let rows: Track[];
-        let cmd: string;
         if (sel.kind === "smart") {
-          cmd = "smart_view_run";
+          // Smart views own their `source` rule — the chip is not applied.
           rows = await smartViewRun(sel.value);
         } else if (sel.kind === "album") {
-          cmd = "library_album_tracks";
-          rows = await libraryAlbumTracks(sel.value);
+          rows = await libraryAlbumTracks(sel.value); // no source arg → filtered below
+        } else if (sel.kind === "remote") {
+          rows = await libraryTracks({ source: REMOTE_SOURCE });
         } else if (sel.kind === "artist") {
-          cmd = "library_tracks";
-          rows = await libraryTracks({ artist: sel.value });
+          rows = await libraryTracks({
+            artist: sel.value,
+            source: sourceFilter === "all" ? undefined : sourceFilter,
+          });
         } else {
-          cmd = "library_tracks";
-          rows = await libraryTracks({ genre: sel.value });
+          rows = await libraryTracks({
+            genre: sel.value,
+            source: sourceFilter === "all" ? undefined : sourceFilter,
+          });
         }
         if (cancelled) return;
+        // Re-apply the chip client-side: an older backend ignores the
+        // unknown `source` arg, and album queries never took one.
+        if (sel.kind === "artist" || sel.kind === "genre" || sel.kind === "album") {
+          rows = rows.filter((t) => sourceFilter === "all" || t.source === sourceFilter);
+        }
         nodeTracks = rows;
         nodeError = null;
       } catch (e) {
@@ -219,20 +271,45 @@
 
   // ── derived tree lists ─────────────────────────────────────────────────────
 
+  /** The master list narrowed by the source chip (chip applies to the
+   *  ARTISTS/ALBUMS/GENRES groups; ALL TRACKS ignores it). */
+  const chipTracks = $derived.by(() => {
+    if (sourceFilter === "all") return allTracks;
+    return allTracks.filter((t) => t.source === sourceFilter);
+  });
+
   const artistNames = $derived.by(() => {
     const set = new Set<string>();
-    for (const t of allTracks) if (t.artist !== "") set.add(t.artist);
+    for (const t of chipTracks) if (t.artist !== "") set.add(t.artist);
     return [...set].sort((a, b) => a.localeCompare(b));
   });
 
   const genreNames = $derived.by(() => {
     const set = new Set<string>();
-    for (const t of allTracks) if (t.genre !== "") set.add(t.genre);
+    for (const t of chipTracks) if (t.genre !== "") set.add(t.genre);
     return [...set].sort((a, b) => a.localeCompare(b));
   });
 
+  /** Album keys that survive the chip — cross-referenced from the full
+   *  track list because `library_albums` has no source filter. */
+  const chipAlbumKeys = $derived.by(() => {
+    const set = new Set<string>();
+    for (const t of chipTracks) set.add(t.albumKey);
+    return set;
+  });
+
+  const albumsShown = $derived(
+    sourceFilter === "all" ? albums : albums.filter((a) => chipAlbumKeys.has(a.albumKey)),
+  );
+
+  /** Synced remote rows, for the REMOTE TRACKS count in the tree. */
+  const remoteTrackCount = $derived(
+    allTracks.reduce((n, t) => (t.source === REMOTE_SOURCE ? n + 1 : n), 0),
+  );
+
   const displayed = $derived.by(() => {
     if (searchResults != null) return searchResults;
+    if (selection.kind === "server") return []; // the pane is the status card
     if (selection.kind === "all") return allTracks;
     return nodeTracks ?? [];
   });
@@ -245,6 +322,7 @@
   // A blocking message replaces the table only when the current view failed.
   const viewError = $derived.by(() => {
     if (searchResults != null) return null;
+    if (selection.kind === "server") return null; // the card owns its errors
     if (selection.kind === "all") return tracksError;
     return nodeError;
   });
@@ -253,6 +331,7 @@
     if (searchResults != null) return `no matches for “${searchQ.trim()}”`;
     if (selection.kind === "all") return "library is empty — use “Scan folder…” above";
     if (selection.kind === "smart") return "this smart view returned no tracks";
+    if (selection.kind === "remote") return "no navidrome tracks — connect & sync in SERVER STATUS";
     return "no tracks in this category";
   });
 
@@ -423,6 +502,113 @@
     }
   }
 
+  // ── navidrome (M5) ─────────────────────────────────────────────────────────
+
+  let navStatus = $state.raw<NavidromeStatus | null>(null);
+  let navError = $state<string | null>(null);
+  let navSyncing = $state(false);
+  let navProgress = $state.raw<NavidromeProgressPayload | null>(null);
+  let navReport = $state.raw<NavidromeSyncReport | null>(null);
+  let navSyncError = $state<string | null>(null);
+  let showSettings = $state(false);
+
+  /**
+   * Starred remote ids — session-local. LIMITATION: no M5 IPC exposes the
+   * server's starred state (and Track rows carry no starred flag), so this
+   * set starts empty and only grows from clicks here; a later `starred`
+   * column / status field should become the source of truth. Rebuilt
+   * references (dataVersion bumps after sync) re-read Track rows, which
+   * cannot change this set — clicks persist server-side only.
+   */
+  let starredRemoteIds = $state.raw<Set<string>>(new Set());
+
+  let navSeq = 0;
+
+  async function refreshNavStatus(): Promise<void> {
+    const seq = ++navSeq;
+    try {
+      const s = await navidromeStatus();
+      if (seq !== navSeq) return;
+      navStatus = s;
+      navError = null;
+    } catch (e) {
+      if (seq !== navSeq) return;
+      navStatus = null;
+      navError = friendlyIpcError("navidrome", e);
+    }
+  }
+
+  async function syncNow(): Promise<void> {
+    if (navSyncing) return;
+    navSyncError = null;
+    navSyncing = true;
+    navProgress = null;
+    try {
+      await navidromeSync();
+      // Refresh arrives via the `navidrome-synced` event (which also covers
+      // externally started syncs); the resolved report is summarized there.
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/already|running/i.test(msg)) {
+        navSyncing = true; // the running sync's events keep the UI live
+      } else {
+        navSyncing = false;
+        navSyncError = friendlyIpcError("navidrome sync", e);
+        onlog(`navidrome: sync error: ${msg}`);
+      }
+    }
+  }
+
+  async function toggleStar(t: Track): Promise<void> {
+    if (t.source !== REMOTE_SOURCE || t.remoteId == null) return;
+    const id = t.remoteId;
+    const starred = !starredRemoteIds.has(id);
+    const next = new Set(starredRemoteIds); // optimistic
+    if (starred) next.add(id);
+    else next.delete(id);
+    starredRemoteIds = next;
+    try {
+      await navidromeStar(id, starred);
+      onlog(`navidrome: ${starred ? "★" : "☆"} ${t.title !== "" ? t.title : id}`);
+    } catch (e) {
+      const revert = new Set(starredRemoteIds);
+      if (starred) revert.delete(id);
+      else revert.add(id);
+      starredRemoteIds = revert;
+      onlog(`media library: star failed: ${e}`);
+    }
+  }
+
+  $effect(() => {
+    void refreshNavStatus();
+    const up = onNavidromeProgress((p) => {
+      // Events also fire for syncs started elsewhere — latch onto them.
+      navSyncing = true;
+      navProgress = p;
+    });
+    const us = onNavidromeSynced((payload) => {
+      navSyncing = false;
+      navProgress = null;
+      if (isSyncReport(payload)) {
+        navReport = payload;
+        navSyncError = null;
+        onlog(
+          `navidrome synced: +${payload.tracksAdded} ~${payload.tracksUpdated} −${payload.tracksRemoved} (${payload.durationMs} ms)`,
+        );
+        void refreshNavStatus();
+        void refreshAll();
+        dataVersion++; // re-run the current node's query (synced rows landed)
+      } else {
+        navSyncError = `sync failed: ${payload.error}`;
+        onlog(`navidrome: sync failed: ${payload.error}`);
+      }
+    });
+    return () => {
+      void up.then((f) => f());
+      void us.then((f) => f());
+    };
+  });
+
   // ── helpers ────────────────────────────────────────────────────────────────
 
   function select(sel: Sel): void {
@@ -440,6 +626,9 @@
       title: t.title !== "" ? t.title : baseName(t.path),
       artist: t.artist,
       durationSecs: t.durationSecs,
+      // Remote rows keep their navidrome:// path for display, but playback
+      // resolves the stream URL through remoteId (queue.feedPath).
+      ...(t.source === REMOTE_SOURCE && t.remoteId != null ? { remoteId: t.remoteId } : {}),
     };
   }
 
@@ -485,7 +674,12 @@
 </script>
 
 <div class="ml">
-  <header class="hdr">MEDIA LIBRARY</header>
+  <header class="hdr">
+    <span class="title">MEDIA LIBRARY</span>
+    <button class="hdrbtn" onclick={() => (showSettings = true)} title="navidrome connection & streaming">
+      NAVIDROME
+    </button>
+  </header>
 
   <!-- TASK 3: scan management strip -->
   <div class="scanstrip">
@@ -535,6 +729,17 @@
         ALL TRACKS
       </button>
 
+      <!-- source chip row: filters the ARTISTS / ALBUMS / GENRES groups -->
+      <div class="srcrow" role="group" aria-label="source filter">
+        {#each SOURCE_CHIPS as c (c.id)}
+          <button
+            class="chip"
+            class:on={sourceFilter === c.id}
+            title={`show ${c.label === "REMOTE" ? "navidrome" : c.label.toLowerCase()} tracks in the artists / albums / genres groups`}
+            onclick={() => (sourceFilter = c.id)}>{c.label}</button>
+        {/each}
+      </div>
+
       <button
         class="node"
         onclick={() => (openGroups.artists = !openGroups.artists)}
@@ -559,13 +764,13 @@
         onclick={() => (openGroups.albums = !openGroups.albums)}
         aria-expanded={openGroups.albums}>
         <span class="tw">{openGroups.albums ? "▾" : "▸"}</span>ALBUMS
-        <span class="cnt">({albums.length})</span>
+        <span class="cnt">({albumsShown.length})</span>
       </button>
       {#if openGroups.albums}
-        {#if albums.length === 0 && tracksError == null}
+        {#if albumsShown.length === 0 && tracksError == null}
           <div class="leaf empty">no albums</div>
         {/if}
-        {#each albums as a (a.albumKey)}
+        {#each albumsShown as a (a.albumKey)}
           <button
             class="leaf"
             class:on={selKey(selection) === `album:${a.albumKey}`}
@@ -616,42 +821,146 @@
         {/if}
         <button class="leaf new" onclick={newView}>+ NEW SMART VIEW</button>
       {/if}
+
+      <!-- M5: navidrome group — server status card + synced remote tracks -->
+      <button
+        class="node"
+        onclick={() => (openGroups.navidrome = !openGroups.navidrome)}
+        aria-expanded={openGroups.navidrome}>
+        <span class="tw">{openGroups.navidrome ? "▾" : "▸"}</span>NAVIDROME
+        {#if navStatus?.configured}
+          <span class="cnt on-dot" title="connected">●</span>
+        {/if}
+      </button>
+      {#if openGroups.navidrome}
+        <button
+          class="leaf"
+          class:on={selKey(selection) === "server"}
+          onclick={() => select({ kind: "server" })}>SERVER STATUS</button>
+        <button
+          class="leaf"
+          class:on={selKey(selection) === "remote"}
+          onclick={() => select({ kind: "remote" })}
+          >REMOTE TRACKS <span class="cnt">({remoteTrackCount})</span></button>
+        {#if navError}
+          <div class="leaf empty err" title={navError}>navidrome unavailable</div>
+        {/if}
+      {/if}
     </nav>
 
-    <section class="table" aria-label="tracks">
-      <div class="thead">
-        <span class="c-num">#</span><span class="c-title">TITLE</span
-        ><span class="c-artist">ARTIST</span><span class="c-album">ALBUM</span
-        ><span class="c-time">TIME</span>
-      </div>
-      <div class="rows" role="listbox" aria-label="track list">
-        {#if viewError}
-          <div class="msg err">{viewError}</div>
-        {:else if nodeLoading && searchResults == null && selection.kind !== "all"}
-          <div class="msg">loading…</div>
-        {:else if displayed.length === 0}
-          <div class="msg">{emptyMessage}</div>
-        {:else}
-          {#each displayed as t, i (t.id)}
-            <div
-              class="trow"
-              class:selected={selectedIds.has(t.id)}
-              role="option"
-              aria-selected={selectedIds.has(t.id)}
-              tabindex="-1"
-              title={t.path}
-              onpointerdown={(e) => rowDown(e, i)}
-              ondblclick={() => onplaynow([toMeta(t)])}>
-              <span class="c-num">{i + 1}</span>
-              <span class="c-title">{t.title !== "" ? t.title : baseName(t.path)}</span>
-              <span class="c-artist">{t.artist}</span>
-              <span class="c-album">{t.album}</span>
-              <span class="c-time">{fmt(t.durationSecs)}</span>
+    {#if selection.kind === "server" && searchResults == null}
+      <!-- SERVER STATUS card (search overrides it, like any node) -->
+      <section class="server" aria-label="navidrome server status">
+        <div class="card">
+          <div class="card-h">NAVIDROME SERVER</div>
+
+          {#if navError}
+            <p class="card-err">{navError}</p>
+          {:else if navStatus == null}
+            <p class="dim">loading…</p>
+          {:else if !navStatus.configured}
+            <p class="state">○ NOT CONNECTED</p>
+            <p class="dim">connect a server first — open SETTINGS… below</p>
+          {:else}
+            <p class="state ok">● CONNECTED</p>
+            <div class="kv"><span>url</span><b>{navStatus.url}</b></div>
+            <div class="kv"><span>user</span><b>{navStatus.user}</b></div>
+            <div class="kv"><span>version</span><b>{navStatus.serverVersion ?? "—"}</b></div>
+            <div class="kv"><span>tracks</span><b>{navStatus.trackCount.toLocaleString()}</b></div>
+            <div class="kv"><span>last sync</span><b>{fmtDate(navStatus.syncedAt)}</b></div>
+          {/if}
+
+          {#if navReport}
+            <div class="report" title={navReport.errors.join("\n")}>
+              last sync: +{navReport.tracksAdded} added · ~{navReport.tracksUpdated} updated ·
+              −{navReport.tracksRemoved} removed
+              {#if navReport.errors.length > 0}
+                · {navReport.errors.length} error{navReport.errors.length === 1 ? "" : "s"}
+              {/if}
+              ({navReport.durationMs} ms)
             </div>
-          {/each}
-        {/if}
-      </div>
-    </section>
+          {/if}
+
+          {#if navSyncing}
+            <div class="sync">
+              {#if navProgress != null && navProgress.total > 0}
+                <div class="pbar-track">
+                  <div
+                    class="pbar-fill"
+                    style={`width:${Math.min(100, (navProgress.scanned / navProgress.total) * 100).toFixed(1)}%`}>
+                  </div>
+                </div>
+                <span class="plabel">
+                  {navProgress.scanned.toLocaleString()} / {navProgress.total.toLocaleString()}
+                </span>
+              {:else}
+                <span class="plabel">syncing…</span>
+              {/if}
+            </div>
+          {:else if navSyncError}
+            <p class="card-err">{navSyncError}</p>
+          {/if}
+
+          <div class="card-actions">
+            <button
+              onclick={syncNow}
+              disabled={navSyncing || navStatus?.configured !== true}
+              title="full library sync">{navSyncing ? "SYNCING…" : "SYNC NOW"}</button>
+            <button onclick={() => (showSettings = true)} title="connection & streaming settings">
+              SETTINGS…
+            </button>
+          </div>
+        </div>
+      </section>
+    {:else}
+      <section class="table" aria-label="tracks">
+        <div class="thead">
+          <span class="c-num">#</span><span class="c-title">TITLE</span
+          ><span class="c-artist">ARTIST</span><span class="c-album">ALBUM</span
+          ><span class="c-time">TIME</span><span class="c-star" title="star (navidrome)">★</span>
+        </div>
+        <div class="rows" role="listbox" aria-label="track list">
+          {#if viewError}
+            <div class="msg err">{viewError}</div>
+          {:else if nodeLoading && searchResults == null && selection.kind !== "all"}
+            <div class="msg">loading…</div>
+          {:else if displayed.length === 0}
+            <div class="msg">{emptyMessage}</div>
+          {:else}
+            {#each displayed as t, i (t.id)}
+              <div
+                class="trow"
+                class:selected={selectedIds.has(t.id)}
+                role="option"
+                aria-selected={selectedIds.has(t.id)}
+                tabindex="-1"
+                title={t.path}
+                onpointerdown={(e) => rowDown(e, i)}
+                ondblclick={() => onplaynow([toMeta(t)])}>
+                <span class="c-num">{i + 1}</span>
+                <span class="c-title">{#if t.source === REMOTE_SOURCE}<span class="rmark" title="navidrome track">◈ </span>{/if}{t.title !== "" ? t.title : baseName(t.path)}</span>
+                <span class="c-artist">{t.artist}</span>
+                <span class="c-album">{t.album}</span>
+                <span class="c-time">{fmt(t.durationSecs)}</span>
+                <span class="c-star">
+                  {#if t.source === REMOTE_SOURCE && t.remoteId != null}
+                    <button
+                      class="star"
+                      class:on={starredRemoteIds.has(t.remoteId)}
+                      title={starredRemoteIds.has(t.remoteId) ? "unstar on server" : "star on server"}
+                      onpointerdown={(e) => e.stopPropagation()}
+                      ondblclick={(e) => e.stopPropagation()}
+                      onclick={() => void toggleStar(t)}>
+                      {starredRemoteIds.has(t.remoteId) ? "★" : "☆"}
+                    </button>
+                  {/if}
+                </span>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      </section>
+    {/if}
   </div>
 
   <footer class="bar">
@@ -670,6 +979,13 @@
       ondelete={(id) => void onEditorDelete(id)}
       oncancel={() => (editing = null)} />
   {/if}
+
+  {#if showSettings}
+    <NavidromeSettings
+      onclose={() => (showSettings = false)}
+      onchanged={() => void refreshNavStatus()}
+      onlog={onlog} />
+  {/if}
 </div>
 
 <style>
@@ -685,12 +1001,35 @@
   }
 
   .hdr {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 3px 8px;
     font-size: 10px;
     letter-spacing: 0.18em;
     color: #808080;
     background: #101010;
     border-bottom: 1px solid #2a2a2a;
+  }
+
+  .hdr .title {
+    flex: 1;
+  }
+
+  .hdrbtn {
+    background: #1c1c1c;
+    color: #9a9a9a;
+    border: 1px solid #3a3a3a;
+    border-radius: 2px;
+    padding: 1px 6px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+  }
+
+  .hdrbtn:hover {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
   }
 
   .scanstrip,
@@ -847,6 +1186,42 @@
     background: #12301b;
   }
 
+  .cnt.on-dot {
+    color: #3ccb4e;
+    font-weight: 400;
+  }
+
+  /* ── source chip row ── */
+  .srcrow {
+    display: flex;
+    gap: 2px;
+    padding: 2px 0 2px 14px;
+  }
+
+  .srcrow .chip {
+    flex: 1;
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    border-radius: 2px;
+    padding: 0;
+    color: #4f4f4f;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+
+  .srcrow .chip:hover {
+    color: #3ccb4e;
+    border-color: #2f4f33;
+  }
+
+  .srcrow .chip.on {
+    color: #3ccb4e;
+    border-color: #3ccb4e;
+    background: #0d1a10;
+  }
+
   .tw {
     display: inline-block;
     width: 12px;
@@ -928,7 +1303,7 @@
   .thead,
   .trow {
     display: grid;
-    grid-template-columns: 4ch minmax(8ch, 1.6fr) minmax(6ch, 1fr) minmax(6ch, 1fr) 6ch;
+    grid-template-columns: 4ch minmax(8ch, 1.6fr) minmax(6ch, 1fr) minmax(6ch, 1fr) 6ch 14px;
     gap: 6px;
     align-items: center;
     padding: 0 6px;
@@ -1013,11 +1388,170 @@
     opacity: 0.8;
   }
 
+  .c-star {
+    text-align: center;
+  }
+
+  .thead .c-star {
+    color: #4f4f4f;
+    font-size: 10px;
+  }
+
+  .rmark {
+    color: #3a7a4a;
+  }
+
+  .trow .star {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #3a5a3f;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .trow .star:hover {
+    color: #3ccb4e;
+  }
+
+  .trow .star.on {
+    color: #d8a63c;
+  }
+
   .msg {
     padding: 6px 8px;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 11px;
     color: #2f4f33;
+  }
+
+  /* ── navidrome server status card ── */
+  .server {
+    min-width: 0;
+    overflow-y: auto;
+    background: #000;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #000;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    max-width: 420px;
+    padding: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  .card-h {
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    color: #707070;
+    border-bottom: 1px solid #2a2a2a;
+    padding-bottom: 4px;
+  }
+
+  .card p {
+    margin: 0;
+  }
+
+  .state {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: #808080;
+  }
+
+  .state.ok {
+    color: #3ccb4e;
+  }
+
+  .dim {
+    font-size: 10px;
+    color: #4f4f4f;
+  }
+
+  .card-err {
+    font-size: 11px;
+    color: #d8604c;
+  }
+
+  .kv {
+    display: grid;
+    grid-template-columns: 10ch 1fr;
+    gap: 6px;
+    align-items: baseline;
+    font-size: 11px;
+    color: #3ccb4e;
+  }
+
+  .kv span {
+    color: #4f4f4f;
+  }
+
+  .kv b {
+    font-weight: 400;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .report {
+    font-size: 10px;
+    color: #2f8f3f;
+    border: 1px solid #2a2a2a;
+    background: #101010;
+    padding: 4px 6px;
+  }
+
+  .sync {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .pbar-track {
+    height: 8px;
+    border: 1px solid #3a3a3a;
+    background: #0d0d0d;
+  }
+
+  .pbar-fill {
+    height: 100%;
+    background: #3ccb4e;
+    transition: width 0.2s linear;
+  }
+
+  .plabel {
+    font-size: 10px;
+    color: #707070;
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .card-actions button {
+    background: #1c1c1c;
+    color: #9a9a9a;
+    border: 1px solid #3a3a3a;
+    border-radius: 2px;
+    padding: 1px 6px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+  }
+
+  .card-actions button:hover:not(:disabled) {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+  }
+
+  .card-actions button:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
   /* ── footer ── */

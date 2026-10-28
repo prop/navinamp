@@ -34,6 +34,14 @@
  *  · repeat=one feeds the current track as its own successor, making repeats
  *    gapless; the EndOfQueue wrap is then only a fallback.
  *
+ * Remote (M5): items synced from Navidrome carry `path: "navidrome://<id>"`
+ * plus `remoteId`. Inside the serialized feed chain `feedPath` translates
+ * them into a fresh stream URL (they can be time-limited, so every feed
+ * resolves its own); a failed resolution rejects into the existing
+ * feed-error log and the item simply never plays (like a bad file). The
+ * same TrackStarted/EndOfQueue/stop transitions drive Subsonic scrobbling —
+ * see the scrobble section below the feed helpers.
+ *
  * Entries carry the item id next to the fed index so list edits (remove /
  * move / insert) repair indexes by identity — a bare index would go stale
  * after a splice. If a fed item is removed from the list the engine still
@@ -43,15 +51,26 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { navidromeScrobble, navidromeStreamUrl } from "../navidrome/ipc";
+
 export type RepeatMode = "off" | "all" | "one";
 
 export interface QueueItem {
   /** Stable UI identity (survives reorders; the engine has its own u64 ids). */
   id: string;
+  /**
+   * Local file path, or `navidrome://<remoteId>` for synced remote rows.
+   * Remote items resolve their real stream URL at feed time (feedPath).
+   */
   path: string;
   title: string;
   artist: string;
   durationSecs: number | null;
+  /**
+   * Navidrome track id — present only on remote items; drives stream-URL
+   * resolution and scrobbling. `null`/undefined ⇒ a local file.
+   */
+  remoteId?: string;
 }
 
 /** Fully-tagged track info; the M4 library browser will feed this directly. */
@@ -139,6 +158,62 @@ function feed(run: () => Promise<unknown>): void {
     .then(() => undefined);
 }
 
+/**
+ * The path handed to the engine for `item`. Remote (Navidrome) items store
+ * `navidrome://<remoteId>` and must be translated into a stream URL first —
+ * URLs can be time-limited, so each feed resolves its own instead of
+ * caching. A failed resolution rejects inside the serialized feed chain and
+ * lands in the existing feed-error log above; the item is skipped exactly
+ * like a file the engine cannot open.
+ */
+async function feedPath(item: QueueItem): Promise<string> {
+  if (item.remoteId == null) return item.path;
+  return navidromeStreamUrl(item.remoteId);
+}
+
+// ── Navidrome scrobbling (M5) ──────────────────────────────────────────────
+// Subsonic scrobbles come in two flavors: submission=false ("now playing")
+// when a track starts, and submission=true when the listen counts. We keep
+// at most ONE open instance (`scrobbleOpen`); a close submits exactly once
+// and clears it, so a double-submit is impossible by construction:
+//  · TrackStarted on a remote item closes whatever is open first — a same-id
+//    restart (repeat-one wrap, or replaying the current track) closes its
+//    own previous instance, which is the "new play" case — then opens a new
+//    now-playing instance.
+//  · TrackStarted on a local item, on an orphaned (removed) feed, EndOfQueue
+//    and an explicit stop (onStopped) close the open instance.
+//  · Seeks emit no engine events, so they can never resubmit; pause and list
+//    edits keep the instance open because the audio keeps playing.
+//  · clear() deliberately leaves the instance open: the engine keeps playing
+//    what it holds and EndOfQueue (or the next TrackStarted) closes it.
+
+/** The open now-playing instance, if the current track is a remote one. */
+let scrobbleOpen: { itemId: string; remoteId: string } | null = null;
+
+function scrobbleNow(remoteId: string, submission: boolean): void {
+  navidromeScrobble(remoteId, submission).catch((e) =>
+    logLine(`✖ scrobble failed (${submission ? "submit" : "now-playing"} ${remoteId}): ${e}`),
+  );
+}
+
+/** Submit the open instance (submission=true) exactly once, then drop it. */
+function closeScrobble(): void {
+  if (scrobbleOpen == null) return;
+  const { remoteId } = scrobbleOpen;
+  scrobbleOpen = null;
+  scrobbleNow(remoteId, true);
+}
+
+/** A TrackStarted made `item` current: cycle the scrobble onto it. */
+function scrobbleStart(item: QueueItem): void {
+  // Any previously started listen is over — same-id restarts included
+  // (repeat-one wrap / replay = a new play of the same item).
+  closeScrobble();
+  if (item.remoteId == null) return; // local item: nothing to open
+  scrobbleOpen = { itemId: item.id, remoteId: item.remoteId };
+  scrobbleNow(item.remoteId, false);
+}
+
 /** File-dialog flavor: tags are unknown, so the filename becomes the title. */
 function itemFromPath(path: string): QueueItemMeta {
   const base = path.split(/[\\/]/).pop() ?? path;
@@ -221,7 +296,9 @@ function reconcileAhead(): void {
   if (desired == null || desired >= items.length) return;
   if (pending != null && pending.id === items[desired].id) return;
   const target = items[desired];
-  feed(() => invoke("audio_enqueue", { path: target.path }));
+  feed(async () => {
+    await invoke("audio_enqueue", { path: await feedPath(target) });
+  });
   if (startPending && expectations.length > 0) {
     // Preserve the play-start front entry; the fed next follows it.
     expectations = [expectations[0], { index: desired, id: target.id }];
@@ -254,7 +331,7 @@ function play(index: number): void {
   startPending = true;
   expectations = [{ index, id: item.id }];
   feed(async () => {
-    await invoke("audio_play", { path: item.path });
+    await invoke("audio_play", { path: await feedPath(item) });
     // Superseded by a newer play, or the TrackStarted already arrived and
     // reconcileAhead owns ahead-feeding from here.
     if (session !== playSession || nextId == null) return;
@@ -262,7 +339,7 @@ function play(index: number): void {
     const target = items.find((it) => it.id === nextId);
     if (!target) return;
     expectations = [expectations[0], { index: items.indexOf(target), id: target.id }];
-    await invoke("audio_enqueue", { path: target.path });
+    await invoke("audio_enqueue", { path: await feedPath(target) });
   });
 }
 
@@ -415,6 +492,7 @@ export const queue = {
     expectations = [];
     startPending = false;
     playingItemId = null;
+    closeScrobble(); // the audible remote listen is over (submission=true)
   },
 
   /**
@@ -433,6 +511,7 @@ export const queue = {
         if (idx >= 0) {
           currentIndex = idx;
           playingItemId = exp.id;
+          scrobbleStart(items[idx]); // now-playing on remote, closes the previous
           if (e.durationSecs != null && items[idx].durationSecs == null) {
             items[idx].durationSecs = e.durationSecs;
           }
@@ -440,7 +519,10 @@ export const queue = {
           return `▶ queue[${idx}] started${e.durationSecs != null ? ` (${formatTime(e.durationSecs)})` : ""}`;
         }
         // Fed item no longer in the list: it plays out, position unchanged.
+        // Its remoteId is unreachable by then, so an open listen is closed
+        // (submitted) here rather than leaked.
         playingItemId = null;
+        closeScrobble();
         reconcileAhead();
         return `▶ started a track no longer in the list (fed #${exp.index})`;
       }
@@ -448,6 +530,9 @@ export const queue = {
         if (!engineLive) return null;
         expectations = [];
         startPending = false;
+        // The audible track ran dry — submit its listen now; a repeat=all
+        // wrap re-opens (now-playing) from the wrap's own TrackStarted.
+        closeScrobble();
         if (repeat === "all" && items.length > 0) {
           play(0);
           return "↻ end of queue — repeat all from queue[0]";
