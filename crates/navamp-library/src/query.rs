@@ -1,0 +1,262 @@
+//! Read-side queries: FTS search, album grouping, filtered track lists and
+//! stats. All brief, single-statement affairs — the Tauri layer calls them
+//! under a short-lived mutex.
+
+use rusqlite::{Connection, OptionalExtension, Row};
+
+use crate::model::{Album, LibraryStats, Track, TrackFilter};
+
+/// Column list for every `SELECT` on `tracks`; positionally mapped by
+/// [`track_from_row`]. With a prefix (`tracks.`) for joins where bare names
+/// would be ambiguous (the FTS search join).
+const TRACK_COLUMN_NAMES: &[&str] = &[
+    "id",
+    "path",
+    "mtime",
+    "size",
+    "title",
+    "artist",
+    "album_artist",
+    "album",
+    "album_key",
+    "genre",
+    "year",
+    "track_no",
+    "disc_no",
+    "duration_secs",
+    "bitrate_kbps",
+    "samplerate",
+    "channels",
+    "codec",
+    "rating",
+    "play_count",
+    "last_played_at",
+    "date_added",
+    "source",
+    "remote_id",
+    "art_id",
+];
+
+fn track_columns(prefix: &str) -> String {
+    TRACK_COLUMN_NAMES
+        .iter()
+        .map(|name| format!("{prefix}{name}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
+    Ok(Track {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        mtime: row.get(2)?,
+        size: row.get(3)?,
+        title: row.get(4)?,
+        artist: row.get(5)?,
+        album_artist: row.get(6)?,
+        album: row.get(7)?,
+        album_key: row.get(8)?,
+        genre: row.get(9)?,
+        year: row.get(10)?,
+        track_no: row.get(11)?,
+        disc_no: row.get(12)?,
+        duration_secs: row.get(13)?,
+        bitrate_kbps: row.get(14)?,
+        samplerate: row.get(15)?,
+        channels: row.get(16)?,
+        codec: row.get(17)?,
+        rating: row.get(18)?,
+        play_count: row.get(19)?,
+        last_played_at: row.get(20)?,
+        date_added: row.get(21)?,
+        source: row.get(22)?,
+        remote_id: row.get(23)?,
+        art_id: row.get(24)?,
+    })
+}
+
+/// Builds an FTS5 MATCH pattern from free user input: every whitespace-separated
+/// term becomes a quoted prefix phrase (`beatl` → `"beatl"*`). Quoting makes
+/// `-`, `+`, `AND`, colons and friends inert; doubling embedded quotes escapes
+/// them, so arbitrary input can never produce malformed or injected MATCH
+/// syntax. All terms are ANDed (implicit).
+fn fts_query(q: &str) -> Option<String> {
+    let mut terms = q
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{}\"*", t.replace('"', "\"\"")));
+    let first = terms.next()?;
+    Some(terms.fold(first, |acc, t| acc + " " + &t))
+}
+
+/// Ranked FTS5 search over title/artist/album/genre.
+///
+/// `bm25` ascending puts the best matches first (FTS5's `bm25()` is
+/// smaller-is-better); the text tie-breakers keep the order stable and
+/// library-like for weakly differentiated matches.
+pub(super) fn search(conn: &Connection, q: &str, limit: u32) -> rusqlite::Result<Vec<Track>> {
+    let Some(match_expr) = fts_query(q) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {}
+         FROM tracks_fts
+         JOIN tracks ON tracks.id = tracks_fts.rowid
+         WHERE tracks_fts MATCH ?1
+         ORDER BY bm25(tracks_fts), tracks.artist, tracks.album, tracks.track_no, tracks.title
+         LIMIT ?2",
+        track_columns("tracks.")
+    ))?;
+    let tracks = stmt
+        .query_map(rusqlite::params![match_expr, limit], track_from_row)?
+        .collect::<Result<_, _>>()?;
+    Ok(tracks)
+}
+
+/// All albums, grouped by `album_key` (see [`crate::scanner::album_key`]).
+///
+/// `MIN` picks a deterministic representative where sloppily-tagged members
+/// disagree; `album_key` guarantees they at least agree on the normalized
+/// (album)artist + album.
+pub(super) fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT
+             album_key,
+             MIN(album)                                        AS name,
+             MIN(COALESCE(NULLIF(album_artist, ''), NULLIF(artist, ''), '')) AS artist,
+             MIN(year)                                         AS year,
+             COUNT(*)                                          AS track_count,
+             COALESCE(SUM(duration_secs), 0.0)                 AS total_secs
+         FROM tracks
+         GROUP BY album_key
+         ORDER BY artist, year, name",
+    )?;
+    let albums = stmt
+        .query_map([], |row| {
+            Ok(Album {
+                album_key: row.get(0)?,
+                name: row.get(1)?,
+                artist: row.get(2)?,
+                year: row.get(3)?,
+                track_count: row.get::<_, i64>(4)?.max(0) as u64,
+                total_secs: row.get(5)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(albums)
+}
+
+/// One album's tracks in disc/track order (`path` as the final tie-breaker,
+/// so track-number-less rips stay stable).
+pub(super) fn album_tracks(conn: &Connection, album_key: &str) -> rusqlite::Result<Vec<Track>> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT {}
+         FROM tracks
+         WHERE album_key = ?1
+         ORDER BY disc_no, track_no, path",
+        track_columns("")
+    ))?;
+    let tracks = stmt
+        .query_map([album_key], track_from_row)?
+        .collect::<Result<_, _>>()?;
+    Ok(tracks)
+}
+
+/// Tracks matching an optional artist / album / genre combination, with
+/// limit + offset. `None` limit means unlimited (`LIMIT -1` in SQLite).
+pub(super) fn tracks_filtered(
+    conn: &Connection,
+    filter: &TrackFilter,
+) -> rusqlite::Result<Vec<Track>> {
+    let mut sql = format!("SELECT {} FROM tracks", track_columns(""));
+    let mut where_clauses: Vec<&'static str> = Vec::new();
+    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+
+    if let Some(artist) = &filter.artist {
+        where_clauses.push("artist = ?");
+        params.push(artist);
+    }
+    if let Some(album_key) = &filter.album_key {
+        where_clauses.push("album_key = ?");
+        params.push(album_key);
+    }
+    if let Some(genre) = &filter.genre {
+        where_clauses.push("genre = ?");
+        params.push(genre);
+    }
+    if !where_clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&where_clauses.join(" AND "));
+    }
+    sql.push_str(" ORDER BY album_key, disc_no, track_no, path LIMIT ? OFFSET ?");
+    let limit: i64 = match filter.limit {
+        Some(n) => i64::from(n),
+        None => -1,
+    };
+    params.push(&limit);
+    let offset: i64 = i64::from(filter.offset);
+    params.push(&offset);
+
+    let mut stmt = conn.prepare(&sql)?;
+    let tracks = stmt
+        .query_map(params.as_slice(), track_from_row)?
+        .collect::<Result<_, _>>()?;
+    Ok(tracks)
+}
+
+/// Whole-library counters; `last_scan` comes from the `meta` table.
+pub(super) fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
+    let mut stats = conn.query_row(
+        "SELECT
+             COUNT(*),
+             COUNT(DISTINCT album_key),
+             COUNT(DISTINCT COALESCE(NULLIF(album_artist, ''), artist)),
+             COALESCE(SUM(duration_secs), 0.0)
+         FROM tracks",
+        [],
+        |row| {
+            Ok(LibraryStats {
+                tracks: row.get::<_, i64>(0)?.max(0) as u64,
+                albums: row.get::<_, i64>(1)?.max(0) as u64,
+                artists: row.get::<_, i64>(2)?.max(0) as u64,
+                total_secs: row.get(3)?,
+                last_scan: None,
+            })
+        },
+    )?;
+    stats.last_scan = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'last_scan_at'",
+            [],
+            |row| {
+                let value: String = row.get(0)?;
+                Ok(value.parse::<i64>().ok())
+            },
+        )
+        .optional()?
+        .flatten();
+    Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts_terms_are_quoted_prefixed_and_escaped() {
+        assert_eq!(fts_query(""), None);
+        assert_eq!(fts_query("   "), None);
+        assert_eq!(fts_query("beatl").as_deref(), Some("\"beatl\"*"));
+        // multiple terms AND together
+        assert_eq!(
+            fts_query("beat  let").as_deref(),
+            Some("\"beat\"* \"let\"*")
+        );
+        // FTS operators are inert inside quotes; embedded quotes are doubled
+        assert_eq!(
+            fts_query("OR -x AND").as_deref(),
+            Some("\"OR\"* \"-x\"* \"AND\"*")
+        );
+        assert_eq!(fts_query("a\"b").as_deref(), Some("\"a\"\"b\"*"));
+    }
+}

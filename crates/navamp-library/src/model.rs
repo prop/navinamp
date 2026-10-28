@@ -1,0 +1,134 @@
+//! Crate-wide types that cross the FFI/IPC boundary and the scanner's
+//! progress/report shapes. Everything serde-serializable uses `camelCase`
+//! so it maps straight onto the TypeScript side of the Tauri bridge.
+
+use serde::{Deserialize, Serialize};
+
+/// One row of the `tracks` table, as returned by every query.
+///
+/// `path` is stored lossily (see the schema docs in `README.md`); everything
+/// text-based is `""` rather than `NULL` when a tag is missing, so consumers
+/// never fight `Option<String>` for display strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Track {
+    pub id: i64,
+    /// Absolute path as stored in the DB (lossy string).
+    pub path: String,
+    /// File mtime in Unix **milliseconds** — fine-grained enough for
+    /// same-second rewrites, which second-granularity scanning would miss.
+    pub mtime: i64,
+    pub size: i64,
+    pub title: String,
+    pub artist: String,
+    pub album_artist: String,
+    pub album: String,
+    /// Grouping key `(album_artist || artist)\x00album`, lower-cased and
+    /// trimmed — see [`crate::scanner::album_key`].
+    pub album_key: String,
+    pub genre: String,
+    pub year: Option<i64>,
+    pub track_no: Option<i64>,
+    pub disc_no: Option<i64>,
+    pub duration_secs: f64,
+    pub bitrate_kbps: Option<i64>,
+    pub samplerate: Option<i64>,
+    pub channels: Option<i64>,
+    /// Short container/codec id: `mp3`, `flac`, `ogg`, `opus`, `m4a`, …
+    pub codec: String,
+    pub rating: i64,
+    pub play_count: i64,
+    /// Unix seconds; `None` = never played.
+    pub last_played_at: Option<i64>,
+    /// Unix seconds, set when the track was first inserted.
+    pub date_added: i64,
+    /// `local` today; `navidrome` rows arrive with the Navidrome sync (M5).
+    pub source: String,
+    pub remote_id: Option<String>,
+    /// Reserved for the album-art pipeline (out of scope for now, always
+    /// `NULL`).
+    pub art_id: Option<String>,
+}
+
+/// An album as a grouped view over `tracks.album_key`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Album {
+    pub album_key: String,
+    /// Display name (one representative of the group).
+    pub name: String,
+    /// Album artist, falling back to the track artist.
+    pub artist: String,
+    /// Earliest year found among the album's tracks, if any.
+    pub year: Option<i64>,
+    pub track_count: u64,
+    pub total_secs: f64,
+}
+
+/// Whole-library counters for the status bar / empty-state UI.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStats {
+    pub tracks: u64,
+    pub albums: u64,
+    pub artists: u64,
+    pub total_secs: f64,
+    /// Unix **milliseconds** of the last completed scan, if any.
+    pub last_scan: Option<i64>,
+}
+
+/// Optional constraints for [`crate::Library::tracks_filtered`]. All fields
+/// optional; `None` limits mean "no limit".
+#[derive(Debug, Clone, Default)]
+pub struct TrackFilter {
+    /// Exact artist match (case-sensitive, against `tracks.artist`).
+    pub artist: Option<String>,
+    /// Exact album grouping key (from [`Album::album_key`]).
+    pub album_key: Option<String>,
+    /// Exact genre match.
+    pub genre: Option<String>,
+    /// Max rows; `None` = unlimited.
+    pub limit: Option<u32>,
+    /// Rows to skip (0 by default).
+    pub offset: u32,
+}
+
+/// Live progress from a running scan. Emitted through the Tauri bridge as
+/// `library-progress` events.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ScanProgress {
+    /// The discovery walk finished; `total` is the number of candidate audio
+    /// files about to be processed.
+    Discovered { total: u64 },
+    /// One more file processed (`scanned` counts up to `total`).
+    Progress { scanned: u64, total: u64 },
+}
+
+/// Why a single file could not be indexed. Never fatal — the scan continues.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanFileError {
+    pub path: String,
+    pub error: String,
+}
+
+/// Everything the caller needs to know about one completed scan.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanReport {
+    /// Canonical scan roots actually used (roots that could not be read are
+    /// reported in `errors` and dropped here).
+    pub roots: Vec<String>,
+    /// Audio-extension files discovered under the roots (after de-duping
+    /// overlapping roots).
+    pub files_found: u64,
+    pub added: u64,
+    pub updated: u64,
+    pub unchanged: u64,
+    /// Rows removed because their files vanished **under the scanned roots**.
+    pub removed: u64,
+    pub errors: Vec<ScanFileError>,
+    /// Wall-clock duration of the scan.
+    pub duration_ms: u64,
+}

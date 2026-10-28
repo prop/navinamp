@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/navamp-audio", "crates/navamp-skin"]
+members = [
+    "src-tauri",
+    "crates/navamp-audio",
+    "crates/navamp-library",
+    "crates/navamp-skin",
+]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,5 +1,6 @@
 mod audio;
 mod commands;
+mod library;
 mod skin;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -8,6 +9,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(audio::Audio::default())
         .manage(skin::SkinCache::default())
+        .manage(library::LibraryState::default())
+        .setup(|app| {
+            library::init(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             audio::audio_play,
@@ -19,7 +25,14 @@ pub fn run() {
             audio::audio_set_volume,
             audio::audio_state,
             skin::skin_list,
-            skin::skin_load
+            skin::skin_load,
+            library::library_scan,
+            library::library_search,
+            library::library_albums,
+            library::library_album_tracks,
+            library::library_tracks,
+            library::library_stats,
+            library::library_roots
         ])
         .run(tauri::generate_context!())
         .expect("error while running NavAmp");
