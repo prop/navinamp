@@ -5,6 +5,7 @@ members = [
     "crates/navamp-audio",
     "crates/navamp-library",
     "crates/navamp-skin",
+    "crates/navamp-subsonic",
 ]
 
 [workspace.package]

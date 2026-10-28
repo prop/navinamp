@@ -1,0 +1,20 @@
+[package]
+name = "navamp-subsonic"
+version.workspace = true
+edition.workspace = true
+description = "NavAmp Subsonic/OpenSubsonic API client for Navidrome: token auth, typed JSON endpoints, and stream/cover-art URL builders"
+
+[dependencies]
+getrandom = "0.4.3"
+md-5 = "0.11.0"
+# `rustls` is reqwest 0.13's rustls-tls feature (renamed from `rustls-tls`);
+# default features are off so no native-tls can sneak in.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "gzip", "json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+url = "2.5.8"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
+wiremock = "0.6.5"
