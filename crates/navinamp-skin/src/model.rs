@@ -38,7 +38,9 @@ pub struct Skin {
 }
 
 impl Skin {
-    /// Parses a skin out of an already-opened `.wal` archive.
+    /// Parses a skin out of an already-opened archive (`.wal` XML, or a
+    /// classic Winamp 2 `.wsz` synthesized from its fixed-layout BMPs —
+    /// see [`crate::wsz`]).
     ///
     /// Returns the model plus non-fatal [`Warning`]s.
     pub fn from_archive(

@@ -23,7 +23,9 @@ pub enum SkinError {
     /// JSON serialization failed (`Skin::to_json`).
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
-    /// The archive does not contain a `skin.xml` (searched case-insensitively).
+    /// The archive does not contain a `skin.xml` (searched
+    /// case-insensitively) and it does not qualify as a classic Winamp 2
+    /// skin either (see [`crate::wsz::is_classic`]).
     #[error("skin.xml not found in archive")]
     MissingSkinXml,
     /// A named entry was not found in the archive.
@@ -73,6 +75,11 @@ pub enum Warning {
     /// decoded as PNG/BMP (or the cropped result could not be re-encoded).
     /// The bitmap gets no image payload.
     ImageDecode { file: String, message: String },
+    /// A classic (Winamp 2 `.wsz`) synthesis source file is absent from the
+    /// archive. Classic skins routinely omit optional BMPs, so the objects
+    /// that would have used the file are skipped and synthesis continues —
+    /// `purpose` names what was dropped (e.g. `eq` for the whole EQ window).
+    ClassicMissingOptional { file: String, purpose: String },
     /// The `x`/`y`/`w`/`h` sub-rectangle of a bitmap lies (partly) outside
     /// the decoded image; the bitmap gets no image payload.
     CropOutOfRange {
@@ -152,6 +159,13 @@ impl fmt::Display for Warning {
                 write!(
                     f,
                     "file `{file}` could not be decoded as png/bmp: {message}"
+                )
+            }
+            Warning::ClassicMissingOptional { file, purpose } => {
+                write!(
+                    f,
+                    "classic skin: optional file `{file}` ({purpose}) not in archive; \
+                     related objects skipped"
                 )
             }
             Warning::CropOutOfRange {

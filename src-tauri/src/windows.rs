@@ -1697,11 +1697,7 @@ pub fn window_drag_region_ready(_label: String) {}
 
 /// Keep a window above all others (session-level option, not persisted).
 #[tauri::command]
-pub fn window_set_always_on_top(
-    app: AppHandle,
-    label: String,
-    on: bool,
-) -> Result<(), String> {
+pub fn window_set_always_on_top(app: AppHandle, label: String, on: bool) -> Result<(), String> {
     let win = app
         .get_webview_window(&label)
         .ok_or_else(|| format!("no window `{label}`"))?;

@@ -1,5 +1,10 @@
 //! Streaming XML parser: `.wal` bytes in, [`Skin`](crate::Skin) out.
 //!
+//! Archives that look like classic Winamp 2 skins (no `skin.xml` plus
+//! hallmark BMPs) never reach the XML path — they are delegated to the
+//! `.wsz` synthesizer in [`crate::wsz`] before `skin.xml` is read, keeping
+//! `.wal` behavior byte-for-byte unchanged.
+//!
 //! - Tag names are matched case-sensitively (the Wasabi convention is
 //!   lowercase-first; mixed-case tags in the wild fall into the generic
 //!   preserve-and-warn path).
@@ -97,7 +102,14 @@ fn end_name(e: &BytesEnd<'_>) -> String {
 
 impl<'a> SkinParser<'a> {
     /// Entry point: parse `skin.xml` (+ includes) and validate references.
+    ///
+    /// Archives without a `skin.xml` that carry classic Winamp 2 hallmark
+    /// files are routed to the `.wsz` synthesizer instead, so both formats
+    /// produce the same normalized model (see [`crate::wsz`]).
     pub(crate) fn parse(archive: &'a SkinArchive) -> Result<(Skin, Vec<Warning>), SkinError> {
+        if crate::wsz::is_classic(archive) {
+            return crate::wsz::synthesize(archive);
+        }
         let xml = archive.read_file(SKIN_XML).map_err(|e| match e {
             SkinError::FileNotFound(_) => SkinError::MissingSkinXml,
             other => other,

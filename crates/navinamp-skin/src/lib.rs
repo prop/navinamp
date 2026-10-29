@@ -1,11 +1,12 @@
 //! NaVinaMP Wasabi skin engine — parsing + bitmap payloads.
 //!
-//! Loads Winamp3 `.wal` skin archives (ZIP + `skin.xml` and friends),
-//! parses them into a normalized, serde-serializable model that the UI
-//! renders with absolute positioning, and materializes `<bitmap>` elements
-//! into PNG data-URLs. This crate deliberately does no rendering, no MAKI
-//! interpretation, and has no audio/tauri/symphonia dependencies or
-//! copyrighted assets.
+//! Loads Winamp3 `.wal` skin archives (ZIP + `skin.xml` and friends) *and*
+//! classic Winamp 2 `.wsz` archives (ZIP of fixed-layout BMPs, synthesized
+//! into the same model — see [`synthesize_classic`]), parses them into a
+//! normalized, serde-serializable model that the UI renders with absolute
+//! positioning, and materializes `<bitmap>` elements into PNG data-URLs.
+//! This crate deliberately does no rendering, no MAKI interpretation, and
+//! has no audio/tauri/symphonia dependencies or copyrighted assets.
 //!
 //! # Layout
 //!
@@ -14,6 +15,7 @@
 //!   the normalized model (every unknown attribute is preserved in `params`)
 //! - [`bitmap_payloads`]: materializes `<bitmap>` elements into PNG
 //!   data-URLs (crop + Wasabi color-key transparency), warnings never fatal
+//! - [`is_classic`]/[`synthesize_classic`]: `.wsz` detection and synthesis
 //! - [`SkinError`] vs [`Warning`]: only an unusable archive or a malformed
 //!   `skin.xml` is fatal; everything else degrades to warnings
 //!
@@ -36,6 +38,7 @@ mod images;
 mod model;
 mod parse;
 mod validate;
+mod wsz;
 
 pub use archive::SkinArchive;
 pub use error::{SkinError, Warning};
@@ -45,3 +48,4 @@ pub use model::{
     GenericNode, Grid, GroupDef, GroupInstance, GuiObject, Layer, Layout, Params, Rect, Skin,
     Slider, SliderAction, Status, Text, ToggleButton, TrueTypeFont, Vis,
 };
+pub use wsz::{is_classic, synthesize as synthesize_classic};
