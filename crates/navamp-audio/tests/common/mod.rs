@@ -88,3 +88,76 @@ pub fn stereo_sine_fixture(
     write_wav(&path, sample_rate, 2, &pcm).expect("write fixture wav");
     (path, as_expected_f32(&pcm))
 }
+
+/// Stereo sine fixture with a chosen amplitude (e.g. full scale for the
+/// analyser, quiet for EQ boost headroom). (`#[allow]`: shared test
+/// module — not every test binary uses every helper.)
+#[allow(dead_code)]
+pub fn stereo_sine_fixture_amp(
+    name: &str,
+    sample_rate: u32,
+    secs: f64,
+    freq: f64,
+    amp: f64,
+) -> (PathBuf, Vec<f32>) {
+    let frames = (f64::from(sample_rate) * secs).round() as usize;
+    let pcm = sine_i16(sample_rate, frames, freq, amp, 2);
+    let path = temp_path(name);
+    write_wav(&path, sample_rate, 2, &pcm).expect("write fixture wav");
+    (path, as_expected_f32(&pcm))
+}
+
+/// ReplayGain tag values to stamp onto a fixture. (`#[allow]`: shared test
+/// module.)
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RgMeta {
+    pub album_gain_db: Option<&'static str>,
+    pub album_peak: Option<&'static str>,
+    pub track_gain_db: Option<&'static str>,
+    pub track_peak: Option<&'static str>,
+}
+
+/// Attach ReplayGain tags to a WAV fixture *through lofty* (an ID3v2 chunk —
+/// the same read path real tagged files take; lofty maps the `TXXX`
+/// `REPLAYGAIN_*` frames for us). (`#[allow]`: shared test module.)
+#[allow(dead_code)]
+pub fn tag_replaygain(path: &std::path::Path, meta: &RgMeta) {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::{BoundTaggedFile, TaggedFileExt};
+    use lofty::tag::{ItemKey, Tag, TagType};
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let mut bound = BoundTaggedFile::read_from(file, ParseOptions::new()).unwrap();
+    let mut tag = Tag::new(TagType::Id3v2);
+    let mut put = |key: ItemKey, value: Option<&'static str>| {
+        if let Some(v) = value {
+            tag.insert_text(key, v.to_string());
+        }
+    };
+    put(ItemKey::ReplayGainAlbumGain, meta.album_gain_db);
+    put(ItemKey::ReplayGainAlbumPeak, meta.album_peak);
+    put(ItemKey::ReplayGainTrackGain, meta.track_gain_db);
+    put(ItemKey::ReplayGainTrackPeak, meta.track_peak);
+    bound.insert_tag(tag);
+    bound.save(WriteOptions::new()).unwrap();
+}
+
+/// Sine fixture carrying ReplayGain tags; returns (path, expected samples
+/// *before* the gain is applied, the applied linear gain). (`#[allow]`:
+/// shared test module.)
+#[allow(dead_code)]
+pub fn replaygain_fixture(
+    name: &str,
+    freq: f64,
+    meta: &RgMeta,
+    gain: f32,
+) -> (PathBuf, Vec<f32>, f32) {
+    let (path, expected) = stereo_sine_fixture(name, 44_100, 0.5, freq);
+    tag_replaygain(&path, meta);
+    (path, expected, gain)
+}

@@ -2414,8 +2414,11 @@ dependencies = [
  "cpal",
  "crossbeam-channel",
  "ctrlc",
+ "lofty",
  "reqwest",
  "rubato",
+ "rustfft",
+ "serde",
  "symphonia",
  "thiserror 2.0.21",
 ]

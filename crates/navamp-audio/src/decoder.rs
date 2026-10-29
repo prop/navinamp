@@ -6,7 +6,7 @@
 //! eagerly (`EnqueueNext`) so the gapless swap never waits on file I/O.
 
 use std::fs::File;
-use std::io;
+use std::io::{self, Seek};
 use std::path::Path;
 
 use symphonia::core::audio::{SampleBuffer, SignalSpec};
@@ -21,6 +21,7 @@ use symphonia::default::{get_codecs, get_probe};
 
 use crate::error::AudioError;
 use crate::http_stream::HttpStream;
+use crate::replaygain;
 
 /// A decoded audio source. Yields interleaved f32 blocks at the source sample
 /// rate / channel count.
@@ -32,6 +33,10 @@ pub(crate) struct PcmSource {
     time_base: TimeBase,
     /// Duration from container metadata (n_frames / rate), if the container knows.
     pub duration_hint_secs: Option<f64>,
+    /// ReplayGain scalar to apply to this track (album gain preferred, track
+    /// gain fallback, peak-protected; 1.0 when untagged). Read once at open
+    /// and published by the producer as a frame-accurate switch marker.
+    pub replaygain_gain: f32,
     /// Exact frames decoded so far (media time).
     decoded_frames: u64,
     /// f32 interleaving buffer, grown to the largest packet seen.
@@ -42,23 +47,30 @@ pub(crate) struct PcmSource {
 }
 
 impl PcmSource {
-    /// Open and probe a media file by content (no extension hints).
+    /// Open and probe a media file by content (no extension hints). The
+    /// file's ReplayGain tags are read in the same pass (lofty, best-effort).
     pub(crate) fn open(path: &Path) -> Result<Self, AudioError> {
-        let file = File::open(path).map_err(AudioError::Io)?;
-        Self::probe(Box::new(file))
+        let mut file = File::open(path).map_err(AudioError::Io)?;
+        let replaygain_gain = replaygain::scan(&mut file);
+        file.rewind().map_err(AudioError::Io)?;
+        Self::probe(Box::new(file), replaygain_gain)
     }
 
     /// Open and probe a remote HTTP(S) media stream by content. The
     /// [`HttpStream`] performs the initial ranged GET here (on the producer
     /// thread); duration/seek work exactly as for files once the transport
     /// is seekable (range-capable server, or spilled to a temp file).
+    /// ReplayGain tags are read before the hand-off to symphonia (one extra
+    /// ranged GET on range-capable servers).
     pub(crate) fn open_remote(url: &str) -> Result<Self, AudioError> {
-        let stream = HttpStream::open(url).map_err(AudioError::Io)?;
-        Self::probe(Box::new(stream))
+        let mut stream = HttpStream::open(url).map_err(AudioError::Io)?;
+        let replaygain_gain = replaygain::scan(&mut stream);
+        stream.rewind().map_err(AudioError::Io)?;
+        Self::probe(Box::new(stream), replaygain_gain)
     }
 
     /// Probe `source` (a `Read + Seek` media source) and build the decoder.
-    fn probe(source: Box<dyn MediaSource>) -> Result<Self, AudioError> {
+    fn probe(source: Box<dyn MediaSource>, replaygain_gain: f32) -> Result<Self, AudioError> {
         let mss = MediaSourceStream::new(source, Default::default());
 
         // Enable gapless so the reader provides encoder delay/padding trim info.
@@ -107,6 +119,7 @@ impl PcmSource {
             spec,
             time_base,
             duration_hint_secs,
+            replaygain_gain,
             decoded_frames: 0,
             sample_buf: SampleBuffer::new(initial_frames, spec),
             sample_buf_frames: initial_frames,

@@ -15,14 +15,19 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use navamp_audio::{Command, EngineHandle, Event, PlaybackStatus, TrackSource};
+use navamp_audio::{
+    Command, EngineHandle, EqPreset, EqState, Event, PlaybackStatus, Spectrum, TrackSource,
+    eq_presets as eq_preset_table,
+};
 
 /// Name of the Tauri event engine events are forwarded to.
 const EVENT_NAME: &str = "audio-event";
 
-/// Lazily-initialized engine, shared by all commands.
+/// Lazily-initialized engine, shared by all commands. The second slot caches
+/// EQ params set before the engine booted (the engine starts flat; the cache
+/// is replayed on start so the EQ panel works without playback running).
 #[derive(Default)]
-pub struct Audio(Mutex<Option<EngineHandle>>);
+pub struct Audio(Mutex<Option<EngineHandle>>, Mutex<EqState>);
 
 /// Snapshot returned by [`audio_state`] (polled by the UI at ~10 Hz).
 #[derive(Serialize)]
@@ -50,6 +55,13 @@ fn ensure_engine(app: &AppHandle, state: &Audio) -> Result<(), String> {
     if guard.is_none() {
         let engine = EngineHandle::start().map_err(|e| e.to_string())?;
         spawn_event_forwarder(app.clone(), &engine);
+        // Replay any EQ params configured before the engine existed.
+        let cached = *state.1.lock().unwrap();
+        engine.eq_set_enabled(cached.enabled);
+        engine.eq_set_preamp(cached.preamp_db);
+        for (index, db) in cached.bands_db.iter().enumerate() {
+            let _ = engine.eq_set_band(index as u32, *db);
+        }
         *guard = Some(engine);
     }
     Ok(())
@@ -97,6 +109,17 @@ fn send_if_running(state: &Audio, make: impl FnOnce() -> Command) -> Result<(), 
         Some(engine) => engine.send(make()).map_err(|e| e.to_string()),
         None => Ok(()),
     }
+}
+
+/// Run an EQ mutation against a running engine (no-op before the first
+/// playback command starts the engine — the device is deliberately not
+/// opened just for EQ twiddling; settings live for the engine's lifetime).
+fn eq_mutate(state: &Audio, f: impl FnOnce(&EngineHandle)) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    if let Some(engine) = guard.as_ref() {
+        f(engine);
+    }
+    Ok(())
 }
 
 /// Maps a UI-provided `path` to a engine source: `http(s)://` URLs play as
@@ -164,5 +187,73 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
             volume: 1.0,
             underrun_frames: 0,
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Equaliser (M6a). State lives in the engine's lock-free parameter store;
+// the RT chain snapshots it per block with a generation counter.
+// ---------------------------------------------------------------------------
+
+/// The current EQ state (cached params before an engine exists, so the
+/// panel reflects and remembers pre-playback configuration).
+#[tauri::command]
+pub fn eq_state(state: State<'_, Audio>) -> EqState {
+    let guard = state.0.lock().unwrap();
+    match guard.as_ref() {
+        Some(engine) => engine.eq_state(),
+        None => *state.1.lock().unwrap(),
+    }
+}
+
+#[tauri::command]
+pub fn eq_set_enabled(state: State<'_, Audio>, enabled: bool) -> Result<(), String> {
+    state.1.lock().unwrap().enabled = enabled;
+    eq_mutate(&state, |engine| engine.eq_set_enabled(enabled))
+}
+
+/// Preamp in dB; clamped server-side to −12..=12.
+#[tauri::command]
+pub fn eq_set_preamp(state: State<'_, Audio>, db: f32) -> Result<(), String> {
+    state.1.lock().unwrap().preamp_db = db.clamp(-12.0, 12.0);
+    eq_mutate(&state, |engine| engine.eq_set_preamp(db))
+}
+
+/// One band's gain in dB; `index` 0..=9 (else `Err`), value clamped to
+/// −12..=12.
+#[tauri::command]
+pub fn eq_set_band(state: State<'_, Audio>, index: u32, db: f32) -> Result<(), String> {
+    {
+        let mut cache = state.1.lock().unwrap();
+        let Some(slot) = cache.bands_db.get_mut(index as usize) else {
+            return Err("eq band index must be 0..=9".into());
+        };
+        *slot = db.clamp(-12.0, 12.0);
+    }
+    let guard = state.0.lock().unwrap();
+    match guard.as_ref() {
+        Some(engine) => engine.eq_set_band(index, db).map_err(|e| e.to_string()),
+        None => Ok(()), // cached; replayed when the engine boots
+    }
+}
+
+/// The classic Winamp preset curves (static; no engine needed).
+#[tauri::command]
+pub fn eq_presets() -> Vec<EqPreset> {
+    eq_preset_table().to_vec()
+}
+
+// ---------------------------------------------------------------------------
+// Analyser (M6a). Computed on demand from the post-DSP tap; the audio
+// callback only ever copies frames into it.
+// ---------------------------------------------------------------------------
+
+/// One spectrum/waveform snapshot (`active` is false unless playing).
+#[tauri::command]
+pub fn audio_spectrum(state: State<'_, Audio>) -> Spectrum {
+    let guard = state.0.lock().unwrap();
+    match guard.as_ref() {
+        Some(engine) => engine.spectrum(),
+        None => Spectrum::default(),
     }
 }

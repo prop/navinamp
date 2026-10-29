@@ -5,9 +5,10 @@
 mod common;
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use common::{Meta, Scratch};
-use navamp_library::{Library, TrackFilter};
+use navamp_library::{Library, RemoteTrack, TrackFilter};
 
 /// A scanned three-file library: two tagged MP3s from one album + one WAV.
 fn scanned_library(label: &str) -> (Scratch, Library) {
@@ -534,4 +535,116 @@ fn scanning_a_single_file_root_works() {
     let report = library.scan_roots(&[single], |_| {}).unwrap();
     assert_eq!(report.unchanged, 1, "{report:?}");
     assert_eq!(library.stats().unwrap().tracks, 3); // nobody else removed
+}
+
+// ---------------------------------------------------------------------------
+// mark_played (play statistics)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mark_played_increments_count_and_sets_timestamp() {
+    let (_scratch, library) = scanned_library("mark-played");
+    let path = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .find(|t| t.codec == "mp3")
+        .unwrap()
+        .path;
+
+    let before = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    library.mark_played(&path).unwrap();
+    library.mark_played(&path).unwrap();
+
+    let track = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .find(|t| t.path == path)
+        .unwrap();
+    assert_eq!(track.play_count, 2);
+    let last = track.last_played_at.expect("timestamp set");
+    assert!(
+        last >= before && last <= before + 5,
+        "last_played_at {last}"
+    );
+
+    // Nothing else moved: the other tracks are untouched.
+    let others: Vec<_> = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.path != path)
+        .collect();
+    assert_eq!(others.len(), 2);
+    assert!(
+        others
+            .iter()
+            .all(|t| t.play_count == 0 && t.last_played_at.is_none())
+    );
+}
+
+#[test]
+fn mark_played_ignores_unknown_paths_silently() {
+    let (_scratch, library) = scanned_library("mark-unknown");
+    library.mark_played("/no/such/file.mp3").unwrap();
+    library.mark_played("").unwrap();
+    let stats = library.stats().unwrap();
+    assert_eq!(stats.tracks, 3);
+    let any_played = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .any(|t| t.play_count != 0 || t.last_played_at.is_some());
+    assert!(!any_played);
+}
+
+#[test]
+fn mark_played_never_touches_remote_rows() {
+    let (_scratch, library) = scanned_library("mark-remote");
+    library
+        .sync_remote(vec![RemoteTrack {
+            remote_id: "t9".into(),
+            title: "Remote Song".into(),
+            artist: "Björk".into(),
+            album_artist: "Björk".into(),
+            album: "Debut".into(),
+            genre: "Electronic".into(),
+            year: Some(1993),
+            track_no: Some(9),
+            disc_no: Some(1),
+            duration_secs: 250.0,
+            bitrate_kbps: Some(320),
+            samplerate: Some(44_100),
+            channels: Some(2),
+            codec: "mp3".into(),
+            art_id: None,
+            size: Some(1_000_000),
+        }])
+        .unwrap();
+    let remote_path = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap()[0]
+        .path
+        .clone();
+
+    // Same path, but the row is remote: the source guard must skip it.
+    library.mark_played(&remote_path).unwrap();
+    let remote = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap()
+        .into_iter()
+        .find(|t| t.path == remote_path)
+        .unwrap();
+    assert_eq!(remote.play_count, 0);
+    assert_eq!(remote.last_played_at, None);
 }

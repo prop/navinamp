@@ -8,8 +8,10 @@
 //!
 //! Per pull: sync ring generation (fast-forward discards after seek/stop), then
 //! pop audio while [`PlaybackStatus::Playing`], emit silence otherwise. The DSP
-//! chain (EQ/replay-gain insertion point, see [`crate::dsp`]) runs *before* the
-//! volume ramp, matching the plan's chain order: replaygain → preamp → EQ → volume.
+//! chain (replaygain → preamp → EQ, see [`crate::dsp`]) runs *before* the
+//! volume ramp, matching the plan's chain order: replaygain → preamp → EQ →
+//! volume. The analyser tap ([`crate::spectrum`]) copies the post-DSP,
+//! pre-volume block for `audio_spectrum`.
 
 use crate::dsp::{DspChain, VolumeRamp};
 use crate::ring::RingConsumer;
@@ -28,12 +30,13 @@ pub(crate) struct Callback {
 
 impl Callback {
     pub(crate) fn new(cons: RingConsumer, shared: Arc<Shared>, cfg: &SinkConfig) -> Self {
+        let eq = std::sync::Arc::clone(&shared.eq);
         Self {
             cons,
             ramp: VolumeRamp::new(cfg.sample_rate, shared.volume()),
+            dsp: DspChain::new(cfg.channels as usize, cfg.sample_rate, eq),
             shared,
             channels: cfg.channels as usize,
-            dsp: DspChain::new(),
         }
     }
 
@@ -72,7 +75,14 @@ impl Callback {
         }
 
         let signal = &mut out[..got];
-        self.dsp.process(signal);
+        // DSP (replaygain → preamp → EQ) then the analyser tap, then volume:
+        // the tap must hear the post-DSP, pre-volume signal.
+        let played = self.shared.played();
+        let block_frames = got / self.channels;
+        let first_frame = played - block_frames as u64;
+        self.dsp
+            .process(signal, first_frame, &self.shared.rg_markers);
+        self.shared.tap.write(signal, self.channels);
         let target = self.shared.volume();
         self.ramp.apply(signal, target);
     }

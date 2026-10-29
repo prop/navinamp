@@ -290,6 +290,20 @@ pub fn library_roots(state: State<'_, LibraryState>) -> Vec<String> {
     state.roots.lock().unwrap().clone()
 }
 
+/// Records one play of the local track at `path` (`play_count + 1`,
+/// `last_played_at = now`). Remote rows and unknown paths are silent
+/// no-ops — the UI calls this when a track starts/finishes playing.
+#[tauri::command]
+pub fn library_mark_played(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    path: String,
+) -> Result<(), String> {
+    with_library(&app, &state, |library| {
+        library.mark_played(&path).map_err(|e| e.to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

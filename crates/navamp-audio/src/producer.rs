@@ -541,6 +541,13 @@ impl Producer {
                 return;
             }
         };
+        // Schedule this track's ReplayGain at the exact frame its audio will
+        // begin on the played-frames timeline (== frames pushed so far),
+        // *before* any of it enters the ring — the DSP chain adopts it at
+        // that frame, so a gapless predecessor's buffered tail keeps its own
+        // gain. Published even when 1.0 (cheap; keeps the timeline exact).
+        self.shared
+            .publish_replaygain(self.pushed, src.replaygain_gain);
         let duration = src.duration_hint_secs;
         self.shared.push_session(Session {
             track_id: id,
@@ -585,6 +592,9 @@ impl Producer {
         }) as Box<dyn FnMut(String) + Send>;
         self.sink
             .open(cfg, Box::new(move |out: &mut [f32]| cb.pull(out)), err_cb)?;
+
+        // The analyser maps FFT bins with the output rate; keep it current.
+        self.shared.set_sink_rate(cfg.sample_rate);
 
         // The old stream and its callback are gone now. Any old-ring frames that
         // were still buffered will never play; account them as consumed so the

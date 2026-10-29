@@ -23,6 +23,13 @@ cpal = "0.18"
 rubato = "5.0"
 crossbeam-channel = "0.5"
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+# Tag reading (ReplayGain) at track open. Same version the library crate
+# pins, so the tree carries exactly one lofty.
+lofty = "0.25"
+# FFT for the spectrum analyser. Already in the lockfile (realfft, via
+# rubato), so this adds no new tree weight.
+rustfft = "6"
 # Remote (HTTP) media sources for Navidrome streaming (M5). rustls, not
 # native-tls, to keep the build free of OpenSSL; `blocking` because the
 # producer thread is a plain synchronous decoder loop. The only non-dev

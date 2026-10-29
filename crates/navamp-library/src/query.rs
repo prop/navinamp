@@ -2,6 +2,8 @@
 //! stats. All brief, single-statement affairs — the Tauri layer calls them
 //! under a short-lived mutex.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rusqlite::{Connection, OptionalExtension, Row};
 
 use crate::model::{Album, LibraryStats, Track, TrackFilter};
@@ -224,6 +226,26 @@ pub(super) fn track_count(conn: &Connection, source: Option<&str>) -> rusqlite::
         None => conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?,
     };
     Ok(n.max(0) as u64)
+}
+
+/// Records one play of the local track at `path`: `play_count + 1`,
+/// `last_played_at = now` (unix seconds). **Local rows only** — remote
+/// play stats belong to the Navidrome server (scrobble), so a row with the
+/// same path but `source != 'local'` is never touched. An unknown path is
+/// a silent no-op (0 affected rows is not an error). One statement; FTS is
+/// untouched in spirit (the update trigger re-inserts identical text,
+/// which keeps the index correct without any real churn).
+pub(super) fn mark_played(conn: &Connection, path: &str) -> rusqlite::Result<()> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    conn.execute(
+        "UPDATE tracks SET play_count = play_count + 1, last_played_at = ?2
+         WHERE path = ?1 AND source = 'local'",
+        rusqlite::params![path, now],
+    )?;
+    Ok(())
 }
 
 /// Whole-library counters; `last_scan` comes from the `meta` table.

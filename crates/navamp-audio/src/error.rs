@@ -26,6 +26,11 @@ pub enum AudioError {
     /// The engine thread is no longer running (after [`Command::Shutdown`] or a drop).
     #[error("audio engine is not running")]
     EngineStopped,
+
+    /// An IPC parameter was outside its accepted domain (e.g. an EQ band
+    /// index ≥ [`crate::EQ_BAND_COUNT`]).
+    #[error("invalid parameter: {0}")]
+    InvalidParam(String),
 }
 
 impl AudioError {

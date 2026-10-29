@@ -14,8 +14,12 @@
 //! non-real-time threads — so a plain mutex is fine; the audio callback never
 //! touches this structure.
 
+use std::cell::UnsafeCell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+
+use crate::eq::EqParams;
+use crate::spectrum::SpectrumTap;
 
 /// Playback status encoded into a single atomic byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +75,18 @@ pub(crate) struct Shared {
     pub underrun_frames: AtomicU64,
     /// Append-only session log (pruned occasionally by the producer).
     pub sessions: Mutex<Vec<Session>>,
+    /// EQ parameter store (lock-free; see `eq.rs`). Cloned into the output
+    /// callback's DSP chain at sink construction.
+    pub eq: std::sync::Arc<EqParams>,
+    /// Post-DSP analyser tap (see `spectrum.rs`), written by the callback.
+    pub tap: std::sync::Arc<SpectrumTap>,
+    /// Current output sample rate (analyser bin mapping; diagnostic).
+    sink_rate: AtomicU32,
+    /// ReplayGain switch markers, producer → callback (see [`RgMarkers`]).
+    pub(crate) rg_markers: RgMarkers,
+    /// The most recently published ReplayGain gain as f32 bits
+    /// (diagnostics: the gain scheduled for the current/next track).
+    replaygain_bits: AtomicU32,
 }
 
 impl Shared {
@@ -81,6 +97,11 @@ impl Shared {
             frames_played: AtomicU64::new(0),
             underrun_frames: AtomicU64::new(0),
             sessions: Mutex::new(Vec::new()),
+            eq: std::sync::Arc::new(EqParams::new()),
+            tap: std::sync::Arc::new(SpectrumTap::new()),
+            sink_rate: AtomicU32::new(44_100),
+            rg_markers: RgMarkers::new(),
+            replaygain_bits: AtomicU32::new(1.0f32.to_bits()),
         }
     }
 
@@ -156,5 +177,156 @@ impl Shared {
             .unwrap()
             .last()
             .and_then(|s| s.duration_secs)
+    }
+
+    /// Record the output sample rate (producer side, whenever a sink opens).
+    pub(crate) fn set_sink_rate(&self, rate: u32) {
+        self.sink_rate.store(rate, Ordering::Relaxed);
+    }
+
+    /// The current output sample rate (analyser bin mapping).
+    pub(crate) fn sink_rate(&self) -> u32 {
+        self.sink_rate.load(Ordering::Relaxed)
+    }
+
+    /// Schedule a ReplayGain switch: `gain` applies to every output frame at
+    /// absolute index ≥ `frame` (producer side, published *before* the first
+    /// such frame enters the ring, so the FIFO timeline orders it). Also
+    /// updates the diagnostic copy read by [`Shared::replaygain_gain`].
+    pub(crate) fn publish_replaygain(&self, frame: u64, gain: f32) {
+        self.rg_markers.push(frame, gain);
+        self.replaygain_bits
+            .store(gain.to_bits(), Ordering::Release);
+    }
+
+    /// The most recently published ReplayGain gain (diagnostics).
+    pub(crate) fn replaygain_gain(&self) -> f32 {
+        f32::from_bits(self.replaygain_bits.load(Ordering::Acquire))
+    }
+}
+
+/// How many ReplayGain markers can sit unread before the producer reuses
+/// slots. Markers are published once per track start; the callback drains
+/// at least one per block, so falling a full lap behind requires ~8 track
+/// starts inside a single output block — impossible short of a dead device
+/// (and `RgMarkers::take` degrades gracefully even then).
+const RG_MARKER_CAPACITY: u64 = 8;
+
+#[derive(Clone, Copy)]
+struct RgSlot {
+    frame: u64,
+    gain: f32,
+}
+
+/// A tiny single-producer/single-consumer ring of *switch markers*:
+/// "linear gain `gain` takes effect at absolute output frame `frame`".
+///
+/// This is what makes ReplayGain **sample-accurate at gapless boundaries**:
+/// the producer publishes the marker (in `frames_played` coordinates — the
+/// same FIFO timeline as [`Session`]s) before pushing the new track's first
+/// frame, and the DSP chain adopts each marker at exactly its frame, so the
+/// previous track's buffered tail (up to ~1 s) keeps its own gain.
+///
+/// Ordering: the writer fills the slot, then publishes the ticket
+/// (`Release`); readers load the ticket (`Acquire`) and only then copy
+/// slots whose writes happened-before that ticket. A slot can only be
+/// reused after a full lap, which `take` detects and skips past.
+pub(crate) struct RgMarkers {
+    slots: [UnsafeCell<RgSlot>; RG_MARKER_CAPACITY as usize],
+    /// Tickets ever published (producer-owned).
+    write: AtomicU64,
+}
+
+// SAFETY: `slots` cells are written only by the producer (before the `write`
+// publication) and read only by the consumer (only for tickets it has
+// acquired, and only while the producer is less than a lap ahead — see
+// `take`'s post-check).
+unsafe impl Sync for RgMarkers {}
+
+impl RgMarkers {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: std::array::from_fn(|_| {
+                UnsafeCell::new(RgSlot {
+                    frame: 0,
+                    gain: 1.0,
+                })
+            }),
+            write: AtomicU64::new(0),
+        }
+    }
+
+    /// Producer side: append one marker. Wait-free.
+    pub(crate) fn push(&self, frame: u64, gain: f32) {
+        let ticket = self.write.load(Ordering::Relaxed);
+        // SAFETY: only the producer thread writes slots, and only the slot
+        // for the unpublished ticket `write`.
+        let slot = unsafe { &mut *self.slots[(ticket % RG_MARKER_CAPACITY) as usize].get() };
+        slot.frame = frame;
+        slot.gain = gain;
+        self.write.store(ticket + 1, Ordering::Release);
+    }
+
+    /// Consumer side (RT): pop the next marker in publish order, if any.
+    /// `read` is the caller's private cursor. Practically wait-free; the
+    /// retry only triggers if the producer published a full lap of markers
+    /// *during* the copy (a dead-device pathology).
+    pub(crate) fn take(&self, read: &mut u64) -> Option<(u64, f32)> {
+        loop {
+            let published = self.write.load(Ordering::Acquire);
+            if *read >= published {
+                return None;
+            }
+            // If the producer lapped us (device stalled through many track
+            // starts), skip to the oldest surviving marker: everything older
+            // was superseded by hard resets that discarded its audio anyway.
+            if published - *read > RG_MARKER_CAPACITY {
+                *read = published - RG_MARKER_CAPACITY;
+            }
+            // SAFETY: we hold ticket `*read`, published (hence fully
+            // written) and less than a lap behind `published`.
+            let slot = unsafe { *self.slots[(*read % RG_MARKER_CAPACITY) as usize].get() };
+            // The slot was reused while we copied it only if the producer
+            // advanced a full lap meanwhile; retry with the fresh state.
+            if self.write.load(Ordering::Acquire) - *read > RG_MARKER_CAPACITY {
+                continue;
+            }
+            *read += 1;
+            return Some((slot.frame, slot.gain));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markers_deliver_in_order() {
+        let markers = RgMarkers::new();
+        let mut read = 0;
+        assert!(markers.take(&mut read).is_none());
+        markers.push(100, 0.5);
+        markers.push(200, 0.25);
+        assert_eq!(markers.take(&mut read), Some((100, 0.5)));
+        assert_eq!(markers.take(&mut read), Some((200, 0.25)));
+        assert!(markers.take(&mut read).is_none());
+    }
+
+    #[test]
+    fn markers_skip_to_survivors_when_lapped() {
+        let markers = RgMarkers::new();
+        for i in 0..(RG_MARKER_CAPACITY + 3) {
+            markers.push(i * 10, i as f32);
+        }
+        let mut read = 0;
+        // Falling 11 behind skips the 3 oldest; the survivors arrive in
+        // order and the stream is not corrupted.
+        assert_eq!(markers.take(&mut read), Some((30, 3.0)));
+        assert_eq!(markers.take(&mut read), Some((40, 4.0)));
+        for i in 5..=(RG_MARKER_CAPACITY + 2) {
+            assert_eq!(markers.take(&mut read), Some((i * 10, i as f32)));
+        }
+        assert!(markers.take(&mut read).is_none());
     }
 }

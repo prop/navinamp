@@ -165,6 +165,14 @@ impl Library {
         Ok(query::track_count(&self.conn, source)?)
     }
 
+    /// Records one play of the local track at `path` (`play_count + 1`,
+    /// `last_played_at = now`, unix seconds). Remote rows are never
+    /// touched (their play stats are the server's business); an unknown
+    /// path is a silent no-op.
+    pub fn mark_played(&self, path: &str) -> Result<()> {
+        Ok(query::mark_played(&self.conn, path)?)
+    }
+
     // -- Smart Views (Winamp3-style smart playlists) -----------------------
 
     /// All saved smart views, in tree order (`position`, then id — i.e.

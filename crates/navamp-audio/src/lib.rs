@@ -1,6 +1,6 @@
 //! # navamp-audio
 //!
-//! Gapless-capable playback engine for NavAmp (M1): **symphonia decode → DSP →
+//! Gapless-capable playback engine for NavAmp: **symphonia decode → DSP →
 //! lock-free ring buffer → cpal output**.
 //!
 //! ## Thread model
@@ -10,8 +10,8 @@
 //! ────────────────                ─────────────────────────────────────────    ────────────────────────────────
 //! EngineHandle                    Producer                                     Callback
 //!  ├─ Command  ──crossbeam────▶   ├─ PcmSource (symphonia FormatReader+Decoder)  ├─ RingConsumer   (lock-free)
-//!  ├─ atomics  ◀─……Relaxed……▶    ├─ channel convert → rubato resample           ├─ DspChain       (preamp 1.0)
-//!  └─ Receiver(Event) ◀───────    ├─ RingProducer (lock-free SPSC)               ├─ VolumeRamp     (de-zipper)
+//!  ├─ atomics  ◀─……Relaxed……▶    ├─ channel convert → rubato resample           ├─ DspChain       (RG→preamp→EQ)
+//!  └─ Receiver(Event) ◀───────    ├─ RingProducer (lock-free SPSC)               ├─ SpectrumTap    (post-DSP)
 //!                                 └─ Events broadcast ────────────────────────▶  └─ atomics: status/volume/played
 //! ```
 //!
@@ -48,7 +48,10 @@
 //!
 //! The plan's chain — *replay gain → preamp → 10× biquad EQ → volume* — runs in
 //! the callback between the ring buffer and the volume ramp; see `src/dsp.rs`.
-//! M1 ships a preamp placeholder of 1.0 only.
+//! EQ parameters travel lock-free (atomics + generation counter, `src/eq.rs`);
+//! ReplayGain is scanned with lofty at track open (`src/replaygain.rs`) and
+//! applied as a frame-accurate per-track scalar; a post-DSP analyser tap
+//! (`src/spectrum.rs`) feeds [`EngineHandle::spectrum`].
 //!
 //! ## Supported formats
 //!
@@ -99,22 +102,27 @@
 mod callback;
 mod decoder;
 mod dsp;
+mod eq;
 mod error;
 mod events;
 mod http_stream;
 mod producer;
+mod replaygain;
 mod resample;
 mod ring;
 mod shared;
 mod sink;
 mod sink_cpal;
 mod sink_test;
+mod spectrum;
 
+pub use eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_RANGE_DB, EqPreset, EqState, eq_presets};
 pub use error::AudioError;
 pub use shared::PlaybackStatus;
 pub use sink::{AudioSink, SinkConfig};
 pub use sink_cpal::CpalSink;
 pub use sink_test::TestSink;
+pub use spectrum::{SPECTRUM_BINS, Spectrum};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -264,6 +272,63 @@ impl EngineHandle {
     /// (diagnostics; should stay 0 in normal operation).
     pub fn underrun_frames(&self) -> u64 {
         self.shared.underrun_frames.load(Ordering::Relaxed)
+    }
+
+    // ----- equaliser (see `eq.rs`; all reads/writes are lock-free) -----
+
+    /// The current EQ state (atomic snapshot).
+    pub fn eq_state(&self) -> EqState {
+        let snapshot = self.shared.eq.snapshot();
+        EqState {
+            enabled: snapshot.enabled,
+            preamp_db: snapshot.preamp_db,
+            bands_db: snapshot.bands_db,
+        }
+    }
+
+    /// Enable or disable the EQ stage (takes effect at the next block; a
+    /// flat curve stays bit-transparent either way).
+    pub fn eq_set_enabled(&self, enabled: bool) {
+        self.shared.eq.set_enabled(enabled);
+    }
+
+    /// Set the preamp in dB (server-side clamp: ±[`EQ_RANGE_DB`];
+    /// non-finite values become 0 dB).
+    pub fn eq_set_preamp(&self, db: f32) {
+        self.shared.eq.set_preamp_db(db);
+    }
+
+    /// Set one band's gain in dB. `index` must be `0..EQ_BAND_COUNT`
+    /// (else [`AudioError::InvalidParam`]); the value is clamped like the
+    /// preamp.
+    pub fn eq_set_band(&self, index: u32, db: f32) -> Result<(), AudioError> {
+        if index as usize >= EQ_BAND_COUNT {
+            return Err(AudioError::InvalidParam(format!(
+                "EQ band index {index} out of range (0..{EQ_BAND_COUNT})"
+            )));
+        }
+        self.shared.eq.set_band_db(index as usize, db);
+        Ok(())
+    }
+
+    /// The ReplayGain scalar scheduled for the current (or next) track
+    /// (diagnostics; 1.0 when nothing is tagged).
+    pub fn replaygain_gain(&self) -> f32 {
+        self.shared.replaygain_gain()
+    }
+
+    /// One analyser snapshot: 32 log-spaced spectrum bars and the last 128
+    /// waveform samples, computed on demand from the post-DSP tap. `active`
+    /// is false unless the engine is currently [`PlaybackStatus::Playing`].
+    /// Intended for a ~60 Hz UI poll; never touches the audio callback.
+    pub fn spectrum(&self) -> Spectrum {
+        let active = self.shared.status() == PlaybackStatus::Playing;
+        let values = spectrum::analyse(&self.shared.tap.window(), self.shared.sink_rate());
+        Spectrum {
+            active,
+            spectrum: values.spectrum,
+            waveform: values.waveform,
+        }
     }
 
     /// Subscribe to engine events. Every subscriber sees every event; use
