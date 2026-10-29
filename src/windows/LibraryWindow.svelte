@@ -24,12 +24,23 @@
     queueIntent,
     queuePlayNow,
     queueSnapshot,
+    windowSetAlwaysOnTop,
     windowSetSize,
   } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
 
   const snap = $derived(queueSnapshot.value);
+
+  // ── always-on-top toggles (session-level, player + playlist) ────────────
+  let playerOnTop = $state(false);
+  let playlistOnTop = $state(false);
+  function setOnTop(label: "main" | "playlist", on: boolean): void {
+    if (label === "main") playerOnTop = on;
+    else playlistOnTop = on;
+    void windowSetAlwaysOnTop(label, on);
+  }
+
   const queueNote = $derived(
     `QUEUE ${snap?.currentIndex == null ? "--" : snap.currentIndex + 1}/${snap?.items.length ?? 0}`,
   );
@@ -150,6 +161,25 @@
 
     {#if devOpen}
       <div class="devbox">
+        <div class="row">
+          <label class="opt">
+            <input
+              type="checkbox"
+              checked={playerOnTop}
+              onchange={(e) => setOnTop("main", e.currentTarget.checked)}
+            />
+            keep player on top
+          </label>
+          <label class="opt">
+            <input
+              type="checkbox"
+              checked={playlistOnTop}
+              onchange={(e) => setOnTop("playlist", e.currentTarget.checked)}
+            />
+            keep playlist on top
+          </label>
+        </div>
+
         <div class="row">
           <button onclick={() => void devOpenPlay()}>Open &amp; Play…</button>
           <button onclick={() => void devEnqueue()}>Enqueue…</button>
