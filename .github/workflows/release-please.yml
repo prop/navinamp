@@ -23,6 +23,11 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: a classic PAT (repo scope) stored as secret
+          # RELEASE_PLEASE_TOKEN. Tags/releases created with GITHUB_TOKEN do
+          # NOT trigger `push: tags` workflows — with a PAT they do, making
+          # the release dmg fully automatic. Without it, push the tag from
+          # a local checkout: `git push origin vX.Y.Z`.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
