@@ -131,7 +131,19 @@ jobs:
           # Alternative simpler notarization path (choose either):
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-        run: npm ci && npm run tauri build
+        # APP only: Tauri's dmg step drives Finder via AppleScript, which
+        # times out on this headless launchd runner (AppleEvent -1712).
+        run: npm ci && npm run tauri build -- --bundles app
+
+      - name: Package dmg (headless-safe hdiutil)
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p target/release/bundle/dmg
+          hdiutil create \
+            -volname "NaVinaMP" \
+            -srcfolder "target/release/bundle/macos/NaVinaMP.app" \
+            -ov -format UDZO \
+            "target/release/bundle/dmg/NaVinaMP_${VER}_x64.dmg"
 
       - name: Publish GitHub Release (dmg)
         uses: softprops/action-gh-release@v2
