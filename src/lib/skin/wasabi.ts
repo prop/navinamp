@@ -14,6 +14,9 @@ export function objectRect(object: GuiObject): Rect {
   return object.kind === "other" ? {} : object.rect;
 }
 
+/** Playback status as reported by the engine (`audio_state.status`). */
+export type PlaybackStatus = "stopped" | "playing" | "paused";
+
 /** The slider actions NavAmp's engine handles natively (see `SliderAction`). */
 export type SliderActionKind = "seek" | "volume" | "balance";
 

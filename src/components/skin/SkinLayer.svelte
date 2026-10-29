@@ -1,20 +1,30 @@
 <script lang="ts">
   /**
-   * `<layer>` and `<animatedlayer>`: a static image plane.
+   * `<layer>`: a static image plane. `<animatedlayer>`: a horizontal
+   * frame strip animated by the engine (M6).
    *
-   * animatedlayer TODO: the image is a horizontal frame strip; for now only
-   * the first frame is shown (`background-size` frames×100% wide). Frame
-   * advance from params (`length`/`framewidth`/`speed`) comes with the real
-   * skin engine + audio hooks.
+   * Frame count: the `length` param when the skin states it, otherwise the
+   * strip-width / rect-width heuristic (animatedlayer strips are film strips
+   * of equal-width frames, so frames = image width ÷ frame width; the
+   * natural size is measured by decoding the data URL once).
+   *
+   * While playing, frames advance on a timer (`speed` param ms, default
+   * ~125 ms) cycling within the strip; otherwise the strip parks on frame 1
+   * — the classic "post-DSP" rest state (frame 0 is usually the pre-play
+   * glyph).
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
+  import type { PlaybackStatus } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
     images: Record<string, string>;
+    status?: PlaybackStatus;
   }
 
-  let { obj, images }: Props = $props();
+  let { obj, images, status = "stopped" }: Props = $props();
+
+  const isAnim = $derived(obj.object.kind === "animatedlayer");
 
   const o = $derived(
     obj.object.kind === "layer" || obj.object.kind === "animatedlayer" ? obj.object : null,
@@ -22,11 +32,50 @@
 
   const url = $derived(o?.image ? images[o.image] : undefined);
 
-  // Number of frames in the strip (1 for plain layers) — sizes the background
-  // so exactly one frame is visible.
-  const frames = $derived(
-    Math.max(1, parseInt(o?.params?.["length"] ?? "1", 10) || 1),
-  );
+  // Natural strip size for the frame-count heuristic (data URLs decode async).
+  let natural = $state<{ w: number; h: number } | null>(null);
+
+  $effect(() => {
+    const u = url;
+    natural = null;
+    if (!u) return;
+    let alive = true;
+    const img = new Image();
+    img.onload = () => {
+      if (alive) natural = { w: img.naturalWidth, h: img.naturalHeight };
+    };
+    img.src = u;
+    return () => {
+      alive = false;
+    };
+  });
+
+  const frames = $derived.by(() => {
+    if (!o || !isAnim) return 1;
+    const len = parseInt(o.params?.["length"] ?? "", 10);
+    if (Number.isFinite(len) && len >= 1) return Math.floor(len);
+    if (natural && obj.w) return Math.max(1, Math.floor(natural.w / obj.w));
+    return 1;
+  });
+
+  let frame = $state(0);
+
+  $effect(() => {
+    void frames; // frame count can arrive late (image decode)
+    if (!isAnim) {
+      frame = 0;
+      return;
+    }
+    if (status !== "playing") {
+      frame = Math.min(1, frames - 1); // rest frame
+      return;
+    }
+    const speed = Math.max(30, parseInt(o?.params?.["speed"] ?? "", 10) || 125);
+    const timer = setInterval(() => {
+      frame = (frame + 1) % frames;
+    }, speed);
+    return () => clearInterval(timer);
+  });
 </script>
 
 {#if url}
@@ -34,7 +83,8 @@
     <div
       class="img"
       style="left:{obj.x}px; top:{obj.y}px; width:{obj.w}px; height:{obj.h}px;
-        background-image:url('{url}'); background-size:{frames * 100}% 100%;"
+        background-image:url('{url}'); background-size:{frames * 100}% 100%;
+        background-position:{-frame * obj.w}px 0px;"
       title={o?.id ?? undefined}
     ></div>
   {:else}

@@ -4,6 +4,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
 
   import SkinSurface from "./components/skin/SkinSurface.svelte";
+  import EqPanel from "./components/EqPanel.svelte";
   import PlaylistEditor from "./components/PlaylistEditor.svelte";
   import MediaLibrary from "./components/MediaLibrary.svelte";
   import { listSkins, loadSkin } from "./lib/skin/load";
@@ -164,6 +165,13 @@
   const position = $derived(
     Math.min(seeking ?? state.positionSecs, duration || Infinity),
   );
+
+  // Songticker content: "Artist - Title" of the current queue item (blank
+  // until something plays).
+  const ticker = $derived.by(() => {
+    const it = queue.currentItem;
+    return it ? (it.artist ? `${it.artist} - ${it.title}` : it.title) : "";
+  });
 
   // --- skin preview: first installed .wal, else the built-in mock -----------
 
@@ -330,9 +338,13 @@
       <SkinSurface
         layout={playerLayout}
         {scale}
+        status={state.status}
         {position}
         {duration}
         volume={state.volume}
+        {ticker}
+        {playlistVisible}
+        shadeActive={mediaLibraryVisible}
         onaction={skinAction}
         onseek={(secs) => cmd("audio_seek", { secs })}
         onvolume={(v) => cmd("audio_set_volume", { volume: v })}
@@ -343,6 +355,8 @@
       <p class="status">loading skin…</p>
     {/if}
   </section>
+
+  <EqPanel />
 
   {#if playlistVisible}
     <!-- M6: becomes a real OS window (edge-snapped like the player). -->

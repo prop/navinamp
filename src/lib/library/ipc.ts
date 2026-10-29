@@ -198,6 +198,15 @@ export function libraryStats(): Promise<LibraryStats> {
   return invoke<LibraryStats>("library_stats");
 }
 
+/**
+ * Count one completed listen on a LOCAL file (M6 play stats; playCount /
+ * lastPlayedAt in the `tracks` table). Fired by the queue when playback
+ * leaves a local item — the local twin of the Navidrome scrobble submit.
+ */
+export function libraryMarkPlayed(path: string): Promise<void> {
+  return invoke<void>("library_mark_played", { path });
+}
+
 /** The persisted scan roots, as configured by the last `library_scan`. */
 export function libraryRoots(): Promise<string[]> {
   return invoke<string[]>("library_roots");

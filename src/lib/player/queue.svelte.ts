@@ -39,8 +39,9 @@
  * them into a fresh stream URL (they can be time-limited, so every feed
  * resolves its own); a failed resolution rejects into the existing
  * feed-error log and the item simply never plays (like a bad file). The
- * same TrackStarted/EndOfQueue/stop transitions drive Subsonic scrobbling —
- * see the scrobble section below the feed helpers.
+ * same TrackStarted/EndOfQueue/stop transitions drive Subsonic scrobbling
+ * and, symmetrically, local play stats (library_mark_played) — see the
+ * scrobble section below the feed helpers.
  *
  * Entries carry the item id next to the fed index so list edits (remove /
  * move / insert) repair indexes by identity — a bare index would go stale
@@ -51,6 +52,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { friendlyIpcError, libraryMarkPlayed } from "../library/ipc";
 import { navidromeScrobble, navidromeStreamUrl } from "../navidrome/ipc";
 
 export type RepeatMode = "off" | "all" | "one";
@@ -212,6 +214,48 @@ function scrobbleStart(item: QueueItem): void {
   if (item.remoteId == null) return; // local item: nothing to open
   scrobbleOpen = { itemId: item.id, remoteId: item.remoteId };
   scrobbleNow(item.remoteId, false);
+}
+
+// ── Local play stats (M6) ───────────────────────────────────────────────────
+// The LOCAL twin of the scrobble section above, with the same one-instance
+// guard and at the same lifecycle moments: `library_mark_played(path)` fires
+// exactly once per started track, when playback LEAVES a local item — the
+// next track's TrackStarted, an orphaned feed, EndOfQueue, or an explicit
+// stop. Symmetry notes:
+//  · scrobbleStart opens (now-playing) on start and submits on leave;
+//    playedStart only opens on start — the local "submit" IS the leave-time
+//    fire — so both flavors count each listen exactly once.
+//  · Same-id restarts (repeat-one wrap / replay) close + reopen ⇒ two
+//    plays, two marks — same as a second scrobble submission.
+//  · clear() leaves the instance open (the engine keeps playing what it
+//    holds; EndOfQueue or the next start closes it), matching scrobbling.
+//  · Fire-and-forget outside the feed chain: a failed mark (e.g. a backend
+//    without the command yet) only logs and never blocks feeds.
+
+/** The open local listen, if the current track is a local file. */
+let playedOpen: { itemId: string; path: string } | null = null;
+
+function markPlayed(path: string): void {
+  libraryMarkPlayed(path).catch((e) =>
+    logLine(`✖ play stats: ${friendlyIpcError("library_mark_played", e)}`),
+  );
+}
+
+/** Fire for the open local listen exactly once, then drop it. */
+function closePlayed(): void {
+  if (playedOpen == null) return;
+  const { path } = playedOpen;
+  playedOpen = null;
+  markPlayed(path);
+}
+
+/** A TrackStarted made `item` current: cycle the local mark onto it. */
+function playedStart(item: QueueItem): void {
+  // Playback left whatever was open — close (fire) before considering this.
+  closePlayed();
+  if (item.remoteId != null) return; // remote: scrobbling owns the listen
+  if (/^https?:\/\//i.test(item.path)) return; // fed as a stream URL, not a file
+  playedOpen = { itemId: item.id, path: item.path };
 }
 
 /** File-dialog flavor: tags are unknown, so the filename becomes the title. */
@@ -493,6 +537,7 @@ export const queue = {
     startPending = false;
     playingItemId = null;
     closeScrobble(); // the audible remote listen is over (submission=true)
+    closePlayed(); // …and the local listen is over (library_mark_played)
   },
 
   /**
@@ -512,6 +557,7 @@ export const queue = {
           currentIndex = idx;
           playingItemId = exp.id;
           scrobbleStart(items[idx]); // now-playing on remote, closes the previous
+          playedStart(items[idx]); // local twin: closes the previous, marks on leave
           if (e.durationSecs != null && items[idx].durationSecs == null) {
             items[idx].durationSecs = e.durationSecs;
           }
@@ -523,6 +569,7 @@ export const queue = {
         // (submitted) here rather than leaked.
         playingItemId = null;
         closeScrobble();
+        closePlayed();
         reconcileAhead();
         return `▶ started a track no longer in the list (fed #${exp.index})`;
       }
@@ -533,6 +580,7 @@ export const queue = {
         // The audible track ran dry — submit its listen now; a repeat=all
         // wrap re-opens (now-playing) from the wrap's own TrackStarted.
         closeScrobble();
+        closePlayed();
         if (repeat === "all" && items.length > 0) {
           play(0);
           return "↻ end of queue — repeat all from queue[0]";

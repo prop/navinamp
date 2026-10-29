@@ -6,24 +6,35 @@
    * with a CSS transform from the top-left corner; the frame reserves the
    * scaled space.
    *
-   * Playback values (`position`/`duration`/`volume`) are fed by the caller's
-   * 10 Hz audio_state poll; the callbacks wire the skinned controls to IPC.
+   * Playback values (`status`/`position`/`duration`/`volume`) are fed by the
+   * caller's 10 Hz audio_state poll; `ticker` is the songticker content
+   * (queue.currentItem). Togglebutton on-states flow down as
+   * `playlistVisible` / `shadeActive`; the callbacks wire the skinned
+   * controls to IPC.
    */
   import type { ResolvedLayout, ResolvedObject } from "../../lib/skin/resolver";
   import type { GuiObject } from "../../lib/skin/types";
-  import { sliderActionKind } from "../../lib/skin/wasabi";
+  import { sliderActionKind, type PlaybackStatus } from "../../lib/skin/wasabi";
   import SkinButton from "./SkinButton.svelte";
   import SkinLayer from "./SkinLayer.svelte";
   import SkinPlaceholder from "./SkinPlaceholder.svelte";
   import SkinSlider from "./SkinSlider.svelte";
   import SkinText from "./SkinText.svelte";
+  import SkinVis from "./SkinVis.svelte";
 
   interface Props {
     layout: ResolvedLayout;
     scale?: number;
+    status: PlaybackStatus;
     position: number;
     duration: number;
     volume: number;
+    /** Songticker content ("Artist - Title" from queue.currentItem). */
+    ticker: string;
+    /** TOGGLE_PLAYLIST on-state (App's playlist editor visibility). */
+    playlistVisible: boolean;
+    /** TOGGLE_SHADE on-state (M6 placeholder: App's media-library visibility). */
+    shadeActive: boolean;
     onaction: (action: string) => void;
     onseek: (secs: number) => void;
     onvolume: (v: number) => void;
@@ -32,9 +43,13 @@
   let {
     layout,
     scale = 1,
+    status,
     position,
     duration,
     volume,
+    ticker,
+    playlistVisible,
+    shadeActive,
     onaction,
     onseek,
     onvolume,
@@ -84,6 +99,19 @@
   function isPainted(obj: ResolvedObject): boolean {
     return obj.object.kind !== "group" && obj.object.kind !== "other";
   }
+
+  // Togglebutton on-state: the App's visibility toggles, matched by action.
+  function toggleState(object: GuiObject): boolean {
+    if (object.kind !== "togglebutton") return false;
+    switch (object.action?.trim().toUpperCase()) {
+      case "TOGGLE_PLAYLIST":
+        return playlistVisible;
+      case "TOGGLE_SHADE":
+        return shadeActive;
+      default:
+        return false;
+    }
+  }
 </script>
 
 <div class="frame" style="width:{layout.w * scale}px; height:{layout.h * scale}px;">
@@ -95,9 +123,9 @@
       {#if !isPainted(obj)}
         <!-- skipped -->
       {:else if obj.object.kind === "layer" || obj.object.kind === "animatedlayer"}
-        <SkinLayer {obj} images={layout.images} />
+        <SkinLayer {obj} images={layout.images} {status} />
       {:else if obj.object.kind === "button" || obj.object.kind === "togglebutton"}
-        <SkinButton {obj} images={layout.images} {onaction} />
+        <SkinButton {obj} images={layout.images} {onaction} toggled={toggleState(obj.object)} />
       {:else if obj.object.kind === "slider"}
         <SkinSlider
           {obj}
@@ -108,7 +136,9 @@
           oncommit={(v) => sliderCommit(obj.object, v)}
         />
       {:else if obj.object.kind === "text"}
-        <SkinText {obj} />
+        <SkinText {obj} {status} {position} {ticker} />
+      {:else if obj.object.kind === "vis"}
+        <SkinVis {obj} {status} />
       {:else}
         <SkinPlaceholder {obj} />
       {/if}

@@ -6,8 +6,9 @@
    * Three-state background: downimage while pressed, hoverimage while
    * hovered, image otherwise — each falling back to the normal image (and,
    * one day, to a disabled look; the model carries no disabled image).
-   * togglebutton TODO: hold the down image while the engine-side on/off
-   * state is active; until then it renders like a plain button.
+   * togglebutton: while its toggle is active (`toggled`, fed by SkinSurface
+   * from the App's visibility state, e.g. TOGGLE_PLAYLIST / TOGGLE_SHADE)
+   * the downimage stays rendered.
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
 
@@ -15,9 +16,11 @@
     obj: ResolvedObject;
     images: Record<string, string>;
     onaction: (action: string) => void;
+    /** Toggle active (SkinSurface maps the action to the App's state). */
+    toggled?: boolean;
   }
 
-  let { obj, images, onaction }: Props = $props();
+  let { obj, images, onaction, toggled = false }: Props = $props();
 
   const o = $derived(
     obj.object.kind === "button" || obj.object.kind === "togglebutton" ? obj.object : null,
@@ -28,7 +31,8 @@
 
   const image = $derived.by(() => {
     if (!o) return undefined;
-    if (down && o.downimage && images[o.downimage]) return images[o.downimage];
+    const pressed = down || (obj.object.kind === "togglebutton" && toggled);
+    if (pressed && o.downimage && images[o.downimage]) return images[o.downimage];
     if (hover && o.hoverimage && images[o.hoverimage]) return images[o.hoverimage];
     return o.image ? images[o.image] : undefined;
   });
@@ -60,6 +64,7 @@
     class="btn"
     class:hover
     class:down
+    class:toggled={obj.object.kind === "togglebutton" && toggled}
     role="button"
     tabindex="0"
     style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{image
@@ -96,6 +101,11 @@
   }
 
   .btn.down {
+    filter: brightness(0.85);
+  }
+
+  /* Toggled without a downimage: at least look held down. */
+  .btn.toggled {
     filter: brightness(0.85);
   }
 </style>
