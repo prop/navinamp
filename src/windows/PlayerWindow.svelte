@@ -28,6 +28,7 @@
   import { listSkins, loadSkin } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
+  import { formatWarning } from "../lib/skin/wasabi";
   import { dragRects } from "../lib/skin/titlebar";
   import type { SkinPayload } from "../lib/skin/types";
   import {
@@ -188,6 +189,15 @@
       cancelled = true;
     };
   });
+
+  // ── acceptance-run diagnostics: skin warnings visible in-app ─────────────
+
+  let warningsOpen = $state(false);
+  const skinWarnings = $derived(
+    (skin?.warnings ?? []).map((w) => formatWarning(w)),
+  );
+  const resolveWarnings = $derived(playerLayout?.warnings ?? []);
+  const allWarnings = $derived([...skinWarnings, ...resolveWarnings]);
 
   // ── layout: follows the window manager's mode (normal/shade) ────────────
 
@@ -356,6 +366,21 @@
   {:else}
     <p class="status">loading skin…</p>
   {/if}
+
+  {#if allWarnings.length > 0}
+    <div class="warnbar">
+      {#if warningsOpen}
+        <div class="warnlist">
+          {#each allWarnings as w}
+            <div class="warnline">{w}</div>
+          {/each}
+        </div>
+      {/if}
+      <button class="warnbadge" onclick={() => (warningsOpen = !warningsOpen)}>
+        ⚠ {allWarnings.length}
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -377,6 +402,43 @@
     position: absolute;
     pointer-events: auto;
     cursor: default;
+  }
+
+  /* Acceptance-run diagnostics: skin warnings must be visible in-app. */
+  .warnbar {
+    position: absolute;
+    left: 4px;
+    bottom: 4px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: calc(100% - 8px);
+  }
+
+  .warnbadge {
+    align-self: flex-start;
+    background: #40241c;
+    color: #d8604c;
+    border: 1px solid #d8604c;
+    border-radius: 3px;
+    padding: 1px 6px;
+    font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    cursor: pointer;
+  }
+
+  .warnlist {
+    background: rgba(0, 0, 0, 0.92);
+    border: 1px solid #5a2c22;
+    max-height: 140px;
+    overflow-y: auto;
+    padding: 4px 6px;
+  }
+
+  .warnline {
+    font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #d8a63c;
+    white-space: nowrap;
   }
 
   .status {
