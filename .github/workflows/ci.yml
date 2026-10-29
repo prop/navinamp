@@ -94,8 +94,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NaVinaMP-macos-${{ github.sha }}
+          # NB: cargo WORKSPACE — the bundle lives under the root target/,
+          # not src-tauri/target/.
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
           retention-days: 14
           if-no-files-found: error
