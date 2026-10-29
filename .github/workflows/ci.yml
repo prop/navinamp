@@ -116,6 +116,8 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         run: |
@@ -138,6 +140,9 @@ jobs:
           append APPLE_CERTIFICATE_PASSWORD "$APPLE_CERTIFICATE_PASSWORD"
           append APPLE_ID "$APPLE_ID"
           append APPLE_PASSWORD "$APPLE_PASSWORD"
+          # App Store Connect API key trio (alternative notarization path):
+          append APPLE_API_ISSUER "$APPLE_API_ISSUER"
+          append APPLE_API_KEY "$APPLE_API_KEY_ID"
           if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
             echo "no signing identity configured — build stays ad-hoc signed"
           fi
@@ -153,13 +158,10 @@ jobs:
           cargo metadata --format-version 1 > /dev/null
 
       - name: Build release bundle
-        env:
-          # Notarization via App Store Connect API key (if configured):
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
         # APP only: Tauri's dmg step drives Finder via AppleScript, which
         # times out on this headless launchd runner (AppleEvent -1712).
+        # Signing/notarization env vars arrive via GITHUB_ENV from the
+        # prepare step above — only non-empty values are exported.
         run: npm ci && npm run tauri build -- --bundles app
 
       - name: Package dmg (headless-safe hdiutil)
