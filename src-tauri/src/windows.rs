@@ -73,6 +73,13 @@ const DRAG_IDLE: Duration = Duration::from_millis(400);
 
 /// How long a `set_position` echo suppression stays valid.
 const SUPPRESS_TTL: Duration = Duration::from_millis(400);
+/// Late-echo absorption window: after this long a position matching an
+/// old `set_position` within the jump threshold is treated as a runaway
+/// feed, not user input.
+const LATE_ECHO_ABSORB: Duration = Duration::from_millis(2000);
+/// Jump (Manhattan px) above which a recent-suppression event is absorbed
+/// as our own late echo instead of being planned as a drag.
+const LATE_ECHO_ABSORB_PX: i32 = 3000;
 
 /// Tolerance when matching a Moved event against the echo we expect.
 const ECHO_TOLERANCE_PX: i32 = 2;
@@ -398,6 +405,39 @@ pub mod geom {
         plan
     }
 
+    /// Union bounding box of `screens` (`None` when empty).
+    pub fn virtual_bounds(screens: &[Rect]) -> Option<Rect> {
+        let first = *screens.first()?;
+        let (mut min_x, mut min_y, mut max_r, mut max_b) =
+            (first.x, first.y, first.right(), first.bottom());
+        for s in &screens[1..] {
+            min_x = min_x.min(s.x);
+            min_y = min_y.min(s.y);
+            max_r = max_r.max(s.right());
+            max_b = max_b.max(s.bottom());
+        }
+        Some(Rect {
+            x: min_x,
+            y: min_y,
+            w: max_r - min_x,
+            h: max_b - min_y,
+        })
+    }
+
+    /// Cap a drag-applied point to at most `max_out` px outside the
+    /// virtual desktop. Runaway coordinate feedback (late set_position
+    /// echoes, cursor glitches) may then misplace a window by about a
+    /// screen — never by thousands of them. No screens = identity.
+    pub fn cap_point_to_virtual(point: (i32, i32), screens: &[Rect], max_out: i32) -> (i32, i32) {
+        match virtual_bounds(screens) {
+            None => point,
+            Some(b) => (
+                point.0.clamp(b.x - max_out, b.right() + max_out),
+                point.1.clamp(b.y - max_out, b.bottom() + max_out),
+            ),
+        }
+    }
+
     /// Clamp a restored rect so a usable sliver of it remains on screen:
     /// if at least `min_w` x `min_h` of it is visible on any screen it is
     /// kept as-is; otherwise it is moved (margin-offset) onto the screen
@@ -439,6 +479,39 @@ pub mod geom {
 
         fn rect(x: i32, y: i32, w: i32, h: i32) -> Rect {
             Rect::at(x, y, w, h)
+        }
+
+        #[test]
+        fn cap_point_keeps_onscreen_points() {
+            let screens = [rect(0, 0, 1920, 1080)];
+            assert_eq!(cap_point_to_virtual((100, 100), &screens, 1920), (100, 100));
+        }
+
+        #[test]
+        fn cap_point_bounds_runaways() {
+            let screens = [rect(0, 0, 1920, 1080)];
+            // The observed wild-case: a docked pair at x ≈ -149k.
+            assert_eq!(
+                cap_point_to_virtual((-149_355, 40), &screens, 1920),
+                (-1920, 40)
+            );
+            // The virtual desktop is the union of screens.
+            let two = [rect(0, 0, 1920, 1080), rect(1920, 0, 1920, 1080)];
+            assert_eq!(
+                cap_point_to_virtual((-149_355, 40), &two, 1920),
+                (-1920, 40)
+            );
+            assert_eq!(cap_point_to_virtual((5000, 40), &two, 1920), (5000, 40));
+            // 9000 exceeds one screen of slack past the union right edge.
+            assert_eq!(cap_point_to_virtual((9000, 40), &two, 1920), (5760, 40));
+        }
+
+        #[test]
+        fn cap_point_without_screens_is_identity() {
+            assert_eq!(
+                cap_point_to_virtual((-149_355, 40), &[], 1920),
+                (-149_355, 40)
+            );
         }
 
         #[test]
@@ -964,6 +1037,9 @@ struct Inner {
     wins: BTreeMap<String, WinState>,
     drags: HashMap<String, DragRuntime>,
     suppress: HashMap<String, Suppress>,
+    /// Virtual desktop (union of monitor rects at startup) — bounds every
+    /// drag-applied position so coordinate feedback can't run away.
+    screens: Vec<geom::Rect>,
     /// Set whenever geometry changed; consumed by the IO thread to decide
     /// whether to broadcast `windows-changed`.
     pending_broadcast: bool,
@@ -986,6 +1062,7 @@ impl Default for WindowManager {
                     .collect(),
                 drags: HashMap::new(),
                 suppress: HashMap::new(),
+                screens: Vec::new(),
                 pending_broadcast: false,
             }),
             io: Mutex::new(None),
@@ -1019,6 +1096,7 @@ impl WindowManager {
         {
             let mut inner = lock(&self.inner);
             inner.wins = merged_defaults(&persisted, &screens);
+            inner.screens = screens.clone();
         }
 
         // Create the secondary windows (main comes from tauri.conf.json,
@@ -1316,9 +1394,11 @@ impl WindowManager {
 
             // Echo of a position we set ourselves?
             if let Some(sup) = inner.suppress.get(label) {
-                let is_echo = now.duration_since(sup.set_at) <= SUPPRESS_TTL
-                    && (logical.0 - sup.expected.0).abs() <= ECHO_TOLERANCE_PX
-                    && (logical.1 - sup.expected.1).abs() <= ECHO_TOLERANCE_PX;
+                let age = now.duration_since(sup.set_at);
+                let expected = sup.expected;
+                let is_echo = age <= SUPPRESS_TTL
+                    && (logical.0 - expected.0).abs() <= ECHO_TOLERANCE_PX
+                    && (logical.1 - expected.1).abs() <= ECHO_TOLERANCE_PX;
                 inner.suppress.remove(label);
                 if is_echo {
                     if let Some(st) = inner.wins.get_mut(label) {
@@ -1327,6 +1407,23 @@ impl WindowManager {
                     }
                     if let Some(d) = inner.drags.get_mut(label) {
                         d.last_moved = now;
+                    }
+                    return;
+                }
+                // A *late* echo (suppression TTL expired) must never be
+                // interpreted as user input: the position is one we set
+                // ourselves, and feeding it into the drag planner
+                // compounds it event after event into a runaway (observed
+                // in the wild as windows ~150k px offscreen). Absorb the
+                // obvious ones; the virtual-bounds cap below backstops
+                // the rest.
+                if age <= LATE_ECHO_ABSORB
+                    && (logical.0 - expected.0).abs() + (logical.1 - expected.1).abs()
+                        > LATE_ECHO_ABSORB_PX
+                {
+                    if let Some(st) = inner.wins.get_mut(label) {
+                        st.rect.x = logical.0;
+                        st.rect.y = logical.1;
                     }
                     return;
                 }
@@ -1372,8 +1469,11 @@ impl WindowManager {
                     drag.broken.iter().cloned().collect::<Vec<_>>(),
                 )
             };
+            let allowance = geom::virtual_bounds(&inner.screens)
+                .map(|b| b.w.max(b.h))
+                .unwrap_or(0);
             let input = DragInput {
-                free,
+                free: geom::cap_point_to_virtual(free, &inner.screens, allowance),
                 reported: logical,
                 prev_reported: prev,
                 size,
@@ -1381,7 +1481,21 @@ impl WindowManager {
                 broken: &broken,
                 others: &others,
             };
-            let plan = geom::drag_step(&input, SNAP_PX, BREAK_PX);
+            let mut plan = geom::drag_step(&input, SNAP_PX, BREAK_PX);
+            // The planner's output is capped too: whatever the input did,
+            // an applied position can never leave the virtual desktop by
+            // more than one screen.
+            plan.applied = geom::cap_point_to_virtual(plan.applied, &inner.screens, allowance);
+            plan.partner_moves = plan
+                .partner_moves
+                .iter()
+                .map(|(l, t)| {
+                    (
+                        l.clone(),
+                        geom::cap_point_to_virtual(*t, &inner.screens, allowance),
+                    )
+                })
+                .collect();
 
             // Bookkeeping first…
             {
@@ -1568,6 +1682,11 @@ pub fn window_set_size(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
+    // Degenerate or absurd sizes (transient layouts, hidden content under
+    // a ResizeObserver) must not collapse or misplace an OS window.
+    const MIN: f64 = 60.0;
+    const MAX: f64 = 8192.0;
+    let (w, h) = (w.clamp(MIN, MAX), h.clamp(MIN, MAX));
     state.set_size(&app, &label, w, h)
 }
 
