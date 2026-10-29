@@ -59,17 +59,12 @@ jobs:
           status=${PIPESTATUS[0]}
           set -e
           if [ "$status" -ne 0 ]; then
-            # Surface the actual errors as annotations (publicly readable
-            # via the API — logs require sign-in).
-            grep -E "^error(\[|:)" /tmp/clippy.log | head -8 | while IFS= read -r line; do
+            # Surface the log tail as annotations (publicly readable via
+            # the API — logs require sign-in). Whatever stopped the build,
+            # its last words end up here.
+            grep -v '^\s*$' /tmp/clippy.log | tail -10 | while IFS= read -r line; do
               echo "::error::${line:0:220}"
             done
-            {
-              echo '## clippy output (last 120 lines)'
-              echo '```'
-              tail -120 /tmp/clippy.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
 
