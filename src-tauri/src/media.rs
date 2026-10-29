@@ -49,8 +49,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const POSITION_PUSH_SECS: f64 = 1.0;
 
 /// MPRIS identity on Linux (D-Bus name rules: alnum + dots).
-const DBUS_NAME: &str = "com.prop.navamp";
-const DISPLAY_NAME: &str = "NavAmp";
+const DBUS_NAME: &str = "com.prop.navinamp";
+const DISPLAY_NAME: &str = "NaVinaMP";
 
 /// Managed state: the lazily-created OS handle plus the last snapshot.
 #[derive(Default)]
@@ -150,7 +150,7 @@ fn ensure_controls(app: &AppHandle, inner: &mut MediaInner) -> bool {
         Ok(mut controls) => {
             let app = app.clone();
             if let Err(e) = controls.attach(move |event| on_media_event(&app, event)) {
-                eprintln!("navamp media: cannot attach OS media controls: {e}");
+                eprintln!("navinamp media: cannot attach OS media controls: {e}");
                 inner.unavailable = true;
                 return false;
             }
@@ -158,7 +158,7 @@ fn ensure_controls(app: &AppHandle, inner: &mut MediaInner) -> bool {
             true
         }
         Err(e) => {
-            eprintln!("navamp media: OS media controls unavailable (degrading to no-op): {e}");
+            eprintln!("navinamp media: OS media controls unavailable (degrading to no-op): {e}");
             inner.unavailable = true;
             false
         }
@@ -206,7 +206,7 @@ fn push_metadata(inner: &mut MediaInner) {
             .map(Duration::from_secs_f64),
     };
     if let Err(e) = controls.set_metadata(metadata) {
-        eprintln!("navamp media: set_metadata failed: {e}");
+        eprintln!("navinamp media: set_metadata failed: {e}");
     }
 }
 
@@ -226,7 +226,7 @@ fn push_playback(inner: &mut MediaInner) {
         MediaPlayback::Paused { progress }
     };
     if let Err(e) = controls.set_playback(status) {
-        eprintln!("navamp media: set_playback failed: {e}");
+        eprintln!("navinamp media: set_playback failed: {e}");
     }
 }
 

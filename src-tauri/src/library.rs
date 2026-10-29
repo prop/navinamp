@@ -1,7 +1,7 @@
-//! Library bridge: wires `navamp-library` into the Tauri shell.
+//! Library bridge: wires `navinamp-library` into the Tauri shell.
 //!
 //! Layout:
-//! - the SQLite DB lives at `<app_data_dir>/navamp.db`;
+//! - the SQLite DB lives at `<app_data_dir>/navinamp.db`;
 //! - the configured scan roots live at `<app_data_dir>/library-roots.json`
 //!   (read at startup, rewritten by every [`library_scan`]);
 //! - queries go through one long-lived connection (behind a brief mutex),
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navamp_library::{Library, ScanProgress, ScanReport, Track, TrackFilter};
+use navinamp_library::{Library, ScanProgress, ScanReport, Track, TrackFilter};
 
 /// `library-progress` event name.
 const PROGRESS_EVENT: &str = "library-progress";
@@ -63,23 +63,23 @@ impl Drop for ScanGuard {
 pub fn init(app: &AppHandle) {
     let state = app.state::<LibraryState>();
     *state.roots.lock().unwrap() = read_roots(&roots_file(app).unwrap_or_else(|e| {
-        eprintln!("navamp library: cannot resolve roots file: {e}");
+        eprintln!("navinamp library: cannot resolve roots file: {e}");
         PathBuf::new()
     }));
     match db_file(app).and_then(|path| Library::open(path).map_err(|e| e.to_string())) {
         Ok(library) => *state.query.lock().unwrap() = Some(library),
-        Err(e) => eprintln!("navamp library: deferring open: {e}"),
+        Err(e) => eprintln!("navinamp library: deferring open: {e}"),
     }
 }
 
-/// `<app_data_dir>/navamp.db`, with the directory created.
+/// `<app_data_dir>/navinamp.db`, with the directory created.
 pub(crate) fn db_file(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("no app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create `{}`: {e}", dir.display()))?;
-    Ok(dir.join("navamp.db"))
+    Ok(dir.join("navinamp.db"))
 }
 
 /// `<app_data_dir>/library-roots.json`.
@@ -166,7 +166,7 @@ pub async fn library_scan(
     let flag = Arc::clone(&state.scanning);
 
     std::thread::Builder::new()
-        .name("navamp-library-scan".into())
+        .name("navinamp-library-scan".into())
         .spawn(move || {
             let _guard = ScanGuard(flag);
             let result = scan_library.scan_roots(
@@ -229,7 +229,7 @@ pub fn library_search(
 pub fn library_albums(
     app: AppHandle,
     state: State<'_, LibraryState>,
-) -> Result<Vec<navamp_library::Album>, String> {
+) -> Result<Vec<navinamp_library::Album>, String> {
     with_library(&app, &state, |library| {
         library.albums().map_err(|e| e.to_string())
     })
@@ -277,7 +277,7 @@ pub fn library_tracks(
 pub fn library_stats(
     app: AppHandle,
     state: State<'_, LibraryState>,
-) -> Result<navamp_library::LibraryStats, String> {
+) -> Result<navinamp_library::LibraryStats, String> {
     with_library(&app, &state, |library| {
         library.stats().map_err(|e| e.to_string())
     })
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn roots_file_round_trips() {
-        let dir = std::env::temp_dir().join(format!("navamp-roots-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("navinamp-roots-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("library-roots.json");
 

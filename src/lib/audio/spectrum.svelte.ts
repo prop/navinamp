@@ -30,7 +30,7 @@ export interface SpectrumSnapshot {
 
 export type VisMode = "bars" | "scope" | "off";
 
-const VIS_MODE_KEY = "navamp.vis.mode";
+const VIS_MODE_KEY = "navinamp.vis.mode";
 const VIS_MODES: readonly VisMode[] = ["bars", "scope", "off"];
 
 function loadMode(): VisMode {
@@ -93,7 +93,7 @@ function tick(): void {
         .catch((e) => {
           // Backend without the command (landing in parallel): stop asking.
           failed = true;
-          console.warn(`[navamp] audio_spectrum unavailable: ${e}`);
+          console.warn(`[navinamp] audio_spectrum unavailable: ${e}`);
         })
         .finally(() => {
           inFlight = false;

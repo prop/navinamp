@@ -11,7 +11,7 @@
 //!   The **sync walk runs on a `std::thread`** (like `library_scan`), with
 //!   each client call driven by `tauri::async_runtime::block_on` from that
 //!   dedicated thread;
-//! - synced rows land through `navamp-library`'s `sync_remote` (one
+//! - synced rows land through `navinamp-library`'s `sync_remote` (one
 //!   transaction, local rows untouched); the sync thread uses its **own**
 //!   database connection so UI queries stay responsive (WAL).
 //!
@@ -30,8 +30,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navamp_library::{Library, RemoteTrack};
-use navamp_subsonic::{AlbumDetail, SongSummary, StreamFormat, SubsonicClient};
+use navinamp_library::{Library, RemoteTrack};
+use navinamp_subsonic::{AlbumDetail, SongSummary, StreamFormat, SubsonicClient};
 
 use crate::library::{LibraryState, db_file, with_library};
 
@@ -462,7 +462,7 @@ pub async fn navidrome_sync(
     let inner = Arc::clone(&state.inner);
 
     std::thread::Builder::new()
-        .name("navamp-navidrome-sync".into())
+        .name("navinamp-navidrome-sync".into())
         .spawn(move || {
             let _guard = SyncGuard(flag);
             let result = run_sync(&emitter, &client, &library);

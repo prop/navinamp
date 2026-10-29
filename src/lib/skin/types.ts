@@ -1,5 +1,5 @@
 /**
- * TypeScript mirror of `crates/navamp-skin/src/model.rs` — the Rust model is
+ * TypeScript mirror of `crates/navinamp-skin/src/model.rs` — the Rust model is
  * the SOURCE OF TRUTH; keep this file in sync with it.
  *
  * Field names are snake_case exactly as serde serializes them. Typed fields

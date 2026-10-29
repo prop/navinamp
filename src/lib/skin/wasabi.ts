@@ -1,7 +1,7 @@
 /**
  * Wasabi skin-engine semantics shared by the renderer: the object helpers
  * mirror the `impl GuiObject` / `impl Slider` methods in
- * `crates/navamp-skin/src/model.rs`.
+ * `crates/navinamp-skin/src/model.rs`.
  */
 
 import type { GuiObject, Rect, Slider, Warning } from "./types";
@@ -17,7 +17,7 @@ export function objectRect(object: GuiObject): Rect {
 /** Playback status as reported by the engine (`audio_state.status`). */
 export type PlaybackStatus = "stopped" | "playing" | "paused";
 
-/** The slider actions NavAmp's engine handles natively (see `SliderAction`). */
+/** The slider actions NaVinaMP's engine handles natively (see `SliderAction`). */
 export type SliderActionKind = "seek" | "volume" | "balance";
 
 /** Parse the well-known slider actions, case-insensitively (`Slider::action_kind`). */

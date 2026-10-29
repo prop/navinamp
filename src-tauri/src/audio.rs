@@ -1,4 +1,4 @@
-//! Audio bridge: wires `navamp-audio` into the Tauri shell.
+//! Audio bridge: wires `navinamp-audio` into the Tauri shell.
 //!
 //! The engine is started lazily on the first playback command (opening the
 //! output device at app launch would be presumptuous). Once running, a
@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
-use navamp_audio::{
+use navinamp_audio::{
     Command, EngineHandle, EqPreset, EqState, Event, PlaybackStatus, Spectrum, TrackSource,
     eq_presets as eq_preset_table,
 };
@@ -72,7 +72,7 @@ fn ensure_engine(app: &AppHandle, state: &Audio) -> Result<(), String> {
 fn spawn_event_forwarder(app: AppHandle, engine: &EngineHandle) {
     let events = engine.subscribe();
     std::thread::Builder::new()
-        .name("navamp-audio-events".into())
+        .name("navinamp-audio-events".into())
         .spawn(move || {
             for event in events {
                 let payload = match &event {

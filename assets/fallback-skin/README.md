@@ -1,6 +1,6 @@
-# NavAmp Fallback Skin
+# NaVinaMP Fallback Skin
 
-The built-in skin for NavAmp, in the spirit of the Winamp3 default: a
+The built-in skin for NaVinaMP, in the spirit of the Winamp3 default: a
 275×280 player window (plus a 275×14 shade strip), a 275×232 playlist
 editor, dark metallic chrome, brushed-steel body, recessed near-black
 display panels with green (#00CC33) readouts, 1px bevels everywhere, and a
@@ -34,7 +34,7 @@ Node ≥ 20, no network at build time. The script:
    a `<bitmap>` id, every `<group id=…>` to have a matching `<groupdef>`,
    well-formed integer `x`/`y`/`w`/`h`/`charwidth`/`charheight`, and only
    known lowercase Wasabi tags — anything else fails the build. These are
-   exactly the conditions `crates/navamp-skin` reports as warnings, so a
+   exactly the conditions `crates/navinamp-skin` reports as warnings, so a
    clean build here parses with zero warnings there.
 
 ## Windows & metrics
@@ -43,14 +43,14 @@ Node ≥ 20, no network at build time. The script:
 
 | y-range | Content |
 |---|---|
-| 0–13 | Gradient title bar (group `player.titlebar`): embossed **NAVAMP** logo, decorative min/shade/close togglebuttons (14×10) at x=227/243/259 |
+| 0–13 | Gradient title bar (group `player.titlebar`): embossed **NAVINAMP** logo, decorative min/shade/close togglebuttons (14×10) at x=227/243/259 |
 | 16–75 | Recessed display panel (group `player.display`, 255×60 at 10,16): songticker text, 4-frame playstate `animatedlayer` (16×16), big time readout — dim ghost "88:88" bitmap + `text display="time"` overlay, `text display="status"`, kbps/khz ghosts, MONO/STEREO indicator |
 | 80–92 | Seek slider (`action="SEEK"`, 255×13, ticks every 12px) |
 | 96–108 | Balance (x=10, 110×13, center detent tick) + volume (x=155, 110×13) sliders |
 | 114–135 | Transport group `player.transport` at 52,114: PREV PLAY PAUSE STOP NEXT EJECT, 26×22 each, gap 3 |
 | 141–236 | Recessed vis panel 255×96 with dot grid + `vis` object at 14,145 (247×88) |
 | 243–260 | Bottom strip: PLAYLIST + SHADE togglebuttons (54×18) at x=10/68 |
-| 261–279 | Footer groove + etched NAVAMP logo at 120,266 |
+| 261–279 | Footer groove + etched NAVINAMP logo at 120,266 |
 
 The titlebar's shade window-button carries `action="TOGGLE_SHADE"` (the
 playlist's copy stays decorative); min/close have no standard action yet.
@@ -58,7 +58,7 @@ playlist's copy stays decorative); min/close have no standard action yet.
 ### Player — container `main`, layout `shade`, 275×14
 
 A window-shade strip (group `player.shadebar` over the same titlebar
-bitmap): embossed **NAVAMP** mini logo at x=3, live songticker
+bitmap): embossed **NAVINAMP** mini logo at x=3, live songticker
 (`display="songticker"`, 118px) at x=44, live time (`display="time"`) at
 x=164, then play / pause / stop / next mini buttons (13×12, 7px glyphs)
 and a restore toggle (`action="TOGGLE_SHADE"`, boxed-arrow glyph) ending

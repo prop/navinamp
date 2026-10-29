@@ -81,7 +81,7 @@ pub fn run() {
             media::media_playback
         ])
         .build(tauri::generate_context!())
-        .expect("error while building NavAmp");
+        .expect("error while building NaVinaMP");
 
     app.run(|app_handle, event| {
         // Persist window geometry on any exit path (player close, last

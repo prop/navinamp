@@ -1,7 +1,7 @@
 /**
  * Typed IPC surface for the library + smart-view backend (M3/M4).
  *
- * Every shape mirrors the Rust side exactly (`crates/navamp-library/src/model.rs`
+ * Every shape mirrors the Rust side exactly (`crates/navinamp-library/src/model.rs`
  * serializes `camelCase`; the smart-view contract is mirrored 1:1 from the
  * frozen M4 spec). Wrappers are thin so components can `try/catch` around a
  * single named command — a command the running backend does not implement yet

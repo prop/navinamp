@@ -1,4 +1,4 @@
-//! Multi-window manager: the three NavAmp OS windows ("main" player,
+//! Multi-window manager: the three NaVinaMP OS windows ("main" player,
 //! "playlist" editor, "library" browser), their persisted geometry,
 //! Winamp-style edge snapping + linked dragging, and the queue-event relay
 //! between windows.
@@ -1013,7 +1013,7 @@ impl WindowManager {
             .map(|json| parse_persisted(&json))
             .unwrap_or_default();
         if path.is_none() {
-            eprintln!("navamp windows: cannot resolve config dir; geometry will not persist");
+            eprintln!("navinamp windows: cannot resolve config dir; geometry will not persist");
         }
 
         {
@@ -1035,9 +1035,9 @@ impl WindowManager {
                 "playlist" => (
                     Rect::at(60, 340, 275, 232),
                     true,
-                    "NavAmp — Playlist Editor",
+                    "NaVinaMP — Playlist Editor",
                 ),
-                _ => (Rect::at(120, 120, 900, 620), true, "NavAmp — Media Library"),
+                _ => (Rect::at(120, 120, 900, 620), true, "NaVinaMP — Media Library"),
             };
             if let Err(e) =
                 WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
@@ -1051,7 +1051,7 @@ impl WindowManager {
                     .visible(false)
                     .build()
             {
-                eprintln!("navamp windows: cannot create '{label}' window: {e}");
+                eprintln!("navinamp windows: cannot create '{label}' window: {e}");
             }
         }
 
@@ -1110,7 +1110,7 @@ impl WindowManager {
         if let Some(path) = persist_path(app)
             && let Err(e) = write_persist(&path, &json)
         {
-            eprintln!("navamp windows: cannot save geometry: {e}");
+            eprintln!("navinamp windows: cannot save geometry: {e}");
         }
     }
 
@@ -1248,7 +1248,7 @@ impl WindowManager {
                 _ => {
                     api.prevent_close();
                     if let Err(e) = self.set_visible(app, label, false) {
-                        eprintln!("navamp windows: hiding '{label}' failed: {e}");
+                        eprintln!("navinamp windows: hiding '{label}' failed: {e}");
                     }
                 }
             },
@@ -1485,7 +1485,7 @@ fn spawn_io_thread(app: AppHandle, rx: Receiver<()>) {
             if let Some(path) = persist_path(&app)
                 && let Err(e) = write_persist(&path, &json)
             {
-                eprintln!("navamp windows: cannot save geometry: {e}");
+                eprintln!("navinamp windows: cannot save geometry: {e}");
             }
             if broadcast {
                 let info = state.info_from_state();

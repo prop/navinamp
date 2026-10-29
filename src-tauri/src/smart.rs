@@ -1,4 +1,4 @@
-//! Smart View bridge: thin wrappers over `navamp_library`'s rule engine,
+//! Smart View bridge: thin wrappers over `navinamp_library`'s rule engine,
 //! sharing the library connection/state with `library.rs`.
 //!
 //! Validation happens inside the library (before anything is persisted);
@@ -7,7 +7,7 @@
 
 use tauri::{AppHandle, State};
 
-use navamp_library::{SavedSmartView, SmartViewDef, Track};
+use navinamp_library::{SavedSmartView, SmartViewDef, Track};
 
 use crate::library::{LibraryState, with_library};
 

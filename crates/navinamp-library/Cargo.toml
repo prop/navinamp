@@ -1,0 +1,18 @@
+[package]
+name = "navinamp-library"
+version.workspace = true
+edition.workspace = true
+description = "NaVinaMP music library: incremental SQLite/FTS5 scanner + queries"
+license = "MIT"
+
+[dependencies]
+lofty = "0.25"
+rusqlite = { version = "0.41", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+walkdir = "2"
+
+[dev-dependencies]
+# integration tests open a second raw connection for direct `tracks` inserts
+rusqlite = { version = "0.41", features = ["bundled"] }

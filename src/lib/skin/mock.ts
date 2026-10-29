@@ -260,7 +260,7 @@ export function mockSkinPayload(): SkinPayload {
   const bitmaps: Bitmap[] = Object.keys(images).map((id) => ({ id, file: `${id}.png` }));
 
   const skin: Skin = {
-    params: { name: "NavAmp Fallback", author: "NavAmp", version: "0.1" },
+    params: { name: "NaVinaMP Fallback", author: "NaVinaMP", version: "0.1" },
     elements: {
       bitmaps,
       bitmap_fonts: [],
@@ -318,7 +318,7 @@ export function mockSkinPayload(): SkinPayload {
                 id: "title",
                 rect: { x: 10, y: 5, w: 96, h: 12 },
                 params: {
-                  text: "NAVAMP",
+                  text: "NAVINAMP",
                   color: "#3ccb4e",
                   font: "Verdana, Tahoma, sans-serif",
                   fontsize: "9",

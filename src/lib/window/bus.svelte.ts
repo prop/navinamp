@@ -259,7 +259,7 @@ export function initWindowBus(): void {
         try {
           applyQueueIntent(p.intent);
         } catch (e) {
-          console.warn(`[navamp] queue intent failed: ${e}`);
+          console.warn(`[navinamp] queue intent failed: ${e}`);
         }
       },
     );

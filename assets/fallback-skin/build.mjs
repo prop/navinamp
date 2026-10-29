@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * NavAmp fallback skin generator.
+ * NaVinaMP fallback skin generator.
  *
  * Draws every bitmap programmatically (original artwork in the spirit of the
  * Winamp3 default skin — no Nullsoft assets), assembles `skin.xml`, packs
  * `out/fallback.wal` (a ZIP with lowercase entry names) and verifies the
- * archive against the XML the same way crates/navamp-skin will: every
+ * archive against the XML the same way crates/navinamp-skin will: every
  * `file=` must exist in the archive, bitmap/groupdef ids must be unique,
  * every `image`/`downimage`/`hoverimage`/`thumbimage`/`background` must
  * resolve to a `<bitmap>` id, every `<group id=…>` instance must have a
@@ -478,7 +478,7 @@ function generate() {
   bitmap("titlebar.player.bg", "player/titlebar.png");
 
   addPng("player/title-player.png", 36, 8, (im) =>
-    embossedText(im, 0, 0, "NAVAMP", hex("#dde2e7"), hex("#0d1013")),
+    embossedText(im, 0, 0, "NAVINAMP", hex("#dde2e7"), hex("#0d1013")),
   );
   bitmap("player.title.logo", "player/title-player.png");
 
@@ -510,7 +510,7 @@ function generate() {
   bitmap("player.display.channels", "player/mono-stereo.png");
 
   addPng("player/logo.png", 36, 8, (im) =>
-    embossedText(im, 0, 0, "NAVAMP", hex("#1f2429"), hex("#8b939c")),
+    embossedText(im, 0, 0, "NAVINAMP", hex("#1f2429"), hex("#8b939c")),
   );
   bitmap("player.logo", "player/logo.png");
 
@@ -808,7 +808,7 @@ function generate() {
       .join("");
 
   const skinXml = `<?xml version="1.0" encoding="UTF-8"?>
-<skin name="NavAmp Fallback" author="NavAmp Project" version="1.0">
+<skin name="NaVinaMP Fallback" author="NaVinaMP Project" version="1.0">
 
   <elements>
 ${elementsXml}
@@ -860,7 +860,7 @@ ${winButtons("playlist")}
 ${actionButtons}
   </groupdef>
 
-  <container id="main" name="NavAmp Player">
+  <container id="main" name="NaVinaMP Player">
     <layout id="normal" x="0" y="0" w="275" h="280" background="player.window">
       <layer id="player.background" image="player.window" x="0" y="0" w="275" h="280"/>
       <group id="player.titlebar" x="0" y="0" w="275" h="14"/>
@@ -948,7 +948,7 @@ function patchZipDates(u8, date) {
 }
 
 // ---------------------------------------------------------------------------
-// Verification — mirrors the warnings crates/navamp-skin would emit, but
+// Verification — mirrors the warnings crates/navinamp-skin would emit, but
 // fails the build instead of warning.
 // ---------------------------------------------------------------------------
 

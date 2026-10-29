@@ -2,10 +2,10 @@
 resolver = "2"
 members = [
     "src-tauri",
-    "crates/navamp-audio",
-    "crates/navamp-library",
-    "crates/navamp-skin",
-    "crates/navamp-subsonic",
+    "crates/navinamp-audio",
+    "crates/navinamp-library",
+    "crates/navinamp-skin",
+    "crates/navinamp-subsonic",
 ]
 
 [workspace.package]
@@ -13,4 +13,4 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-# Populated as shared dependencies emerge (e.g. symphonia, cpal for navamp-audio).
+# Populated as shared dependencies emerge (e.g. symphonia, cpal for navinamp-audio).

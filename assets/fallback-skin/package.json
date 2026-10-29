@@ -1,9 +1,9 @@
 {
-  "name": "navamp-fallback-skin",
+  "name": "navinamp-fallback-skin",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic generator for the NavAmp built-in fallback skin (out/fallback.wal). Original artwork recreating the Winamp3 default look; no Nullsoft assets.",
+  "description": "Deterministic generator for the NaVinaMP built-in fallback skin (out/fallback.wal). Original artwork recreating the Winamp3 default look; no Nullsoft assets.",
   "engines": {
     "node": ">=20"
   },

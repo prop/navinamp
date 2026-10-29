@@ -60,7 +60,7 @@
   // Feed errors inside the queue module surface on the console: the visible
   // M1 log moved to the library window's DEV block, and cross-window log
   // relay is deliberately not part of the bus contract.
-  queue.setLog((line) => console.log(`[navamp] ${line}`));
+  queue.setLog((line) => console.log(`[navinamp] ${line}`));
 
   async function refresh() {
     try {
@@ -95,7 +95,7 @@
     const unlisten = listen<EngineEvent>("audio-event", (ev) => {
       const e = ev.payload;
       const note = queue.handleEngineEvent(e);
-      console.log(`[navamp] ${note ?? rawEngineLine(e)}`);
+      console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);
       void refresh();
     });
     return () => {
@@ -107,13 +107,13 @@
     try {
       await invoke(name, args.length > 0 ? (args[0] as object) : undefined);
     } catch (e) {
-      console.warn(`[navamp] ${name} error: ${e}`);
+      console.warn(`[navinamp] ${name} error: ${e}`);
     }
     void refresh();
   }
 
   function warnIpc(e: unknown): void {
-    console.warn(`[navamp] window ipc: ${e}`);
+    console.warn(`[navinamp] window ipc: ${e}`);
   }
 
   // Multi-select audio dialog for EJECT.
@@ -165,10 +165,10 @@
     try {
       const skins = await listSkins();
       const pick = skins.find((s) => s.id !== "fallback") ?? skins[0];
-      console.log(`[navamp] skin: ${pick?.fileName ?? "mock"}`);
+      console.log(`[navinamp] skin: ${pick?.fileName ?? "mock"}`);
       return await loadSkin(pick.id);
     } catch (e) {
-      console.warn(`[navamp] skin load failed (${e}; using mock)`);
+      console.warn(`[navinamp] skin load failed (${e}; using mock)`);
       return mockSkinPayload();
     }
   }
@@ -180,7 +180,7 @@
         if (cancelled) return;
         skin = payload;
         const n = payload.warnings.length;
-        if (n > 0) console.warn(`[navamp] skin parsed with ${n} warning(s)`);
+        if (n > 0) console.warn(`[navinamp] skin parsed with ${n} warning(s)`);
       })
       .catch((e) => {
         if (!cancelled) skinError = String(e);
@@ -296,7 +296,7 @@
   function mediaWarn(e: unknown): void {
     if (!metaWarned) {
       metaWarned = true;
-      console.warn(`[navamp] media metadata push unavailable: ${e}`);
+      console.warn(`[navinamp] media metadata push unavailable: ${e}`);
     }
   }
 

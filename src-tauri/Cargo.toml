@@ -1,8 +1,8 @@
 [package]
-name = "navamp"
+name = "navinamp"
 version.workspace = true
 edition.workspace = true
-description = "NavAmp — a Winamp3-style desktop music player"
+description = "NaVinaMP — a Winamp3-style desktop music player"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -10,21 +10,21 @@ description = "NavAmp — a Winamp3-style desktop music player"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "navamp_lib"
+name = "navinamp_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-navamp-audio = { path = "../crates/navamp-audio" }
-navamp-library = { version = "0.1.0", path = "../crates/navamp-library" }
-navamp-subsonic = { version = "0.1.0", path = "../crates/navamp-subsonic" }
+navinamp-audio = { path = "../crates/navinamp-audio" }
+navinamp-library = { version = "0.1.0", path = "../crates/navinamp-library" }
+navinamp-subsonic = { version = "0.1.0", path = "../crates/navinamp-subsonic" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-navamp-skin = { version = "0.1.0", path = "../crates/navamp-skin" }
+navinamp-skin = { version = "0.1.0", path = "../crates/navinamp-skin" }
 souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
 
 [dev-dependencies]
