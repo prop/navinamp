@@ -56,6 +56,11 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee /tmp/clippy.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
+            # Surface the actual errors as annotations (publicly readable
+            # via the API — logs require sign-in).
+            grep -E "^error(\[|:)" /tmp/clippy.log | head -8 | while IFS= read -r line; do
+              echo "::error::${line:0:220}"
+            done
             {
               echo '## clippy output (last 120 lines)'
               echo '```'
