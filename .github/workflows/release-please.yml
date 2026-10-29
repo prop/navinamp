@@ -1,0 +1,28 @@
+name: release-please
+
+# Semantic releases: conventional commits on master (feat/fix/feat!-BREAKING)
+# drive the next version. This job maintains CHANGELOG.md and opens/updates a
+# Release PR; merging it tags vX.Y.Z — which triggers the CI release job
+# (tests -> Mac mini build -> dmg attached to the GitHub Release).
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
