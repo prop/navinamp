@@ -35,6 +35,11 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { IS_PLAYER, LABEL, type WindowLabel } from "./identity";
 import { persistQueue, queue } from "../player/queue.svelte";
 import type { QueueItem, QueueItemMeta, RepeatMode } from "../player/queue.svelte";
+import {
+  DEFAULT_SKIN_THEME,
+  themeFromSkinParams,
+  type SkinTheme,
+} from "../skin/theme";
 
 // ── window-manager IPC (frozen M6b contract) ───────────────────────────────
 
@@ -177,6 +182,15 @@ export const windowsStore = $state<{ byLabel: Record<string, WinInfo> }>({ byLab
  */
 export const queueSnapshot = $state<{ value: QueueSnapshot | null }>({ value: null });
 
+/**
+ * Loaded skin's playlist theme (pledit.txt colors, classic-green fallback).
+ * The player broadcasts it after every skin load; non-player windows keep
+ * the default until then. Same request/re-heal protocol as the queue
+ * snapshot, so a playlist window that mounts before the player's skin load
+ * still catches up.
+ */
+export const skinTheme = $state<{ value: SkinTheme }>({ value: DEFAULT_SKIN_THEME });
+
 function ingestWindows(map: Record<string, WinInfo> | undefined): void {
   if (map) windowsStore.byLabel = map;
 }
@@ -230,6 +244,24 @@ function broadcastQueueState(): void {
   void emit("queue-state", { from: "main", snapshot: readSnapshot() });
 }
 
+// ── skin theme plumbing ─────────────────────────────────────────────────────
+
+/** The theme the player last published (starts as the classic default). */
+let publishedTheme: SkinTheme = DEFAULT_SKIN_THEME;
+
+function broadcastSkinTheme(): void {
+  void emit("skin-theme", { from: "main", theme: publishedTheme });
+}
+
+/**
+ * Player-side hook: publish the loaded skin's pledit colors to every window
+ * (call after each skin load, including the mock fallback).
+ */
+export function publishSkinTheme(params: Record<string, string> | undefined): void {
+  publishedTheme = themeFromSkinParams(params);
+  broadcastSkinTheme();
+}
+
 // ── initialization ─────────────────────────────────────────────────────────
 
 let initialized = false;
@@ -274,6 +306,11 @@ export function initWindowBus(): void {
       if (ev.payload?.relayed !== true) return;
       broadcastQueueState();
     });
+    // …and the current skin theme (the playlist window's pledit colors).
+    void listen<{ relayed?: boolean }>("skin-theme-request", (ev) => {
+      if (ev.payload?.relayed !== true) return;
+      broadcastSkinTheme();
+    });
     // Media keys / DEV transport → the skin's action executor.
     void listen<{ command: MediaCommand }>("media-command", (ev) => {
       const c = ev.payload?.command;
@@ -293,14 +330,24 @@ export function initWindowBus(): void {
 
   // Non-player: consume the player's snapshots, ask for one on mount and
   // whenever this webview becomes visible again (heals missed snapshots —
-  // e.g. the player was still booting when the view first asked).
+  // e.g. the player was still booting when the view first asked). The skin
+  // theme rides the same re-heal: ask once on mount / refocus.
   void listen<{ from: string; snapshot: QueueSnapshot }>("queue-state", (ev) => {
     const p = ev.payload;
     if (!p || p.from !== "main" || !p.snapshot) return;
     queueSnapshot.value = p.snapshot;
   });
+  void listen<{ from: string; theme: SkinTheme }>("skin-theme", (ev) => {
+    const p = ev.payload;
+    if (!p || p.from !== "main" || !p.theme) return;
+    skinTheme.value = p.theme;
+  });
   void emit("queue-state-request", {});
+  void emit("skin-theme-request", {});
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) void emit("queue-state-request", {});
+    if (!document.hidden) {
+      void emit("queue-state-request", {});
+      void emit("skin-theme-request", {});
+    }
   });
 }

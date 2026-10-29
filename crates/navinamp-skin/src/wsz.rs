@@ -41,14 +41,14 @@
 //! | repeat toggle | 210,89 28×15 | `shufrep.bmp` x=0, rows y=0/15/30 |
 //! | EQ toggle | 219,58 23×12 | `shufrep.bmp` (0,61)/(46,73)/(0,73) |
 //! | playlist toggle | 242,58 23×12 | `shufrep.bmp` (23,61)/(69,73)/(23,73) |
-//! | songticker | 111,27 155×9 | font `text.bmp` 5×6 glyphs |
-//! | time display | 36,26 75×13 | font `numbers.bmp` 9×13 glyphs |
+//! | songticker | 111,27 155×9 | font `text.bmp` 5×6 glyphs (`params` `font`/`charset`) |
+//! | time display | 36,26 75×13 | font `numbers.bmp` 9×13 glyphs; digits at `params["digitoffsets"]` |
 //! | play/pause/stop status | 26,28 9×9 | `playpaus.bmp` x=0/9/18 |
 //! | mono/stereo indicators | 212/239,41 27/29×12 | `monoster.bmp` x=29/x=0, rows y=0 (on) / y=12 (off) |
 //! | visualizer | 24,43 72×16 | colors from `viscolor.txt` |
 //! | sysmenu/minimize/shade/close | 6/244/254/264,3 9×9 | `titlebar.bmp` glyph grid |
 //! | clutter bar | 10,22 8×43 | `titlebar.bmp` x=304 |
-//! | bitrate / kHz | 109/154,43 17/12×9 | font `text.bmp` |
+//! | bitrate / kHz digits | 111/156,43 15/10×9 | font `text.bmp`; the `kbps`/`khz` labels are baked into `main.bmp` |
 //! | EQ background | 0,0 275×116 | `eqmain.bmp` (0,0) |
 //! | EQ titlebar | 0,0 275×14 | `eqmain.bmp` (0,134) active / (0,149) inactive |
 //! | EQ on/auto/presets | 14/39/217,18 | `eqmain.bmp` (10/35/224,119…) |
@@ -58,9 +58,36 @@
 //! | playlist tiles | 3×3 stretch grid | `pledit.bmp` |
 //!
 //! `REGION.txt` (window click masks) is deliberately ignored — windows stay
-//! rectangular; see the README's limitations. Glyph rendering (`text.bmp`,
-//! `numbers.bmp`) is likewise the renderer's job; this module only wires the
-//! fonts to the text objects.
+//! rectangular; see the README's limitations. Glyph *rendering* (`text.bmp`,
+//! `numbers.bmp`) is the renderer's job (src/lib/skin/bmfont.ts); this module
+//! wires the fonts to the text objects.
+//!
+//! # Text-object conventions
+//!
+//! Classic text objects carry their semantics in `params` (the Wasabi
+//! `display` attribute stays reserved for `songticker`/`time`/`status`):
+//!
+//! | `params` key | Values | Meaning |
+//! |---|---|---|
+//! | `font` | `wsz.font.text` / `wsz.font.numbers` | `<bitmapfont>` id whose glyph strip paints the object |
+//! | `charset` | `classic-text` / `classic-numbers` | cell map of that strip (see bmfont.ts) |
+//! | `digitoffsets` | e.g. `12,24,42,54` | x offsets of the time display's four digit cells inside the object rect (the `:` colon is baked into main.bmp, so there is no colon glyph to draw) |
+//!
+//! Readout semantics: the bitrate/kHz **Text** objects use the typed `display`
+//! attribute with the values `bitrate`/`khz` (rendered empty until the engine
+//! reports metadata — the `kbps`/`khz` labels beside them are **baked into
+//! main.bmp**); the mono/stereo **Status** objects use `params["display"]`
+//! with the values `mono`/`stereo` (the channel-indicator labels: dim
+//! `image` until the engine reports channels, lit `activeimage` after).
+//! (`params` is serde-flattened, so a Text object cannot carry a
+//! `params["display"]` distinct from its typed attribute — the Status
+//! objects have no typed display field, which is why their convention rides
+//! in params.)
+//!
+//! The glyph strips themselves are emitted a second time as whole-file
+//! `<bitmap>` elements (`wsz.font.text.image`, `wsz.font.numbers.image`) so
+//! `bitmap_payloads` materializes them — the renderer looks the strip up as
+//! `images["{font}.image"]`.
 
 use std::collections::BTreeSet;
 
@@ -454,9 +481,18 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     }
 
     // Songticker + time-display fonts. numbers.bmp is the modern form;
-    // num0.bmp..num9.bmp whole-digit files are the older alternative.
+    // num0.bmp..num9.bmp whole-digit files are the older alternative. Each
+    // strip is ALSO emitted as a whole-file bitmap (`wsz.font.*.image`) so
+    // `bitmap_payloads` materializes it for the renderer's glyph blitter
+    // (probed silently — `bitmap_font` already warned if the file is gone).
     let text_font = out.bitmap_font("font.text", "text.bmp", 5, 6);
+    if text_font.is_some() {
+        out.present_bitmap("font.text.image", "text.bmp");
+    }
     let numbers_font = out.bitmap_font("font.numbers", "numbers.bmp", 9, 13);
+    if numbers_font.is_some() {
+        out.present_bitmap("font.numbers.image", "numbers.bmp");
+    }
 
     // Transport buttons. Strip layout: normal row y=0, pressed row y=18 (the
     // strip is 36px tall); prev/play/pause/stop are 23px cells, next/eject
@@ -572,12 +608,13 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     );
 
     // Songticker. The classic region is x=111..266 at y=27; its glyphs are
-    // one 6px line of 5px characters from text.bmp (rendering is the
-    // renderer's job).
+    // one line of 5px characters from text.bmp (rendered by the renderer's
+    // bitmap-font path — hence the `font`/`charset` params).
     let mut ticker_params = Params::new();
     if let Some(font) = &text_font {
         ticker_params.insert("font".to_owned(), font.clone());
     }
+    ticker_params.insert("charset".to_owned(), "classic-text".to_owned());
     ticker_params.insert("ticker".to_owned(), "1".to_owned());
     objects.push(GuiObject::Text(Text {
         id: Some("wsz.songticker".to_owned()),
@@ -589,12 +626,16 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     // Time display: one text object covering the digit region (x=36..111 at
     // y=26 — the brief's "y=39" is the region's bottom edge; the 13px digits
     // draw at y=26..39 in every reference implementation). Glyphs come from
-    // numbers.bmp (11 cells of 9px) or, on older skins, whole-file
-    // num0.bmp..num9.bmp (wired through `params["numbitmaps"]`; probed
-    // silently — most skins simply don't ship that dialect).
+    // numbers.bmp (11 cells of 9px; `digitoffsets` are the four digit cells
+    // at window x=48/60/78/90 — the ":" between minute and second is baked
+    // into main.bmp, so nothing is drawn for it) or, on older skins,
+    // whole-file num0.bmp..num9.bmp (wired through `params["numbitmaps"]`;
+    // probed silently — most skins simply don't ship that dialect).
     let mut time_params = Params::new();
     if let Some(font) = &numbers_font {
         time_params.insert("font".to_owned(), font.clone());
+        time_params.insert("charset".to_owned(), "classic-numbers".to_owned());
+        time_params.insert("digitoffsets".to_owned(), "12,24,42,54".to_owned());
     }
     if find_file(out.archive, "num0.bmp").is_some() {
         let digit_ids = (0..=9)
@@ -659,11 +700,18 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
         params: vis_params,
     }));
 
-    // Bitrate / kHz readouts (text.bmp glyphs).
-    for (id, x, w) in [("bitrate", 109, 17), ("khz", 154, 12)] {
+    // Bitrate / kHz readouts: the digit cells beside the tiny "kbps"/"khz"
+    // labels that are baked into main.bmp (x=111..126 and 156..166, y=43 —
+    // Webamp's #kbps/#khz rects). Semantics ride in the TYPED `display`
+    // attribute ("bitrate"/"khz" — see the conventions table); the renderer
+    // draws them EMPTY until the engine reports metadata — never an object
+    // id. (`params["display"]` would collide with the typed field under
+    // serde's flatten, hence the attribute.)
+    for (id, x, w) in [("bitrate", 111, 15), ("khz", 156, 10)] {
         let mut params = Params::new();
         if let Some(font) = &text_font {
             params.insert("font".to_owned(), font.clone());
+            params.insert("charset".to_owned(), "classic-text".to_owned());
         }
         objects.push(GuiObject::Text(Text {
             id: Some(format!("wsz.{id}")),
@@ -770,9 +818,10 @@ fn push_toggle(
     objects.push(toggle(id, action, image, down, active, at, tooltip));
 }
 
-/// A mono/stereo indicator: a `Status` object whose params point at the
-/// inactive (`image`) and active (`activeimage`) monoster.bmp cells.
-/// `strip_x` selects the indicator's column of monoster.bmp.
+/// A mono/stereo indicator: a `Status` object whose `params["display"]` is
+/// `"mono"`/`"stereo"` (the channel-indicator labels — see the conventions
+/// table) with `image` = the inactive (dim) and `activeimage` = the active
+/// (lit) monoster.bmp cells. `strip_x` selects the indicator's column.
 fn push_indicator(
     out: &mut Builder,
     objects: &mut Vec<GuiObject>,

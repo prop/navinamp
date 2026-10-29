@@ -33,6 +33,7 @@
   import type { SkinPayload } from "../lib/skin/types";
   import {
     playerLayoutMode,
+    publishSkinTheme,
     setMediaCommandExecutor,
     windowIsVisible,
     windowSetSize,
@@ -179,6 +180,9 @@
       .then((payload) => {
         if (cancelled) return;
         skin = payload;
+        // Share the skin's playlist colors (pledit.txt) with the other
+        // windows; they theme the playlist editor from it.
+        publishSkinTheme(payload.skin.params);
         const n = payload.warnings.length;
         if (n > 0) console.warn(`[navinamp] skin parsed with ${n} warning(s)`);
       })

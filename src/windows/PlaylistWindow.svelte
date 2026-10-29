@@ -13,7 +13,7 @@
 
   import PlaylistEditor from "../components/PlaylistEditor.svelte";
   import { expandAudioPaths } from "../lib/library/ipc";
-  import { queueIntent, queueSnapshot, windowSetSize } from "../lib/window/bus.svelte";
+  import { queueIntent, queueSnapshot, skinTheme, windowSetSize } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
 
@@ -22,6 +22,8 @@
   const currentIndex = $derived(snap?.currentIndex ?? null);
   const shuffle = $derived(snap?.shuffle ?? false);
   const repeat = $derived(snap?.repeat ?? "off");
+  // pledit.txt colors of the loaded classic skin (classic-green default).
+  const theme = $derived(skinTheme.value);
 
   // ADD: insert the picked files right after the current track. The indexes
   // are computed from the snapshot and sent explicitly; the player applies
@@ -88,7 +90,9 @@
 </script>
 
 <div class="win" bind:this={root}>
-  <TitleStrip title="PLAYLIST EDITOR" note={`${currentIndex == null ? "--" : currentIndex + 1}/${items.length}`} />
+  <!-- ONE header (this strip) and ONE count (the status row below) — the
+       editor body repeats neither anymore. -->
+  <TitleStrip title="PLAYLIST EDITOR" />
 
   <div class="qbar mono">
     <span class="pos">{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span>
@@ -102,6 +106,7 @@
   <PlaylistEditor
     {items}
     {currentIndex}
+    {theme}
     onplay={(i) => queueIntent({ type: "play", index: i })}
     onremove={(i) => queueIntent({ type: "remove", index: i })}
     onmove={(from, to) => queueIntent({ type: "move", from, to })}

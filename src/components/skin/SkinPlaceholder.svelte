@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * Placeholders for objects the renderer does not paint yet: `<status>` and
-   * `<grid>`. (`<vis>` got a real canvas component in M6 — SkinVis.) Labelled
-   * dashed boxes so they stay visible (and debuggable) in the layout.
+   * Placeholders for objects the renderer does not paint yet: `<grid>`.
+   * (`<vis>` got SkinVis, `<status>` got SkinStatus.) Labelled dashed boxes
+   * so they stay visible (and debuggable) in the layout.
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
 
@@ -12,9 +12,7 @@
 
   let { obj }: Props = $props();
 
-  const o = $derived(
-    obj.object.kind === "status" || obj.object.kind === "grid" ? obj.object : null,
-  );
+  const o = $derived(obj.object.kind === "grid" ? obj.object : null);
 </script>
 
 {#if o}

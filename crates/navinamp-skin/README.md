@@ -109,10 +109,10 @@ with the existing pipeline. The full coordinate table lives in the
 | `balance.bmp` | mid-frame trough (x=9, frame 13) + thumbs | `BALANCE` slider at 177,57 (38×13) |
 | `shufrep.bmp` | off/pressed/active cells (rows 0/15/30 and 61/73) | `TOGGLE_SHUFFLE`/`TOGGLE_REPEAT`/`TOGGLE_EQ`/`TOGGLE_PLAYLIST` toggles; active image in `params["activeimage"]` |
 | `shuffle.bmp`, `repeat.bmp`, `eq.bmp`, `pl.bmp` | silent fallback whole-file bitmaps | same four toggles when a skin predates `shufrep.bmp` |
-| `playpaus.bmp` | 3 cells at x=0/9/18 | one `Status` object at 26,28 (`params` `playimage`/`pauseimage`/`stopimage`) |
-| `monoster.bmp` | stereo col x=0 (29px), mono col x=29 (27px), rows on=0/off=12 | `Status` indicators at 212,41 / 239,41 |
-| `text.bmp` | `bitmapfont` `wsz.font.text` (5×6 glyphs) | songticker (111,27), bitrate (109,43), kHz (154,43) text objects — glyph rendering is the renderer's job |
-| `numbers.bmp` | `bitmapfont` `wsz.font.numbers` (9×13 glyphs) | one `display="time"` text object over the digit region (36..111, y=26) |
+| `playpaus.bmp` | 3 cells at x=0/9/18 | one `Status` object at 26,28 (`params` `playimage`/`pauseimage`/`stopimage`; the renderer picks by playback status) |
+| `monoster.bmp` | stereo col x=0 (29px), mono col x=29 (27px), rows on=0/off=12 | `Status` indicators at 212,41 / 239,41 with `params["display"]` = `mono`/`stereo` + dim `image`/lit `activeimage` (dim until the engine reports channels) |
+| `text.bmp` | `bitmapfont` `wsz.font.text` (5×6 glyphs, 31-column grid) + whole-file bitmap `wsz.font.text.image` | songticker (111,27), bitrate (111,43, `display="bitrate"`), kHz (156,43, `display="khz"`) text objects with `params` `font`/`charset=classic-text`; glyph *rendering* is the renderer's job (src/lib/skin/bmfont.ts) |
+| `numbers.bmp` | `bitmapfont` `wsz.font.numbers` (9×13 glyphs, 11 cells) + whole-file bitmap `wsz.font.numbers.image` | one `display="time"` text object over the digit region (36..111, y=26) with `params` `charset=classic-numbers` and `digitoffsets` (the `:` colon is baked into main.bmp) |
 | `num0.bmp`…`num9.bmp` | silent whole-file bitmaps `wsz.num.0…9` | wired via `params["numbitmaps"]` on the time object (older dialect) |
 | `titlebar.bmp` | glyph grid + strips | `SYSMENU`/`MINIMIZE`/`TOGGLE_SHADE`/`CLOSE` buttons at y=3, clutter-bar layer (10,22); strips feed EQ/playlist titlebars |
 | `viscolor.txt` | up to 24 `R,G,B` lines (comments tolerated) | `vis` object at 24,43, `params["viscolors"]` = `r,g,b;…` (semicolon-joined) |
@@ -129,6 +129,17 @@ would have used it are skipped — a minimal skin with only `main.bmp` +
 tolerated as missing too. Unparseable `pledit.txt` color values warn per
 line (`MalformedValue`, element `pledit.txt`) and are dropped. Only an
 unreadable ZIP is fatal.
+
+Text-object conventions (full table in the `wsz.rs` module docs): text
+objects carry `params["font"]` (the `<bitmapfont>` id), `params["charset"]`
+(`classic-text`/`classic-numbers` — the glyph cell map the renderer uses)
+and, on the time object, `params["digitoffsets"]`. Readout semantics: the
+bitrate/kHz Text objects use the typed `display` attribute (`bitrate`/
+`khz`, rendered empty until engine metadata — the labels live in
+main.bmp); the mono/stereo Status objects use `params["display"]`
+(`mono`/`stereo`). The glyph strips are also emitted as whole-file bitmaps
+(`wsz.font.text.image`, `wsz.font.numbers.image`) so `bitmap_payloads`
+materializes them for the renderer's glyph blitter.
 
 ## Coverage matrix
 
@@ -179,7 +190,7 @@ round-trippable, and `Skin::to_json()` is provided for IPC.
 
 `cargo test -p navinamp-skin` — 13 parse-half integration tests
 (`tests/skin_tests.rs`) + 9 bitmap-payload integration tests
-(`tests/image_tests.rs`) + 13 classic-`.wsz` synthesis tests
+(`tests/image_tests.rs`) + 15 classic-`.wsz` synthesis tests
 (`tests/wsz_tests.rs`, fixtures are BMPs encoded in-test with the `image`
 crate at the true base-skin dimensions) + the fallback-skin checks
 (`tests/fallback_skin.rs`) + unit tests for the color-key parser and the
@@ -193,7 +204,10 @@ duplicate groupdef ids → warning, attribute-key casing tolerance,
 `SkinArchive::open` from disk, serde JSON round-trip equality;
 classic detection (vs `.wal` vs junk zips), the three synthesized
 containers and their layout rects, transport/toggle/slider actions and
-image wiring, EQ band indices/frequencies, missing-optionals → one warning
+image wiring, the classic text-object conventions
+(`font`/`charset`/`digitoffsets` params, bitrate/kHz `display`, mono/
+stereo status params) and their glyph-strip payloads, EQ band
+indices/frequencies, missing-optionals → one warning
 per file with objects skipped, both `pledit.txt` dialects (incl. junk
 header), the 24-entry viscolor blob, `.wal` regression (XML path
 untouched), and every synthesized crop verified to fit fixture BMPs of
@@ -214,7 +228,9 @@ payload, bitmaps without `file` are skipped silently.
   renderer's job (the model wires fonts and digit bitmaps to the text
   objects); playlist list rows are renderer-drawn from the
   `pledit.color.*` params. `pledit.txt`'s ancient bare-line dialect maps
-  its 4th color to `oldbg` (it has no modern key).
+  its 4th color to `oldbg` (it has no modern key). The bitrate/kHz digit
+  cells and the mono/stereo indicators render idle (empty/dim) until the
+  engine reports metadata and channel counts.
 - **MAKI (`<script>`) is preserved but not interpreted** — heavily scripted
   skins degrade to their static layout (per plan §3/§10).
 - Bitmap payloads are PNG/BMP-decode only (the `image` crate is built with

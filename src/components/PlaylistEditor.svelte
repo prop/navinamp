@@ -1,9 +1,11 @@
 <script lang="ts">
   /**
-   * Winamp3 Playlist Editor *flavor* (this is the M3 interaction panel; M6
-   * will swap it for a bitmap-skinned window). Fixed-width dark panel with a
-   * black list area and green monospace rows. Pure props/callbacks — the
-   * component knows nothing about the queue module's state or IPC.
+   * Winamp3 Playlist Editor *flavor* (the M3 interaction panel). Fixed-width
+   * dark panel whose LIST AREA is themed from the loaded skin's pledit.txt
+   * colors (the `theme` prop: normal/current text, list bg, selected bg —
+   * classic green-on-black fallback) and set in a bundled OFL pixel font
+   * (Silkscreen, src/assets/fonts). Pure props/callbacks — the component
+   * knows nothing about the queue module's state or IPC.
    *
    * Interactions: click selects, double-click plays, pointer-drag reorders
    * (drop indicator, no live reshuffle — simple and robust), Delete removes
@@ -11,10 +13,13 @@
    * REM removes the selection; SEL/MISC are placeholders until M4.
    */
   import type { QueueItem } from "../lib/player/queue.svelte";
+  import type { SkinTheme } from "../lib/skin/theme";
 
   interface Props {
     items: QueueItem[];
     currentIndex: number | null;
+    /** pledit.txt colors from the loaded skin (defaults handled by caller). */
+    theme?: SkinTheme;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
@@ -25,6 +30,7 @@
   let {
     items,
     currentIndex,
+    theme,
     onplay,
     onremove,
     onmove,
@@ -127,11 +133,22 @@
     const secs = items.reduce((sum, it) => sum + (it.durationSecs ?? 0), 0);
     return `${items.length} item${items.length === 1 ? "" : "s"}, ${fmt(secs)}`;
   });
+
+  // pledit theme as CSS custom properties (classic-green defaults cover a
+  // theme-less caller; every rule below reads only these variables).
+  const themeVars = $derived.by(() => {
+    const t = theme;
+    return [
+      `--pl-normal:${t?.normal ?? "#00ff00"}`,
+      `--pl-current:${t?.current ?? "#ffffff"}`,
+      `--pl-bg:${t?.normalbg ?? "#000000"}`,
+      `--pl-selected-bg:${t?.selectedbg ?? "#0000c6"}`,
+      `--pl-marker:${t?.marker ?? t?.current ?? "#ffffff"}`,
+    ].join(";");
+  });
 </script>
 
-<div class="pl">
-  <header class="hdr">PLAYLIST EDITOR</header>
-
+<div class="pl" style={themeVars}>
   <div class="list" bind:this={listEl} tabindex="0" role="listbox" aria-label="playlist" onkeydown={listKey}>
     <div class="rows">
       {#each items as item, i (item.id)}
@@ -177,6 +194,17 @@
 </div>
 
 <style>
+  /* Bundled OFL pixel font (Jason Kottke's Silkscreen, designed for tiny UI
+     text — the closest readable thing to the classic 8px playlist look;
+     license: src/assets/fonts/silkscreen-OFL.txt). */
+  @font-face {
+    font-family: "Silkscreen";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../assets/fonts/silkscreen-latin.woff2") format("woff2");
+  }
+
   .pl {
     width: 275px; /* matches the player window width */
     box-sizing: border-box;
@@ -187,26 +215,17 @@
     user-select: none;
   }
 
-  .hdr {
-    padding: 3px 8px;
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    color: #808080;
-    background: #101010;
-    border-bottom: 1px solid #2a2a2a;
-  }
-
   .list {
     position: relative;
     height: 160px; /* 8 rows */
     overflow-y: auto;
-    background: #000;
+    background: var(--pl-bg);
     scrollbar-width: thin;
-    scrollbar-color: #2f4f33 #000;
+    scrollbar-color: #2f4f33 var(--pl-bg);
   }
 
   .list:focus-visible {
-    outline: 1px solid #3ccb4e;
+    outline: 1px solid var(--pl-normal);
   }
 
   .list::-webkit-scrollbar {
@@ -227,30 +246,32 @@
     height: 20px;
     line-height: 20px;
     padding: 0 6px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: #3ccb4e; /* classic Winamp playlist green */
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8px; /* Silkscreen's native pixel grid */
+    letter-spacing: 0.02em;
+    color: var(--pl-normal); /* classic Winamp playlist green by default */
     cursor: default;
     touch-action: none;
   }
 
   .row:hover {
-    background: #0d0d0d;
+    background: rgba(255, 255, 255, 0.06); /* subtle on any pledit bg */
   }
 
   .row.selected {
-    background: #12301b;
-    color: #6ce87c;
+    background: var(--pl-selected-bg);
+    color: var(--pl-current);
   }
 
   .row.current {
-    color: #8dff9e; /* brighter than the base green */
+    color: var(--pl-current); /* pledit.txt Current — the playing row */
   }
 
   .marker {
     flex: none;
     width: 14px;
-    font-size: 9px;
+    color: var(--pl-marker);
+    font-size: 8px;
   }
 
   .text {
@@ -263,16 +284,17 @@
 
   .time {
     flex: none;
-    width: 5ch;
+    width: 6ch;
     text-align: right;
-    opacity: 0.8;
+    opacity: 0.85;
   }
 
   .empty {
     padding: 6px 8px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 11px;
-    color: #2f4f33;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8px;
+    color: var(--pl-normal);
+    opacity: 0.55;
   }
 
   .dropline {
@@ -280,7 +302,7 @@
     left: 0;
     right: 0;
     height: 2px;
-    background: #8dff9e;
+    background: var(--pl-marker);
     pointer-events: none;
   }
 
@@ -316,8 +338,8 @@
 
   .totals {
     margin-left: auto;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10px;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8px;
     color: #3ccb4e;
   }
 </style>

@@ -20,6 +20,7 @@
   import SkinLayer from "./SkinLayer.svelte";
   import SkinPlaceholder from "./SkinPlaceholder.svelte";
   import SkinSlider from "./SkinSlider.svelte";
+  import SkinStatus from "./SkinStatus.svelte";
   import SkinText from "./SkinText.svelte";
   import SkinVis from "./SkinVis.svelte";
 
@@ -137,7 +138,9 @@
           oncommit={(v) => sliderCommit(obj.object, v)}
         />
       {:else if obj.object.kind === "text"}
-        <SkinText {obj} {status} {position} {ticker} />
+        <SkinText {obj} {status} {position} {ticker} images={layout.images} />
+      {:else if obj.object.kind === "status"}
+        <SkinStatus {obj} images={layout.images} {status} />
       {:else if obj.object.kind === "vis"}
         <SkinVis {obj} {status} />
       {:else}

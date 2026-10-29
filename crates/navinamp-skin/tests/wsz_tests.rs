@@ -272,6 +272,121 @@ fn classic_skin_serde_round_trips() {
 
 // 3) actions + image wiring --------------------------------------------------------
 
+/// The text object with the given id, if any.
+fn text_by_id<'a>(layout: &'a Layout, id: &str) -> Option<&'a navinamp_skin::Text> {
+    layout.objects.iter().find_map(|o| match o {
+        GuiObject::Text(t) if t.id.as_deref() == Some(id) => Some(t),
+        _ => None,
+    })
+}
+
+/// A fully-specified Rect, for comparing against synthesized object rects.
+fn rect(x: i32, y: i32, w: i32, h: i32) -> navinamp_skin::Rect {
+    navinamp_skin::Rect {
+        x: Some(x),
+        y: Some(y),
+        w: Some(w),
+        h: Some(h),
+    }
+}
+
+#[test]
+fn classic_text_objects_carry_font_conventions() {
+    let (_archive, skin, _warnings) = parse_classic(full_classic_skin());
+    let main = normal_layout(&skin, "main");
+
+    // Songticker: Wasabi display + classic-text charset.
+    let ticker = text_by_id(main, "wsz.songticker").expect("songticker");
+    assert_eq!(ticker.display.as_deref(), Some("songticker"));
+    assert_eq!(ticker.rect, rect(111, 27, 155, 9));
+    assert_eq!(
+        ticker.params.get("font").map(String::as_str),
+        Some("wsz.font.text")
+    );
+    assert_eq!(
+        ticker.params.get("charset").map(String::as_str),
+        Some("classic-text")
+    );
+
+    // Time: numbers font, charset, and the four digit cells (the classic
+    // colon is baked into main.bmp — there is no colon glyph to place).
+    let time = text_by_id(main, "wsz.time").expect("time object");
+    assert_eq!(time.display.as_deref(), Some("time"));
+    assert_eq!(
+        time.params.get("font").map(String::as_str),
+        Some("wsz.font.numbers")
+    );
+    assert_eq!(
+        time.params.get("charset").map(String::as_str),
+        Some("classic-numbers")
+    );
+    assert_eq!(
+        time.params.get("digitoffsets").map(String::as_str),
+        Some("12,24,42,54") // window x = 48/60/78/90 inside rect x=36
+    );
+
+    // Bitrate/kHz: semantics in the TYPED display attribute (params are
+    // serde-flattened, so a params["display"] could not round-trip), with
+    // digit-cell rects beside the labels baked into main.bmp.
+    for (id, x, w) in [("wsz.bitrate", 111, 15), ("wsz.khz", 156, 10)] {
+        let t = text_by_id(main, id).unwrap_or_else(|| panic!("{id} text object"));
+        let kind = id.trim_start_matches("wsz.");
+        assert_eq!(t.display.as_deref(), Some(kind), "{id} display attribute");
+        assert!(!t.params.contains_key("display"));
+        assert_eq!(
+            t.params.get("charset").map(String::as_str),
+            Some("classic-text")
+        );
+        assert_eq!(t.rect, rect(x, 43, w, 9));
+    }
+
+    // Mono/stereo indicators: Status objects with the channel-label
+    // convention and their dim/lit monoster.bmp cells.
+    for (id, x, w) in [("wsz.mono", 212, 27), ("wsz.stereo", 239, 29)] {
+        let s = layout_status(main, id).unwrap_or_else(|| panic!("{id} status object"));
+        let kind = id.trim_start_matches("wsz.");
+        assert_eq!(s.params.get("display").map(String::as_str), Some(kind));
+        assert_eq!(
+            s.params.get("image").map(String::as_str),
+            Some(format!("{id}.off").as_str())
+        );
+        assert_eq!(
+            s.params.get("activeimage").map(String::as_str),
+            Some(format!("{id}.on").as_str())
+        );
+        assert_eq!(s.rect, rect(x, 41, w, 12));
+    }
+}
+
+/// The status object with the given id, if any.
+fn layout_status<'a>(layout: &'a Layout, id: &str) -> Option<&'a navinamp_skin::Status> {
+    layout.objects.iter().find_map(|o| match o {
+        GuiObject::Status(s) if s.id.as_deref() == Some(id) => Some(s),
+        _ => None,
+    })
+}
+
+#[test]
+fn font_strips_materialize_as_images() {
+    let (archive, skin, warnings) = parse_classic(full_classic_skin());
+    assert!(warnings.is_empty());
+    let (images, payload_warnings) = bitmap_payloads(&archive, &skin);
+    assert!(payload_warnings.is_empty());
+    // The renderer blits glyphs from images["{font}.image"]; both strips
+    // must be present and decode at their classic dimensions.
+    for (id, w, h) in [
+        ("wsz.font.text.image", 155, 74),
+        ("wsz.font.numbers.image", 99, 13),
+    ] {
+        let url = images
+            .get(id)
+            .unwrap_or_else(|| panic!("font strip payload `{id}`"));
+        let bytes = base64_decode(url.strip_prefix("data:image/png;base64,").unwrap());
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (w, h), "`{id}`");
+    }
+}
+
 #[test]
 fn transport_buttons_carry_actions_and_images() {
     let (_archive, skin, _warnings) = parse_classic(full_classic_skin());

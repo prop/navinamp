@@ -42,6 +42,9 @@ pub(crate) struct PcmSource {
     /// f32 interleaving buffer, grown to the largest packet seen.
     sample_buf: SampleBuffer<f32>,
     sample_buf_frames: u64,
+    /// Samples decoded while priming the decoder for containers that don't
+    /// declare a channel layout (M4A/AAC) — served before anything else.
+    primed: Vec<f32>,
     /// After a seek: drop decoded frames until this track timestamp.
     skip_until_ts: Option<u64>,
 }
@@ -82,7 +85,7 @@ impl PcmSource {
             .format(&Hint::new(), mss, &fmt_opts, &MetadataOptions::default())
             .map_err(|e| AudioError::UnsupportedFormat(format!("probe failed: {e}")))?;
 
-        let reader = probed.format;
+        let mut reader = probed.format;
         let track = reader
             .tracks()
             .iter()
@@ -93,11 +96,6 @@ impl PcmSource {
 
         let track_id = track.id;
         let rate = track.codec_params.sample_rate.expect("checked above");
-        let channels = track
-            .codec_params
-            .channels
-            .ok_or_else(|| AudioError::UnsupportedFormat("unknown channel layout".into()))?;
-        let spec = SignalSpec::new(rate, channels);
         let time_base = track
             .codec_params
             .time_base
@@ -107,9 +105,56 @@ impl PcmSource {
             .n_frames
             .map(|n| n as f64 / f64::from(rate));
 
-        let decoder = get_codecs()
+        let mut decoder = get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
             .map_err(|e| AudioError::UnsupportedFormat(format!("decoder init failed: {e}")))?;
+
+        // Some containers (M4A/AAC, ALAC) don't declare a channel layout in
+        // the track header — the real signal spec is only knowable after
+        // decoding the first frame. Prime the decoder in that case instead
+        // of failing: the primed samples are real media from position 0 and
+        // are served before anything else (see `next_block`).
+        let mut primed_interleaved: Vec<f32> = Vec::new();
+        let spec = match track.codec_params.channels {
+            Some(ch) => SignalSpec::new(rate, ch),
+            None => {
+                let mut learned: Option<SignalSpec> = None;
+                let mut attempts = 0u32;
+                while learned.is_none() && attempts < 100 {
+                    attempts += 1;
+                    let packet = match reader.next_packet() {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
+                    if packet.track_id() != track_id {
+                        continue;
+                    }
+                    let decoded = match decoder.decode(&packet) {
+                        Ok(d) => d,
+                        Err(SymError::DecodeError(_)) => continue,
+                        Err(_) => break,
+                    };
+                    let frames = decoded.frames();
+                    if frames == 0 {
+                        continue;
+                    }
+                    learned = Some(*decoded.spec());
+                    let mut sb = SampleBuffer::<f32>::new(frames as u64, *decoded.spec());
+                    sb.copy_interleaved_ref(decoded);
+                    primed_interleaved.extend_from_slice(sb.samples());
+                }
+                match learned {
+                    Some(spec) => spec,
+                    None => {
+                        return Err(AudioError::UnsupportedFormat(
+                            "unknown channel layout (decoder produced no audio to learn it from)"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+        };
+        let channels_count = spec.channels.count().max(1);
 
         let initial_frames = 8192;
         Ok(Self {
@@ -120,9 +165,10 @@ impl PcmSource {
             time_base,
             duration_hint_secs,
             replaygain_gain,
-            decoded_frames: 0,
+            decoded_frames: (primed_interleaved.len() / channels_count) as u64,
             sample_buf: SampleBuffer::new(initial_frames, spec),
             sample_buf_frames: initial_frames,
+            primed: primed_interleaved,
             skip_until_ts: None,
         })
     }
@@ -145,6 +191,13 @@ impl PcmSource {
     /// A recoverable bitstream error skips the packet; anything else is returned
     /// as a message suitable for [`crate::Event::Error`].
     pub(crate) fn next_block(&mut self, out: &mut Vec<f32>) -> Result<bool, String> {
+        // Primed samples (channel-layout discovery decode) are real media
+        // from position 0 — serve them before pulling more packets.
+        if !self.primed.is_empty() {
+            let primed = std::mem::take(&mut self.primed);
+            out.extend_from_slice(&primed);
+            return Ok(true);
+        }
         loop {
             let packet = match self.reader.next_packet() {
                 Ok(p) => p,
@@ -237,6 +290,7 @@ impl PcmSource {
 
         // The decoder must be rebuilt/reset after a seek.
         self.decoder.reset();
+        self.primed.clear();
         self.skip_until_ts = Some(seeked.required_ts);
 
         let t = self.time_base.calc_time(seeked.required_ts);
