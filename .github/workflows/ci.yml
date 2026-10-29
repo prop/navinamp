@@ -73,61 +73,10 @@ jobs:
       - name: tests
         run: cargo test --workspace
 
-  build-macos:
-    name: Release build (Mac mini)
-    # Self-hosted runner — NEVER widen this condition to pull_request:
-    # fork PRs must not execute code on private hardware. Tag builds are
-    # handled by the `release` job below instead.
-    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
-    needs: test
-    runs-on: [self-hosted, macOS]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Prepare App Store Connect API key (if configured)
-        env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-        run: |
-          if [ -n "$APPLE_API_KEY_P8" ]; then
-            mkdir -p "$HOME/.navinamp-signing"
-            printf '%s' "$APPLE_API_KEY_P8" > "$HOME/.navinamp-signing/AuthKey_NaVinaMP.p8"
-            echo "APPLE_API_KEY_PATH=$HOME/.navinamp-signing/AuthKey_NaVinaMP.p8" >> "$GITHUB_ENV"
-          else
-            echo "no notarization key configured — build stays ad-hoc signed"
-          fi
-
-      - name: Build release bundle
-        env:
-          # When these secrets exist, the Tauri CLI signs (Developer ID),
-          # notarizes and staples automatically. Without them the build is
-          # ad-hoc signed (Gatekeeper prompts on other machines).
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
-          # Alternative simpler notarization path (choose either):
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-        run: npm ci && npm run tauri build
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: NaVinaMP-macos-${{ github.sha }}
-          # NB: cargo WORKSPACE — the bundle lives under the root target/,
-          # not src-tauri/target/.
-          path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app
-          retention-days: 14
-          if-no-files-found: error
+  # NB: no per-push mac build job — a one-slot self-hosted runner backlogs
+  # under rapid pushes, and the `release` job already builds the dmg on v*
+  # tags (the public download path). Re-add a manual `workflow_dispatch`
+  # build here if per-push artifacts are ever needed.
 
   release:
     name: Release (Mac mini)
