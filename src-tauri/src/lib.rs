@@ -1,22 +1,37 @@
 mod audio;
 mod commands;
 mod library;
+mod media;
 mod navidrome;
 mod skin;
 mod smart;
+mod windows;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(audio::Audio::default())
         .manage(skin::SkinCache::default())
         .manage(library::LibraryState::default())
         .manage(navidrome::NavidromeState::default())
+        .manage(windows::WindowManager::default())
+        .manage(media::MediaHub::default())
         .setup(|app| {
             library::init(app.handle());
             navidrome::init(app.handle());
+            // Creates the playlist/library windows, restores persisted
+            // geometry and registers the queue-event relays.
+            app.state::<windows::WindowManager>().init(app.handle());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            window
+                .app_handle()
+                .state::<windows::WindowManager>()
+                .on_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
@@ -56,8 +71,28 @@ pub fn run() {
             navidrome::navidrome_stream_url,
             navidrome::navidrome_scrobble,
             navidrome::navidrome_star,
-            navidrome::navidrome_set_streaming
+            navidrome::navidrome_set_streaming,
+            windows::windows_get,
+            windows::window_set_visible,
+            windows::window_toggle_layout,
+            windows::window_set_size,
+            windows::window_drag_region_ready,
+            media::media_metadata,
+            media::media_playback
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running NavAmp");
+        .build(tauri::generate_context!())
+        .expect("error while building NavAmp");
+
+    app.run(|app_handle, event| {
+        // Persist window geometry on any exit path (player close, last
+        // window closed, app.exit) — positions survive restarts.
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            app_handle
+                .state::<windows::WindowManager>()
+                .flush(app_handle);
+        }
+    });
 }

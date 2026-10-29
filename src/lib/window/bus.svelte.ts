@@ -246,18 +246,29 @@ export function initWindowBus(): void {
   );
 
   if (IS_PLAYER) {
-    // Intents relayed from other windows (never re-apply our own echo).
-    void listen<{ intent: QueueIntent; from: string }>("queue-intent", (ev) => {
-      const p = ev.payload;
-      if (!p || p.from === "main") return;
-      try {
-        applyQueueIntent(p.intent);
-      } catch (e) {
-        console.warn(`[navamp] queue intent failed: ${e}`);
-      }
+    // Intents relayed from other windows. Tauri 2's frontend `emit()` already
+    // broadcasts cross-window natively, and the backend relays the same event
+    // (excluding the sender) with `relayed: true` — process ONLY the relayed
+    // copy, or every non-idempotent intent (add/remove/move) would run twice.
+    // (`from === "main"` still guards our own echoes.)
+    void listen<{ intent: QueueIntent; from: string; relayed?: boolean }>(
+      "queue-intent",
+      (ev) => {
+        const p = ev.payload;
+        if (!p || p.from === "main" || p.relayed !== true) return;
+        try {
+          applyQueueIntent(p.intent);
+        } catch (e) {
+          console.warn(`[navamp] queue intent failed: ${e}`);
+        }
+      },
+    );
+    // A view (re)mounted and wants the current snapshot (relayed copies only —
+    // same double-delivery guard as queue-intent above).
+    void listen<{ relayed?: boolean }>("queue-state-request", (ev) => {
+      if (ev.payload?.relayed !== true) return;
+      broadcastQueueState();
     });
-    // A view (re)mounted and wants the current snapshot.
-    void listen("queue-state-request", () => broadcastQueueState());
     // Media keys / DEV transport → the skin's action executor.
     void listen<{ command: MediaCommand }>("media-command", (ev) => {
       const c = ev.payload?.command;
