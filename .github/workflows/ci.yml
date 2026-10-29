@@ -123,17 +123,15 @@ jobs:
             local key="$1" val="$2"
             # Multiline values (the base64 cert may be wrapped) need the
             # heredoc form of GITHUB_ENV; single-line values the plain one.
-            case "$val" in
-              *'
-'*)
-                echo "${key}<<VAL_EOF" >> "$GITHUB_ENV"
-                printf '%s\n' "$val" >> "$GITHUB_ENV"
-                echo "VAL_EOF" >> "$GITHUB_ENV"
-                ;;
-              *)
-                echo "${key}=${val}" >> "$GITHUB_ENV"
-                ;;
-            esac
+            # (No literal newlines in this script — the block scalar in the
+            # workflow YAML would otherwise be terminated by one.)
+            if [ -n "$val" ] && [ "${val#*$'\n'}" != "$val" ]; then
+              echo "${key}<<VAL_EOF" >> "$GITHUB_ENV"
+              printf '%s\n' "$val" >> "$GITHUB_ENV"
+              echo "VAL_EOF" >> "$GITHUB_ENV"
+            elif [ -n "$val" ]; then
+              echo "${key}=${val}" >> "$GITHUB_ENV"
+            fi
           }
           append APPLE_SIGNING_IDENTITY "$APPLE_SIGNING_IDENTITY"
           append APPLE_CERTIFICATE "$APPLE_CERTIFICATE"
