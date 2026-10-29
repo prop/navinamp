@@ -55,8 +55,13 @@ export function resolveLayout(
     skin.containers.find((c) => c.id === containerId) ??
     skin.containers.find((c) => c.layouts.length > 0);
   if (!container) return null;
+  // Missing id → prefer "normal" explicitly (asking a skin without a shade
+  // layout for "shade" must degrade to normal, not to layouts[0] whatever it
+  // happens to be), then whatever the skin offers at all.
   const layout =
-    container.layouts.find((l) => l.id === layoutId) ?? container.layouts[0];
+    container.layouts.find((l) => l.id === layoutId) ??
+    container.layouts.find((l) => l.id === "normal") ??
+    container.layouts[0];
   if (!layout) return null;
 
   const warnings: string[] = [];

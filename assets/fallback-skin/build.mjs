@@ -286,6 +286,24 @@ const GLYPH = {
   ], // ⏏
 };
 
+/** Compact glyphs for the 275x14 shade strip (fit a 13x12 mini button). */
+const MINI_GLYPH = {
+  play: triRight(7, 7), // ▶
+  pause: Array.from({ length: 7 }, () => "##..##"), // ⏸
+  stop: Array.from({ length: 7 }, () => "#######"), // ⏹
+  next: triRight(6, 7).map((r) => r + ".#"), // ⏭
+  restore: [
+    // restore-window box outline
+    "#######",
+    "#.....#",
+    "#.....#",
+    "#.....#",
+    "#.....#",
+    "#.....#",
+    "#######",
+  ],
+};
+
 // ---------------------------------------------------------------------------
 // Component painters.
 // ---------------------------------------------------------------------------
@@ -429,6 +447,13 @@ const WIN_BUTTONS = [
   ["min", "Minimize"],
   ["shade", "Window shade"],
   ["close", "Close"],
+];
+const SHADE_BUTTONS = [
+  ["play", "PLAY", "Play"],
+  ["pause", "PAUSE", "Pause / resume"],
+  ["stop", "STOP", "Stop"],
+  ["next", "NEXT", "Next"],
+  ["restore", "TOGGLE_SHADE", "Restore full window"],
 ];
 
 function generate() {
@@ -623,6 +648,29 @@ function generate() {
     });
   });
 
+  // Shade-strip mini buttons: 5 glyphs x 3 states, 13x12 cells.
+  addPng("player/shade-buttons.png", 65, 36, (im) => {
+    SHADE_BUTTONS.forEach(([name], i) => {
+      STATES.forEach((state, s) => {
+        const x = i * 13;
+        const y = s * 12;
+        buttonFace(im, x, y, 13, 12, state);
+        const rows = MINI_GLYPH[name];
+        glyphOn(im, rows, x + ((13 - rows[0].length) >> 1), y + ((12 - rows.length) >> 1), state);
+      });
+    });
+  });
+  SHADE_BUTTONS.forEach(([name], i) => {
+    STATES.forEach((state, s) => {
+      bitmap(`player.shadebtn.${name}.${state}`, "player/shade-buttons.png", {
+        x: i * 13,
+        y: s * 12,
+        w: 13,
+        h: 12,
+      });
+    });
+  });
+
   // ---- whole-file bitmaps: playlist ---------------------------------------
 
   addPng("playlist/window.png", 275, 232, (im) => windowChrome(im, 275, 232));
@@ -712,15 +760,22 @@ function generate() {
 
   // ---- skin.xml -----------------------------------------------------------
 
-  const winButtons = (prefix) =>
-    WIN_BUTTONS.map(
-      ([name, tip], i) =>
-        `    <togglebutton id="${prefix}.${name}" image="player.win.${name}.normal" hoverimage="player.win.${name}.hover" downimage="player.win.${name}.down" x="${227 + i * 16}" y="2" w="14" h="10" tooltip="${tip}"/>`,
-    ).join("\n");
+  // Title-bar window buttons; `shadeAction` wires the shade button to a real
+  // action (player titlebar only — the playlist's stays decorative).
+  const winButtons = (prefix, shadeAction) =>
+    WIN_BUTTONS.map(([name, tip], i) => {
+      const action = name === "shade" && shadeAction ? ` action="${shadeAction}"` : "";
+      return `    <togglebutton id="${prefix}.${name}"${action} image="player.win.${name}.normal" hoverimage="player.win.${name}.hover" downimage="player.win.${name}.down" x="${227 + i * 16}" y="2" w="14" h="10" tooltip="${tip}"/>`;
+    }).join("\n");
 
   const transportButtons = TRANSPORTS.map(
     ([name, action, tip], i) =>
       `    <button id="player.${name}" action="${action}" image="player.btn.${name}.normal" hoverimage="player.btn.${name}.hover" downimage="player.btn.${name}.down" x="${i * 29}" y="0" w="26" h="22" tooltip="${tip}"/>`,
+  ).join("\n");
+
+  const shadeButtons = SHADE_BUTTONS.map(
+    ([name, action, tip], i) =>
+      `    <button id="shade.${name}" action="${action}" image="player.shadebtn.${name}.normal" hoverimage="player.shadebtn.${name}.hover" downimage="player.shadebtn.${name}.down" x="${204 + i * 14}" y="1" w="13" h="12" tooltip="${tip}"/>`,
   ).join("\n");
 
   const actionButtons = PLAYLIST_ACTIONS.map(
@@ -759,10 +814,11 @@ function generate() {
 ${elementsXml}
   </elements>
 
-  <!-- Player window chrome: gradient title bar + decorative window buttons. -->
+  <!-- Player window chrome: gradient title bar + window buttons (the shade
+       one toggles the real window layout). -->
   <groupdef id="player.titlebar" background="titlebar.player.bg" x="0" y="0" w="275" h="14">
     <layer id="player.title.logo" image="player.title.logo" x="4" y="3" w="36" h="8"/>
-${winButtons("player")}
+${winButtons("player", "TOGGLE_SHADE")}
   </groupdef>
 
   <!-- Recessed display: ticker, play meter, big time, status, kbps/khz/stereo. -->
@@ -780,6 +836,17 @@ ${winButtons("player")}
   <!-- Transport cluster: PREV PLAY PAUSE STOP NEXT EJECT. -->
   <groupdef id="player.transport" x="0" y="0" w="171" h="22">
 ${transportButtons}
+  </groupdef>
+
+  <!-- Shade strip: the 275x14 titlebar becomes the whole player — mini logo,
+       songticker, time, play/pause/stop/next mini buttons, restore toggle.
+       Everything left of the button cluster drags the window (the app
+       overlays its drag region on layouts without a player.titlebar group). -->
+  <groupdef id="player.shadebar" background="titlebar.player.bg" x="0" y="0" w="275" h="14">
+    <layer id="shade.logo" image="player.title.logo" x="3" y="3" w="36" h="8"/>
+    <text id="shade.songticker" display="songticker" x="44" y="3" w="118" h="9" font="Verdana, Tahoma, sans-serif" fontsize="8" color="#00CC33"/>
+    <text id="shade.time" display="time" x="164" y="2" w="38" h="11" text=" " font="Verdana, Tahoma, sans-serif" fontsize="9" color="#00CC33"/>
+${shadeButtons}
   </groupdef>
 
   <!-- Playlist window chrome (reuses the window-button sheet). -->
@@ -807,6 +874,10 @@ ${actionButtons}
       <togglebutton id="player.playlist.toggle" action="TOGGLE_PLAYLIST" image="player.toggle.playlist.normal" hoverimage="player.toggle.playlist.hover" downimage="player.toggle.playlist.down" x="10" y="243" w="54" h="18" tooltip="Playlist editor"/>
       <togglebutton id="player.shade.toggle" action="TOGGLE_SHADE" image="player.toggle.shade.normal" hoverimage="player.toggle.shade.hover" downimage="player.toggle.shade.down" x="68" y="243" w="54" h="18" tooltip="Shade mode"/>
       <layer id="player.footer.logo" image="player.logo" x="120" y="266" w="36" h="8"/>
+    </layout>
+
+    <layout id="shade" x="0" y="0" w="275" h="14" background="titlebar.player.bg">
+      <group id="player.shadebar" x="0" y="0" w="275" h="14"/>
     </layout>
   </container>
 
@@ -985,31 +1056,36 @@ function summarize(xml) {
   const rows = [];
   const parts = xml.split(/<container id="([^"]+)"[^>]*>/).slice(1);
   for (let i = 0; i < parts.length; i += 2) {
+    const container = parts[i];
     const body = parts[i + 1];
-    const lm = body.match(/<layout id="([^"]+)"[^>]*\sw="(\d+)"\sh="(\d+)"/);
-    const counts = {};
-    let total = 0;
-    for (const t of [
-      "layer",
-      "animatedlayer",
-      "button",
-      "togglebutton",
-      "slider",
-      "text",
-      "vis",
-      "status",
-      "group",
-    ]) {
-      counts[t] = [...body.matchAll(new RegExp(`<${t}(\\s|/)`, "g"))].length;
-      total += counts[t];
+    const opens = [...body.matchAll(/<layout id="([^"]+)"[^>]*\sw="(\d+)"\sh="(\d+)"/g)];
+    for (let j = 0; j < opens.length; j++) {
+      const m = opens[j];
+      const seg = body.slice(m.index, j + 1 < opens.length ? opens[j + 1].index : body.length);
+      const counts = {};
+      let total = 0;
+      for (const t of [
+        "layer",
+        "animatedlayer",
+        "button",
+        "togglebutton",
+        "slider",
+        "text",
+        "vis",
+        "status",
+        "group",
+      ]) {
+        counts[t] = [...seg.matchAll(new RegExp(`<${t}(\\s|/)`, "g"))].length;
+        total += counts[t];
+      }
+      rows.push({
+        container,
+        layout: m[1],
+        size: `${m[2]}x${m[3]}`,
+        counts,
+        total,
+      });
     }
-    rows.push({
-      container: parts[i],
-      layout: lm?.[1] ?? "?",
-      size: `${lm?.[2]}x${lm?.[3]}`,
-      counts,
-      total,
-    });
   }
   return rows;
 }

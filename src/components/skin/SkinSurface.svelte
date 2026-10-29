@@ -9,8 +9,9 @@
    * Playback values (`status`/`position`/`duration`/`volume`) are fed by the
    * caller's 10 Hz audio_state poll; `ticker` is the songticker content
    * (queue.currentItem). Togglebutton on-states flow down as
-   * `playlistVisible` / `shadeActive`; the callbacks wire the skinned
-   * controls to IPC.
+   * `playlistVisible` (the playlist window's WinInfo.visible) /
+   * `shadeActive` (the player window's layout === "shade"); the callbacks
+   * wire the skinned controls to the player window's action executor.
    */
   import type { ResolvedLayout, ResolvedObject } from "../../lib/skin/resolver";
   import type { GuiObject } from "../../lib/skin/types";
@@ -31,9 +32,9 @@
     volume: number;
     /** Songticker content ("Artist - Title" from queue.currentItem). */
     ticker: string;
-    /** TOGGLE_PLAYLIST on-state (App's playlist editor visibility). */
+    /** TOGGLE_PLAYLIST on-state (the playlist window's visibility). */
     playlistVisible: boolean;
-    /** TOGGLE_SHADE on-state (M6 placeholder: App's media-library visibility). */
+    /** TOGGLE_SHADE on-state (the player window's shade layout is active). */
     shadeActive: boolean;
     onaction: (action: string) => void;
     onseek: (secs: number) => void;

@@ -1,9 +1,10 @@
 # NavAmp Fallback Skin
 
 The built-in skin for NavAmp, in the spirit of the Winamp3 default: a
-275×280 player window and a 275×232 playlist editor, dark metallic chrome,
-brushed-steel body, recessed near-black display panels with green
-(#00CC33) readouts, 1px bevels everywhere, and a 5×7 bitmap font.
+275×280 player window (plus a 275×14 shade strip), a 275×232 playlist
+editor, dark metallic chrome, brushed-steel body, recessed near-black
+display panels with green (#00CC33) readouts, 1px bevels everywhere, and a
+5×7 bitmap font.
 
 **All artwork is original and drawn programmatically** by
 [`build.mjs`](./build.mjs) — no Nullsoft assets, no downloaded skins
@@ -14,7 +15,7 @@ brushed-steel body, recessed near-black display panels with green
 ```sh
 cd assets/fallback-skin
 npm install        # dev deps only: pngjs + fflate
-node build.mjs     # → out/fallback.wal  (73 KB, ZIP: skin.xml + 32 PNGs)
+node build.mjs     # → out/fallback.wal  (74 KB, ZIP: skin.xml + 33 PNGs)
 ```
 
 Node ≥ 20, no network at build time. The script:
@@ -50,6 +51,21 @@ Node ≥ 20, no network at build time. The script:
 | 141–236 | Recessed vis panel 255×96 with dot grid + `vis` object at 14,145 (247×88) |
 | 243–260 | Bottom strip: PLAYLIST + SHADE togglebuttons (54×18) at x=10/68 |
 | 261–279 | Footer groove + etched NAVAMP logo at 120,266 |
+
+The titlebar's shade window-button carries `action="TOGGLE_SHADE"` (the
+playlist's copy stays decorative); min/close have no standard action yet.
+
+### Player — container `main`, layout `shade`, 275×14
+
+A window-shade strip (group `player.shadebar` over the same titlebar
+bitmap): embossed **NAVAMP** mini logo at x=3, live songticker
+(`display="songticker"`, 118px) at x=44, live time (`display="time"`) at
+x=164, then play / pause / stop / next mini buttons (13×12, 7px glyphs)
+and a restore toggle (`action="TOGGLE_SHADE"`, boxed-arrow glyph) ending
+at x=273. Everything left of the button cluster (x=0..203) is the OS drag
+region; double-clicking it toggles back to normal. The app detects shade
+strips generically as "layouts with no `player.titlebar` group that are
+≤16px tall" and overlays the drag region accordingly.
 
 ### Playlist — container `playlist`, layout `normal`, 275×232
 
@@ -97,8 +113,8 @@ uppercase) is defined as glyph maps in `build.mjs` and used three ways:
 
 ## Bitmaps
 
-72 `<bitmap>` definitions over 32 PNG files. Whole-file bitmaps for
-window/panel/channel art; four **sprite sheets** with `x`/`y`/`w`/`h`
+87 `<bitmap>` definitions over 33 PNG files. Whole-file bitmaps for
+window/panel/channel art; five **sprite sheets** with `x`/`y`/`w`/`h`
 sub-rects where a grid is natural:
 
 | Sheet | Cells | Bitmap ids |
@@ -106,6 +122,7 @@ sub-rects where a grid is natural:
 | `player/transport.png` (156×66) | 6 glyphs × 3 states, 26×22 | `player.btn.{prev,play,pause,stop,next,eject}.{normal,hover,down}` |
 | `player/titlebar-buttons.png` (42×30) | 3 × 3, 14×10 | `player.win.{min,shade,close}.*` (shared by both title bars) |
 | `player/toggles.png` (108×54) | 2 × 3, 54×18 | `player.toggle.{playlist,shade}.*` |
+| `player/shade-buttons.png` (65×36) | 5 × 3, 13×12 | `player.shadebtn.{play,pause,stop,next,restore}.*` |
 | `playlist/actions.png` (144×48) | 4 × 3, 36×16 | `playlist.btn.{add,rem,sel,misc}.*` |
 
 Button states: normal (raised, dark engraved glyph + light emboss), hover
