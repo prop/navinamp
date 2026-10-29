@@ -110,6 +110,9 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+          # Alternative simpler notarization path (choose either):
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         run: npm ci && npm run tauri build
 
       - name: Upload artifacts
