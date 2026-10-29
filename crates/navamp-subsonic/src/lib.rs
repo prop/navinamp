@@ -15,6 +15,7 @@
 //! |---|---|
 //! | [`SubsonicClient::connect`] / [`SubsonicClient::ping`] | `ping` |
 //! | [`SubsonicClient::get_artists`] | `getArtists` |
+//! | [`SubsonicClient::get_artist`] | `getArtist` (artist → their albums) |
 //! | [`SubsonicClient::get_album`] | `getAlbum` (songs inline) |
 //! | [`SubsonicClient::search3`] | `search3` |
 //! | [`SubsonicClient::get_playlists`] | `getPlaylists` |

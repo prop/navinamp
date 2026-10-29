@@ -121,6 +121,30 @@ propagate as `Err`. User data (`rating`, `play_count`, `last_played_at`)
 and provenance (`source`, `remote_id`, `art_id`, `date_added`) survive
 re-tagging — the upsert refreshes only scanner-owned columns.
 
+## Remote sync (Navidrome)
+
+`sync_remote(tracks)` mirrors the scanner for `source = 'navidrome'` rows,
+fed by the Subsonic `getArtists`/`getAlbum` walk in the Tauri bridge:
+
+- one **transaction** for the whole batch (a sync lands wholesale or not at
+  all);
+- rows are keyed by `path = "navidrome://<remote_id>"` — a namespace that
+  can never collide with a filesystem path, so the local upsert-by-path
+  and the remote upsert-by-path stay independent;
+- `mtime` is pinned to `0` (no filesystem stamp) and `size` comes from the
+  server's song data;
+- upserts refresh only sync-owned columns (tags, properties, `art_id`);
+  user data and `date_added` survive exactly as with local re-tags — the
+  FTS triggers fire on the same write path, so remote rows are searchable
+  instantly;
+- removal deletes **only** `source = 'navidrome'` rows whose `remote_id`
+  is absent from the batch — local rows are never candidates;
+- `RemoteSyncReport { added, updated, removed }`; the bridge folds in
+  artist/album counts, per-item errors and wall-clock time.
+
+`TrackFilter` gained a `source` discriminator so the UI can list
+`local | navidrome | both` through one query path.
+
 `ScanReport` (all camelCase over IPC): `roots, filesFound, added, updated,
 unchanged, removed, errors[{path,error}], durationMs`. Progress arrives as
 `ScanProgress::{Discovered{total}, Progress{scanned,total}}` — one
@@ -148,19 +172,20 @@ wrap it in a `Mutex` for shared access.
 
 ## Out of scope / limitations
 
-- **Album art extraction is not implemented** — `art_id` stays `NULL`.
+- **Album art extraction is not implemented** — `art_id` stays `NULL` for
+  local rows (Navidrome rows get the server's `coverArt` id).
   Plan §5's embedded-art + `folder.jpg` + LRU thumbnail cache is a later
   milestone; the column exists so art can be added without a migration.
 - **No filesystem watching** (`notify` lands in a later milestone);
   rescans are cheap and incremental in the meantime.
 - No writes to user data yet (`rating`, `play_count`,
   `last_played_at`) — they arrive with playback integration.
-- Remote (`source='navidrome'`) rows: schema + queries are ready, the sync
-  itself is M5.
+- Remote (`source='navidrome'`) rows: sync is implemented (`sync_remote`,
+  see above); album-art *fetching* from the server is a later milestone.
 
 ## Testing
 
-`cargo test -p navamp-library` — 21 tests, all on temp-dir databases with
+`cargo test -p navamp-library` — all on temp-dir databases with
 **generated** fixtures (no binary assets in-repo):
 
 - MP3: N × a hand-crafted 417-byte MPEG-1 Layer III frame (128 kbps,
@@ -176,4 +201,7 @@ out-of-root rows survive, FTS prefix/case/diacritic/multi-term/limit
 search, album grouping fallback, stats, corrupt-file tolerance, non-audio
 skipping, unresolvable root tolerance, paging filters, progress events,
 camelCase IPC shape, second-connection visibility (WAL), overlapping roots,
-single-file root.
+single-file root. Remote sync: insert with derived paths, resync → UPDATE
+(user data + `date_added` survival, `art_id` refresh), remove-unseen
+scoped away from local rows, empty-batch wipe, FTS visibility of remote
+rows, empty-id tolerance.

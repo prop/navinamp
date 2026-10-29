@@ -29,11 +29,16 @@
 
 mod model;
 mod query;
+mod remote;
 mod scanner;
 mod schema;
 mod smart;
 
-pub use model::{Album, LibraryStats, ScanFileError, ScanProgress, ScanReport, Track, TrackFilter};
+pub use model::{
+    Album, LibraryStats, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress, ScanReport,
+    Track, TrackFilter,
+};
+pub use remote::{remote_id_from_path, remote_path};
 pub use scanner::{AUDIO_EXTENSIONS, album_key};
 pub use smart::{
     Field, MatchMode, Op, RuleGroup, RuleRow, RuleValue, SavedSmartView, SmartViewDef, SortField,
@@ -98,6 +103,15 @@ impl Library {
         Ok(scanner::scan_roots(&self.conn, roots, progress)?)
     }
 
+    /// Upserts a full batch of remote (Navidrome) tracks and removes
+    /// navidrome rows whose `remote_id` is absent from the batch — one
+    /// transaction, local rows never touched. Callers should pass the
+    /// *complete* walked library (not a delta); "remove unseen" only works
+    /// that way. See `remote.rs` for the column semantics.
+    pub fn sync_remote(&self, tracks: Vec<RemoteTrack>) -> Result<RemoteSyncReport> {
+        Ok(remote::sync_remote(&self.conn, &tracks)?)
+    }
+
     /// Ranked FTS5 search over title/artist/album/genre; each whitespace
     /// term is matched as a case-insensitive prefix (`beatl` → Beatles).
     pub fn search(&self, q: &str, limit: u32) -> Result<Vec<Track>> {
@@ -144,6 +158,11 @@ impl Library {
     /// Library counters; `last_scan` is `None` until the first scan lands.
     pub fn stats(&self) -> Result<LibraryStats> {
         Ok(query::stats(&self.conn)?)
+    }
+
+    /// Row count, optionally scoped to one `source` (`local`/`navidrome`).
+    pub fn track_count(&self, source: Option<&str>) -> Result<u64> {
+        Ok(query::track_count(&self.conn, source)?)
     }
 
     // -- Smart Views (Winamp3-style smart playlists) -----------------------

@@ -87,6 +87,8 @@ pub struct TrackFilter {
     pub album_key: Option<String>,
     /// Exact genre match.
     pub genre: Option<String>,
+    /// Exact source match (`local` | `navidrome`); `None` = both.
+    pub source: Option<String>,
     /// Max rows; `None` = unlimited.
     pub limit: Option<u32>,
     /// Rows to skip (0 by default).
@@ -131,4 +133,49 @@ pub struct ScanReport {
     pub errors: Vec<ScanFileError>,
     /// Wall-clock duration of the scan.
     pub duration_ms: u64,
+}
+
+/// One remote (Navidrome) track as delivered by a sync — everything the
+/// sync owns, no file I/O involved. `path` is derived as
+/// `navidrome://<remote_id>`; `album_key` is computed by the library.
+///
+/// Mapping from Subsonic's `Child` happens in the caller (the Tauri
+/// bridge): `album_artist` should come from the enclosing album when the
+/// song lacks one, `codec` from the `suffix`, `duration_secs` from
+/// `song.duration`, `art_id` from `coverArt`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTrack {
+    /// Subsonic id of the song (also the stable identity across syncs).
+    pub remote_id: String,
+    pub title: String,
+    pub artist: String,
+    pub album_artist: String,
+    pub album: String,
+    pub genre: String,
+    pub year: Option<i64>,
+    pub track_no: Option<i64>,
+    pub disc_no: Option<i64>,
+    /// Subsonic duration is whole seconds.
+    pub duration_secs: f64,
+    pub bitrate_kbps: Option<i64>,
+    pub samplerate: Option<i64>,
+    pub channels: Option<i64>,
+    /// Container/codec id from the suffix (`mp3`, `flac`, …).
+    pub codec: String,
+    /// Subsonic `coverArt` id, if the server exposes one.
+    pub art_id: Option<String>,
+    /// File size in bytes when the server reports it.
+    pub size: Option<i64>,
+}
+
+/// Counters from one [`crate::Library::sync_remote`] transaction. The
+/// Tauri layer folds these into its user-facing sync report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSyncReport {
+    pub added: u64,
+    pub updated: u64,
+    /// Navidrome rows whose `remote_id` was not part of the batch.
+    pub removed: u64,
 }

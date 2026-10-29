@@ -110,6 +110,15 @@ pub struct SongSummary {
     /// MIME type, e.g. `"audio/flac"`.
     #[serde(default, rename = "contentType")]
     pub content_type: String,
+    /// Sample rate in Hz, when the server reports it.
+    #[serde(default, rename = "samplingRate")]
+    pub sampling_rate: Option<u32>,
+    /// Channel count, when the server reports it.
+    #[serde(default, rename = "channelCount")]
+    pub channel_count: Option<u32>,
+    /// File size in bytes, when the server reports it.
+    #[serde(default)]
+    pub size: Option<u64>,
     #[serde(default, rename = "coverArt")]
     pub cover_art_id: Option<String>,
     #[serde(default)]
@@ -175,6 +184,20 @@ pub(crate) struct PingResponse {
 pub(crate) struct GetArtistsResponse {
     #[serde(default)]
     pub artists: Indexes,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct GetArtistResponse {
+    #[serde(default)]
+    pub artist: ArtistWithAlbums,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ArtistWithAlbums {
+    /// The artist's albums (`getArtist` payload; same shape as
+    /// `getAlbumList2` entries).
+    #[serde(default)]
+    pub album: Vec<AlbumSummary>,
 }
 
 #[derive(Debug, Default, Deserialize)]

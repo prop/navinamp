@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod library;
+mod navidrome;
 mod skin;
 mod smart;
 
@@ -11,8 +12,10 @@ pub fn run() {
         .manage(audio::Audio::default())
         .manage(skin::SkinCache::default())
         .manage(library::LibraryState::default())
+        .manage(navidrome::NavidromeState::default())
         .setup(|app| {
             library::init(app.handle());
+            navidrome::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -38,7 +41,15 @@ pub fn run() {
             smart::smart_view_save,
             smart::smart_view_delete,
             smart::smart_view_run,
-            smart::smart_view_preview
+            smart::smart_view_preview,
+            navidrome::navidrome_status,
+            navidrome::navidrome_connect,
+            navidrome::navidrome_disconnect,
+            navidrome::navidrome_sync,
+            navidrome::navidrome_stream_url,
+            navidrome::navidrome_scrobble,
+            navidrome::navidrome_star,
+            navidrome::navidrome_set_streaming
         ])
         .run(tauri::generate_context!())
         .expect("error while running NavAmp");

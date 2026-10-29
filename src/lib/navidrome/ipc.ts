@@ -32,7 +32,7 @@ export interface NavidromeStatus {
   url: string | null;
   user: string | null;
   streaming: NavidromeStreaming;
-  /** Unix **milliseconds** of the last completed sync, if any. */
+  /** Unix **seconds** of the last completed sync, if any. */
   syncedAt: number | null;
   serverVersion: string | null;
   trackCount: number;

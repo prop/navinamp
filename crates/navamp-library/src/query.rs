@@ -167,8 +167,8 @@ pub(super) fn album_tracks(conn: &Connection, album_key: &str) -> rusqlite::Resu
     Ok(tracks)
 }
 
-/// Tracks matching an optional artist / album / genre combination, with
-/// limit + offset. `None` limit means unlimited (`LIMIT -1` in SQLite).
+/// Tracks matching an optional artist / album / genre / source combination,
+/// with limit + offset. `None` limit means unlimited (`LIMIT -1` in SQLite).
 pub(super) fn tracks_filtered(
     conn: &Connection,
     filter: &TrackFilter,
@@ -189,6 +189,10 @@ pub(super) fn tracks_filtered(
         where_clauses.push("genre = ?");
         params.push(genre);
     }
+    if let Some(source) = &filter.source {
+        where_clauses.push("source = ?");
+        params.push(source);
+    }
     if !where_clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
@@ -207,6 +211,19 @@ pub(super) fn tracks_filtered(
         .query_map(params.as_slice(), track_from_row)?
         .collect::<Result<_, _>>()?;
     Ok(tracks)
+}
+
+/// Row count, optionally scoped to one `source` (`local`/`navidrome`).
+/// Cheaper than `tracks_filtered` when only a number is needed (status
+/// bars, sync reports).
+pub(super) fn track_count(conn: &Connection, source: Option<&str>) -> rusqlite::Result<u64> {
+    let n: i64 = match source {
+        Some(s) => conn.query_row("SELECT COUNT(*) FROM tracks WHERE source = ?1", [s], |r| {
+            r.get(0)
+        })?,
+        None => conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?,
+    };
+    Ok(n.max(0) as u64)
 }
 
 /// Whole-library counters; `last_scan` comes from the `meta` table.

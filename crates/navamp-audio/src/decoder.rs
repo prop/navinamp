@@ -13,13 +13,14 @@ use symphonia::core::audio::{SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
 use symphonia::core::errors::Error as SymError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
 use symphonia::default::{get_codecs, get_probe};
 
 use crate::error::AudioError;
+use crate::http_stream::HttpStream;
 
 /// A decoded audio source. Yields interleaved f32 blocks at the source sample
 /// rate / channel count.
@@ -44,7 +45,21 @@ impl PcmSource {
     /// Open and probe a media file by content (no extension hints).
     pub(crate) fn open(path: &Path) -> Result<Self, AudioError> {
         let file = File::open(path).map_err(AudioError::Io)?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        Self::probe(Box::new(file))
+    }
+
+    /// Open and probe a remote HTTP(S) media stream by content. The
+    /// [`HttpStream`] performs the initial ranged GET here (on the producer
+    /// thread); duration/seek work exactly as for files once the transport
+    /// is seekable (range-capable server, or spilled to a temp file).
+    pub(crate) fn open_remote(url: &str) -> Result<Self, AudioError> {
+        let stream = HttpStream::open(url).map_err(AudioError::Io)?;
+        Self::probe(Box::new(stream))
+    }
+
+    /// Probe `source` (a `Read + Seek` media source) and build the decoder.
+    fn probe(source: Box<dyn MediaSource>) -> Result<Self, AudioError> {
+        let mss = MediaSourceStream::new(source, Default::default());
 
         // Enable gapless so the reader provides encoder delay/padding trim info.
         let fmt_opts = FormatOptions {

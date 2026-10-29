@@ -57,6 +57,18 @@
 //! `ogg` container is enabled, but `.opus` files will surface an
 //! [`Event::Error`]). Revisit in M6 (third-party adapter or ffmpeg sidecar).
 //!
+//! ## Remote streaming
+//!
+//! [`TrackSource::Remote`] plays an `http(s)://` URL through the same decode
+//! path as a file: the producer thread wraps a blocking `Read + Seek` HTTP
+//! transport (`src/http_stream.rs`, reqwest + rustls) in symphonia's
+//! `MediaSourceStream`. Seeks issue `Range: bytes=N-` requests; servers that
+//! ignore ranges (Navidrome transcodes) are fully downloaded to a temp-file
+//! spill on the first seek and served locally thereafter (the spill is
+//! deleted on drop). Gapless local↔remote transitions and `EnqueueNext`
+//! pre-opening work identically to files. The transport never touches the
+//! audio callback; URL credentials are scrubbed from surfaced errors.
+//!
 //! ## Example
 //!
 //! ```no_run
@@ -89,6 +101,7 @@ mod decoder;
 mod dsp;
 mod error;
 mod events;
+mod http_stream;
 mod producer;
 mod resample;
 mod ring;
@@ -113,11 +126,21 @@ use events::Events;
 use producer::Producer;
 use shared::Shared;
 
-/// What to play. Remote HTTP streaming arrives in M5.
+/// What to play.
 #[derive(Debug, Clone)]
 pub enum TrackSource {
     /// A local file, probed by content.
     File(PathBuf),
+    /// A remote HTTP(S) stream, probed by content. Served over the crate's
+    /// [`HttpStream`](crate#remote-streaming) transport (ranged GETs; a
+    /// range-ignoring server — e.g. a transcode — is fully downloaded to a
+    /// temp file on the first seek). Gapless/seek behave like local files
+    /// once seekable.
+    Remote {
+        /// Absolute `http://`/`https://` URL. May carry query credentials
+        /// (Subsonic tokens); the engine never logs it.
+        url: String,
+    },
 }
 
 /// Commands sent from the UI side to the engine.

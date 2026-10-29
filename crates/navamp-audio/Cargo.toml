@@ -23,6 +23,14 @@ cpal = "0.18"
 rubato = "5.0"
 crossbeam-channel = "0.5"
 thiserror = "2"
+# Remote (HTTP) media sources for Navidrome streaming (M5). rustls, not
+# native-tls, to keep the build free of OpenSSL; `blocking` because the
+# producer thread is a plain synchronous decoder loop. The only non-dev
+# network dependency in the crate; see `src/http_stream.rs`.
+reqwest = { version = "0.13", default-features = false, features = [
+    "blocking",
+    "rustls",
+] }
 
 [dev-dependencies]
 ctrlc = "3"

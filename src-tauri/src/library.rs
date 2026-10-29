@@ -73,7 +73,7 @@ pub fn init(app: &AppHandle) {
 }
 
 /// `<app_data_dir>/navamp.db`, with the directory created.
-fn db_file(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn db_file(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -247,13 +247,14 @@ pub fn library_album_tracks(
     })
 }
 
-/// Tracks filtered by optional artist/genre with limit/offset paging.
+/// Tracks filtered by optional artist/genre/source with limit/offset paging.
 #[tauri::command]
 pub fn library_tracks(
     app: AppHandle,
     state: State<'_, LibraryState>,
     artist: Option<String>,
     genre: Option<String>,
+    source: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<Track>, String> {
@@ -262,6 +263,7 @@ pub fn library_tracks(
             .tracks_filtered(&TrackFilter {
                 artist,
                 genre,
+                source,
                 limit,
                 offset: offset.unwrap_or(0),
                 ..TrackFilter::default()

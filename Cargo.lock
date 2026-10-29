@@ -2398,6 +2398,7 @@ dependencies = [
  "navamp-audio",
  "navamp-library",
  "navamp-skin",
+ "navamp-subsonic",
  "serde",
  "serde_json",
  "tauri",

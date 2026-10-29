@@ -5,6 +5,10 @@
 //! forwarder thread subscribes to engine events and re-emits them as Tauri
 //! events (`audio-event`) for the UI. Dropping the handle (app exit) shuts the
 //! engine down and joins its threads — see `EngineHandle`'s `Drop`.
+//!
+//! `audio_play`/`audio_enqueue` take a path **or** an `http(s)://` URL (a
+//! Navidrome stream URL); URLs play through the engine's remote-stream
+//! transport with gapless/seek parity.
 
 use std::sync::Mutex;
 
@@ -95,17 +99,26 @@ fn send_if_running(state: &Audio, make: impl FnOnce() -> Command) -> Result<(), 
     }
 }
 
+/// Maps a UI-provided `path` to a engine source: `http(s)://` URLs play as
+/// remote streams (Navidrome), everything else is a local file. The IPC
+/// signature stays a plain string on the JS side.
+fn track_source(path: String) -> TrackSource {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        TrackSource::Remote { url: path }
+    } else {
+        TrackSource::File(path.into())
+    }
+}
+
 #[tauri::command]
 pub fn audio_play(app: AppHandle, state: State<'_, Audio>, path: String) -> Result<(), String> {
     ensure_engine(&app, &state)?;
-    send_if_running(&state, || Command::Play(TrackSource::File(path.into())))
+    send_if_running(&state, || Command::Play(track_source(path)))
 }
 
 #[tauri::command]
 pub fn audio_enqueue(state: State<'_, Audio>, path: String) -> Result<(), String> {
-    send_if_running(&state, || {
-        Command::EnqueueNext(TrackSource::File(path.into()))
-    })
+    send_if_running(&state, || Command::EnqueueNext(track_source(path)))
 }
 
 #[tauri::command]

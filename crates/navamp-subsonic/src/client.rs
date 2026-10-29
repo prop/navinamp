@@ -28,7 +28,8 @@ const SALT_BYTES: usize = 12;
 /// appears in `Debug` output or error messages.
 ///
 /// This crate is a pure API client: no playback, caching, or sync logic —
-/// callers drive the library walk (`get_artists` → `get_album`) themselves.
+/// callers drive the library walk (`get_artists` → `get_artist` →
+/// `get_album`) themselves.
 ///
 /// # Example
 ///
@@ -141,6 +142,18 @@ impl SubsonicClient {
             .into_iter()
             .flat_map(|g| g.artist)
             .collect())
+    }
+
+    /// One artist's albums, from the `getArtist` ID3 endpoint — the middle
+    /// hop of the sync walk (`getArtists` returns artist ids but no album
+    /// ids, so a full-library walk is `get_artists` → `get_artist` →
+    /// `get_album`).
+    pub async fn get_artist(&self, id: &str) -> Result<Vec<AlbumSummary>, SubsonicError> {
+        let inner = self
+            .request("getArtist.view", &[("id", id.to_owned())])
+            .await?;
+        let resp: GetArtistResponse = payload(inner)?;
+        Ok(resp.artist.album)
     }
 
     /// One album with its songs inline — the leaf of the sync walk.

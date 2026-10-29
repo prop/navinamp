@@ -667,9 +667,9 @@
       : `${m}:${String(s).padStart(2, "0")}`;
   }
 
-  function fmtDate(ms: number | null | undefined): string {
-    if (ms == null) return "never";
-    return new Date(ms).toLocaleString();
+  function fmtDate(secs: number | null | undefined): string {
+    if (secs == null) return "never";
+    return new Date(secs * 1000).toLocaleString();
   }
 </script>
 

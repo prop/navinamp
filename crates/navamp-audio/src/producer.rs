@@ -362,6 +362,11 @@ impl Producer {
             rate: self.sink_cfg.sample_rate,
         });
         self.flush_pending();
+        // Refill to the prefill target before returning, exactly like a
+        // track start: a single staged block leaves the ring with ~zero
+        // slack, so the first post-seek (or post-Resume) pull could hit an
+        // empty ring whenever the decode thread is briefly starved.
+        self.prefill();
     }
 
     /// Seek the reader and decode/convert the first block into a staging buffer.
@@ -635,5 +640,6 @@ impl Producer {
 fn open_source(source: &TrackSource) -> Result<PcmSource, AudioError> {
     match source {
         TrackSource::File(path) => PcmSource::open(path),
+        TrackSource::Remote { url } => PcmSource::open_remote(url),
     }
 }
