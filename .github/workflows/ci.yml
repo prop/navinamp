@@ -157,6 +157,16 @@ jobs:
             echo "no notarization key configured — build stays ad-hoc signed"
           fi
 
+      - name: Set version from tag
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          echo "building version $VER"
+          npm version "$VER" --no-git-tag-version
+          sed -i '' "s/^version = \".*\"/version = \"$VER\"/" Cargo.toml
+          grep -q "^version = \"$VER\"" Cargo.toml || { echo "version stamp failed"; exit 1; }
+          # sync Cargo.lock member versions (no dependency upgrades)
+          cargo metadata --format-version 1 > /dev/null
+
       - name: Build release bundle
         env:
           # When these secrets exist, the Tauri CLI signs (Developer ID),
