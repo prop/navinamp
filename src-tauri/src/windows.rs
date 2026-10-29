@@ -1037,7 +1037,11 @@ impl WindowManager {
                     true,
                     "NaVinaMP — Playlist Editor",
                 ),
-                _ => (Rect::at(120, 120, 900, 620), true, "NaVinaMP — Media Library"),
+                _ => (
+                    Rect::at(120, 120, 900, 620),
+                    true,
+                    "NaVinaMP — Media Library",
+                ),
             };
             if let Err(e) =
                 WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))

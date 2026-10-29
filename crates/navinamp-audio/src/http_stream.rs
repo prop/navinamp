@@ -359,7 +359,10 @@ fn http_status_error(status: u16) -> io::Error {
 fn spill_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("navinamp-http-spill-{}-{n}.tmp", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "navinamp-http-spill-{}-{n}.tmp",
+        std::process::id()
+    ))
 }
 
 impl<F: HttpFetch> Drop for HttpStream<F> {
