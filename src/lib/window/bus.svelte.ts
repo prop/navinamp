@@ -33,7 +33,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 
 import { IS_PLAYER, LABEL, type WindowLabel } from "./identity";
-import { queue } from "../player/queue.svelte";
+import { persistQueue, queue } from "../player/queue.svelte";
 import type { QueueItem, QueueItemMeta, RepeatMode } from "../player/queue.svelte";
 
 // ── window-manager IPC (frozen M6b contract) ───────────────────────────────
@@ -281,6 +281,7 @@ export function initWindowBus(): void {
     $effect(() => {
       const snapshot = readSnapshot();
       void emit("queue-state", { from: "main", snapshot });
+      persistQueue(snapshot);
     });
     return;
   }

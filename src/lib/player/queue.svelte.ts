@@ -52,6 +52,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { IS_PLAYER } from "../window/identity";
+
 import { friendlyIpcError, libraryMarkPlayed } from "../library/ipc";
 import { navidromeScrobble, navidromeStreamUrl } from "../navidrome/ipc";
 
@@ -404,6 +406,63 @@ function prev(): void {
     return;
   }
   play(stepIndex(currentIndex, -1)); // clamped at the start: restart current
+}
+
+// ── persistence (player window only): the queue survives restarts ───────────
+// Restored at module init; saved by the bus's broadcast effect after every
+// mutation. Durations come back null and refill on first play. Stored in the
+// player webview's localStorage — safe because ONLY the player window owns
+// (mutates) this module; other windows render bus snapshots.
+
+const PERSIST_KEY = "navinamp.queue.v1";
+
+export function persistQueue(snapshot: {
+  items: QueueItem[];
+  currentIndex: number | null;
+  shuffle: boolean;
+  repeat: RepeatMode;
+}): void {
+  if (!IS_PLAYER) return;
+  try {
+    localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
+  } catch {
+    // storage unavailable — the queue just lives for this session
+  }
+}
+
+if (IS_PLAYER) {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw) as {
+        items?: QueueItem[];
+        currentIndex?: number | null;
+        shuffle?: boolean;
+        repeat?: RepeatMode;
+      };
+      if (Array.isArray(saved.items)) {
+        items = saved.items.filter(
+          (it) =>
+            it &&
+            typeof it.id === "string" &&
+            typeof it.path === "string" &&
+            typeof it.title === "string",
+        );
+        currentIndex =
+          typeof saved.currentIndex === "number" &&
+          saved.currentIndex >= 0 &&
+          saved.currentIndex < items.length
+            ? saved.currentIndex
+            : items.length > 0
+              ? 0
+              : null;
+        shuffle = saved.shuffle === true;
+        if (saved.repeat === "all" || saved.repeat === "one") repeat = saved.repeat;
+      }
+    }
+  } catch {
+    // corrupt saved state — start fresh
+  }
 }
 
 export const queue = {

@@ -212,6 +212,15 @@ export function libraryRoots(): Promise<string[]> {
   return invoke<string[]>("library_roots");
 }
 
+/**
+ * Expand user-picked paths into playable audio files: directories are
+ * walked recursively (sorted, audio extensions only); files pass through
+ * the same filter. Feeds the queue's "add folder" flows.
+ */
+export function expandAudioPaths(paths: string[]): Promise<string[]> {
+  return invoke<string[]>("expand_audio_paths", { paths });
+}
+
 export function smartViewsList(): Promise<SavedSmartView[]> {
   return invoke<SavedSmartView[]>("smart_views_list");
 }

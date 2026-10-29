@@ -12,7 +12,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
 
   import PlaylistEditor from "../components/PlaylistEditor.svelte";
-  import { isAudioPath } from "../lib/player/queue.svelte";
+  import { expandAudioPaths } from "../lib/library/ipc";
   import { queueIntent, queueSnapshot, windowSetSize } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
@@ -35,7 +35,26 @@
       return;
     }
     const files = Array.isArray(res) ? res : res != null ? [res] : [];
-    const paths = files.filter(isAudioPath);
+    // Backend expands directories and filters to known audio extensions.
+    const paths = await expandAudioPaths(files);
+    if (paths.length === 0) return;
+    let at = currentIndex == null ? items.length : currentIndex + 1;
+    for (const path of paths) {
+      queueIntent({ type: "addNext", path, index: at });
+      at += 1;
+    }
+  }
+
+  // ADD DIR: pick one folder; the backend walks it recursively (sorted).
+  async function addDirAfterCurrent(): Promise<void> {
+    let res: string | null = null;
+    try {
+      res = await open({ multiple: false, directory: true });
+    } catch {
+      return;
+    }
+    if (typeof res !== "string") return;
+    const paths = await expandAudioPaths([res]);
     if (paths.length === 0) return;
     let at = currentIndex == null ? items.length : currentIndex + 1;
     for (const path of paths) {
@@ -87,6 +106,7 @@
     onremove={(i) => queueIntent({ type: "remove", index: i })}
     onmove={(from, to) => queueIntent({ type: "move", from, to })}
     onadd={() => void addAfterCurrent()}
+    onadddir={() => void addDirAfterCurrent()}
   />
 </div>
 

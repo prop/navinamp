@@ -290,6 +290,14 @@ pub fn library_roots(state: State<'_, LibraryState>) -> Vec<String> {
     state.roots.lock().unwrap().clone()
 }
 
+/// Expand user-picked paths into playable audio files: directories are
+/// walked recursively (deterministic order, audio extensions only); plain
+/// files pass through the same filter. Feeds the queue's "add folder".
+#[tauri::command]
+pub fn expand_audio_paths(paths: Vec<String>) -> Vec<String> {
+    navinamp_library::expand_paths(&paths)
+}
+
 /// Records one play of the local track at `path` (`play_count + 1`,
 /// `last_played_at = now`). Remote rows and unknown paths are silent
 /// no-ops — the UI calls this when a track starts/finishes playing.

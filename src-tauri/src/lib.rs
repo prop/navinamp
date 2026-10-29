@@ -58,6 +58,7 @@ pub fn run() {
             library::library_tracks,
             library::library_stats,
             library::library_roots,
+            library::expand_audio_paths,
             library::library_mark_played,
             smart::smart_views_list,
             smart::smart_view_save,

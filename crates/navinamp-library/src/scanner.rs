@@ -66,10 +66,9 @@ fn unix_ms(t: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
-/// True if `path`'s extension is one of [`AUDIO_EXTENSIONS`] (or the path
-/// has no extension at all — lofty gets a chance then, since some digital
-/// stores ship bare files; parse failures are reported per-file anyway).
-fn has_audio_extension(path: &Path) -> bool {
+/// True if `path`'s extension is one of [`AUDIO_EXTENSIONS`]. Also used by
+/// `crate::expand_paths` (recursive directory adds).
+pub(crate) fn has_audio_extension(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {
         Some(ext) => AUDIO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
         None => false,

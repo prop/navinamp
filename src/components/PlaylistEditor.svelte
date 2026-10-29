@@ -19,9 +19,18 @@
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
     onadd: () => void;
+    onadddir: () => void;
   }
 
-  let { items, currentIndex, onplay, onremove, onmove, onadd }: Props = $props();
+  let {
+    items,
+    currentIndex,
+    onplay,
+    onremove,
+    onmove,
+    onadd,
+    onadddir,
+  }: Props = $props();
 
   // Must match the .row height so drag math stays trivial.
   const ROW_H = 20;
@@ -155,6 +164,7 @@
 
   <footer class="bar">
     <button onclick={() => onadd()}>ADD</button>
+    <button onclick={() => onadddir()} title="add a folder recursively">ADD DIR</button>
     <button
       onclick={() => selected != null && onremove(selected)}
       disabled={selected == null}>REM</button

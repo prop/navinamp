@@ -27,6 +27,34 @@
 //! WAL and a busy timeout, which is how the app keeps queries responsive
 //! while a background scan connection writes.
 
+/// `has_audio_extension` companion: expand user-picked paths into playable
+/// audio files. Directories are walked recursively (deterministic order),
+/// keeping only known-audio files; plain files pass through the same
+/// extension filter. The queue's "add folder" flows through this.
+pub fn expand_paths(paths: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in paths {
+        let path = std::path::Path::new(raw);
+        if path.is_dir() {
+            for entry in walkdir::WalkDir::new(path)
+                .sort_by_file_name()
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if entry.file_type().is_file()
+                    && scanner::has_audio_extension(entry.path())
+                    && let Some(p) = entry.path().to_str()
+                {
+                    out.push(p.to_owned());
+                }
+            }
+        } else if scanner::has_audio_extension(path) {
+            out.push(raw.clone());
+        }
+    }
+    out
+}
+
 mod model;
 mod query;
 mod remote;
