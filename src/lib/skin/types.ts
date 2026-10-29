@@ -239,7 +239,21 @@ export type Warning =
   | { GroupCycle: { path: string[] } }
   | { IncludeCycle: { file: string } }
   | { MalformedXml: { file: string; message: string } }
-  | { DepthLimit: { file: string; message: string } };
+  | { DepthLimit: { file: string; message: string } }
+  | { ImageDecode: { file: string; message: string } }
+  | { ClassicMissingOptional: { file: string; purpose: string } }
+  | {
+      CropOutOfRange: {
+        bitmap: string;
+        file: string;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        image_width: number;
+        image_height: number;
+      };
+    };
 
 /** What the `skin_load` command (and the mock) returns over IPC. */
 export interface SkinPayload {

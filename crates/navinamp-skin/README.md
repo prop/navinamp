@@ -5,10 +5,11 @@ Wasabi (Winamp3) skin engine — **parsing + bitmap payloads** for NaVinaMP.
 Loads `.wal` skin archives, parses their XML into a normalized,
 serde-serializable model (`Skin`) that crosses IPC as JSON to the UI, and
 materializes `<bitmap>` elements into PNG data-URLs (`bitmap_payloads`).
-The UI renders the model with absolute positioning. This crate deliberately
-does **no rendering, no MAKI interpretation, no tauri/symphonia/audio**,
-and ships no copyrighted assets (all test fixtures are synthetic and
-built in-test).
+Classic Winamp 2 `.wsz` archives are synthesized into the **same** model
+(see below), so the rest of the app renders a skin without knowing where it
+came from. This crate deliberately does **no rendering, no MAKI
+interpretation, no tauri/symphonia/audio**, and ships no copyrighted assets
+(all test fixtures are synthetic and built in-test).
 
 ## Usage
 
@@ -80,6 +81,55 @@ let json = skin.to_json()?; // pretty JSON for the webview
   chains are followed (depth ≤ 16); include cycles and malformed *included*
   files are warnings, never fatal.
 
+## Classic Winamp 2 skins (`.wsz`)
+
+A `.wsz` is a ZIP of fixed-layout BMPs plus a few text files — no XML. When
+an archive has **no `skin.xml`** and at least **two** of the four hallmark
+files (`main.bmp`, `titlebar.bmp`, `cbuttons.bmp`, `pledit.txt`),
+`Skin::from_archive` delegates to the synthesizer (`is_classic` /
+`synthesize_classic`, re-exported from the crate root) instead of the XML
+parser, so `.wal` behavior is byte-for-byte unchanged (a `.wal`-style zip
+without `skin.xml` still fails with `SkinError::MissingSkinXml`). Entry
+lookups are case-insensitive and tolerate one directory level of nesting
+(some `.wsz` zips wrap everything in a folder).
+
+The synthesizer mints `wsz.*`-namespaced bitmap ids and emits real
+`<bitmap>` elements, so `bitmap_payloads` crops/transcodes classic BMPs
+with the existing pipeline. The full coordinate table lives in the
+`wsz.rs` module docs; the coverage matrix:
+
+### Classic format coverage matrix
+
+| Classic file | Handling | Synthesized as |
+|---|---|---|
+| `main.bmp` | whole-file bitmap `wsz.main` | main container background layer (275×116) |
+| `cbuttons.bmp` | 12 crops (6 buttons × normal/pressed rows y=0/18) | `PREV`/`PLAY`/`PAUSE`/`STOP`/`NEXT`/`EJECT` buttons at x=16/39/62/85/108/136, y=88 (eject 89), with `downimage`s |
+| `posbar.bmp` | trough (0,0,248×10) + thumbs at x=248/278 | `SEEK` slider at 16,72 |
+| `volume.bmp` | frame-0 trough + thumbs at y=422 | `VOLUME` slider at 107,57 (68×13) |
+| `balance.bmp` | mid-frame trough (x=9, frame 13) + thumbs | `BALANCE` slider at 177,57 (38×13) |
+| `shufrep.bmp` | off/pressed/active cells (rows 0/15/30 and 61/73) | `TOGGLE_SHUFFLE`/`TOGGLE_REPEAT`/`TOGGLE_EQ`/`TOGGLE_PLAYLIST` toggles; active image in `params["activeimage"]` |
+| `shuffle.bmp`, `repeat.bmp`, `eq.bmp`, `pl.bmp` | silent fallback whole-file bitmaps | same four toggles when a skin predates `shufrep.bmp` |
+| `playpaus.bmp` | 3 cells at x=0/9/18 | one `Status` object at 26,28 (`params` `playimage`/`pauseimage`/`stopimage`) |
+| `monoster.bmp` | stereo col x=0 (29px), mono col x=29 (27px), rows on=0/off=12 | `Status` indicators at 212,41 / 239,41 |
+| `text.bmp` | `bitmapfont` `wsz.font.text` (5×6 glyphs) | songticker (111,27), bitrate (109,43), kHz (154,43) text objects — glyph rendering is the renderer's job |
+| `numbers.bmp` | `bitmapfont` `wsz.font.numbers` (9×13 glyphs) | one `display="time"` text object over the digit region (36..111, y=26) |
+| `num0.bmp`…`num9.bmp` | silent whole-file bitmaps `wsz.num.0…9` | wired via `params["numbitmaps"]` on the time object (older dialect) |
+| `titlebar.bmp` | glyph grid + strips | `SYSMENU`/`MINIMIZE`/`TOGGLE_SHADE`/`CLOSE` buttons at y=3, clutter-bar layer (10,22); strips feed EQ/playlist titlebars |
+| `viscolor.txt` | up to 24 `R,G,B` lines (comments tolerated) | `vis` object at 24,43, `params["viscolors"]` = `r,g,b;…` (semicolon-joined) |
+| `pledit.txt` | modern `[Text]`+`Normal=#RRGGBB` **and** ancient bare `R,G,B`-line dialects | `Skin::params`: `pledit.colors` (comma-joined), `pledit.color.{normal,current,normalbg,oldbg,selectedbg,selected}`, `pledit.font` |
+| `eqmain.bmp` | bg (0,0), titlebar (0,134/149), ON/AUTO/PRESETS cells (y=119/164/176), graph (0,294), shared trough (13,229) + thumb (0,164/176) | eq container (275×116): `EQ_TOGGLE`/`EQ_AUTO` toggles, `EQ_PRESETS` button, graph layer, 11 vertical `EQ_SET` sliders (preamp index=0 at x=21; bands 1–10 at 78+18i with `params["band"]` = 60…16000 Hz, matching NaVinaMP's EQ) |
+| `pledit.bmp` | 3×3 stretchable tile grid | playlist container (275×232) tile layers with `relatx`/`relatw`/… params; the list body is a solid fill from `pledit.color.normalbg` |
+| `eq_ex.bmp`, `gen.bmp`, `genex.bmp`, `mb.bmp`, `video.bmp` | not consumed (shade modes / generic plugin frames / minibrowser / video) | documented limitation |
+| `REGION.txt` | ignored (window click masks — windows stay rectangular) | documented limitation |
+
+Warning policy: a missing optional file yields exactly **one**
+`Warning::ClassicMissingOptional { file, purpose }` and the objects that
+would have used it are skipped — a minimal skin with only `main.bmp` +
+`cbuttons.bmp` still loads, minus everything else. `main.bmp` itself is
+tolerated as missing too. Unparseable `pledit.txt` color values warn per
+line (`MalformedValue`, element `pledit.txt`) and are dropped. Only an
+unreadable ZIP is fatal.
+
 ## Coverage matrix
 
 ### `<elements>` children
@@ -129,15 +179,25 @@ round-trippable, and `Skin::to_json()` is provided for IPC.
 
 `cargo test -p navinamp-skin` — 13 parse-half integration tests
 (`tests/skin_tests.rs`) + 9 bitmap-payload integration tests
-(`tests/image_tests.rs`, fixtures are PNG/BMPs encoded in-test with the
-`image` crate) + unit tests for the color-key parser, plus doctests.
-Fixtures are `.wal` archives written in-test with the `zip` writer.
+(`tests/image_tests.rs`) + 13 classic-`.wsz` synthesis tests
+(`tests/wsz_tests.rs`, fixtures are BMPs encoded in-test with the `image`
+crate at the true base-skin dimensions) + the fallback-skin checks
+(`tests/fallback_skin.rs`) + unit tests for the color-key parser and the
+classic text-file parsers, plus doctests.
+Fixtures are `.wal`/`.wsz` archives written in-test with the `zip` writer.
 Coverage: full-model parse (incl. preserved unknown attrs/tags),
 case-insensitive lookup, missing bitmap file → warning, dangling group →
 warning, group cycles → warnings, includes + include cycle, missing
 `skin.xml` → error, malformed numerics → warning + raw preserved,
 duplicate groupdef ids → warning, attribute-key casing tolerance,
 `SkinArchive::open` from disk, serde JSON round-trip equality;
+classic detection (vs `.wal` vs junk zips), the three synthesized
+containers and their layout rects, transport/toggle/slider actions and
+image wiring, EQ band indices/frequencies, missing-optionals → one warning
+per file with objects skipped, both `pledit.txt` dialects (incl. junk
+header), the 24-entry viscolor blob, `.wal` regression (XML path
+untouched), and every synthesized crop verified to fit fixture BMPs of
+real classic dimensions through `bitmap_payloads`;
 whole-image payloads sample-verified against source pixels, crop
 correctness (incl. x-only crops and case-differing file refs), magic-pink
 BMP → alpha transparency (all `transparent` notations), unparseable
@@ -147,6 +207,14 @@ payload, bitmaps without `file` are skipped silently.
 
 ## Known limitations
 
+- **Classic `.wsz` skins**: `REGION.txt` click masks are ignored (windows
+  stay rectangular); windowshade/shade layouts, `eq_ex.bmp`, `gen.bmp`/
+  `genex.bmp` generic frames, the minibrowser and video windows are not
+  synthesized; `text.bmp`/`numbers.bmp` glyph *rendering* is the
+  renderer's job (the model wires fonts and digit bitmaps to the text
+  objects); playlist list rows are renderer-drawn from the
+  `pledit.color.*` params. `pledit.txt`'s ancient bare-line dialect maps
+  its 4th color to `oldbg` (it has no modern key).
 - **MAKI (`<script>`) is preserved but not interpreted** — heavily scripted
   skins degrade to their static layout (per plan §3/§10).
 - Bitmap payloads are PNG/BMP-decode only (the `image` crate is built with
