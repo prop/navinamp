@@ -60,6 +60,11 @@ export function windowToggleLayout(label: WindowLabel): Promise<void> {
   return invoke<void>("window_toggle_layout", { label });
 }
 
+/** Keep `label` above all other windows (session-level option). */
+export function windowSetAlwaysOnTop(label: WindowLabel, on: boolean): Promise<void> {
+  return invoke<void>("window_set_always_on_top", { label, on });
+}
+
 export function windowSetSize(label: WindowLabel, w: number, h: number): Promise<void> {
   return invoke<void>("window_set_size", { label, w, h });
 }

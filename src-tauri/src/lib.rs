@@ -77,6 +77,7 @@ pub fn run() {
             windows::window_set_visible,
             windows::window_toggle_layout,
             windows::window_set_size,
+            windows::window_set_always_on_top,
             windows::window_drag_region_ready,
             media::media_metadata,
             media::media_playback

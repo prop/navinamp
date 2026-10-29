@@ -1695,6 +1695,20 @@ pub fn window_set_size(
 #[tauri::command]
 pub fn window_drag_region_ready(_label: String) {}
 
+/// Keep a window above all others (session-level option, not persisted).
+#[tauri::command]
+pub fn window_set_always_on_top(
+    app: AppHandle,
+    label: String,
+    on: bool,
+) -> Result<(), String> {
+    let win = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("no window `{label}`"))?;
+    win.set_always_on_top(on)
+        .map_err(|e| format!("cannot set always-on-top for `{label}`: {e}"))
+}
+
 // ---------------------------------------------------------------------------
 // Tests (pure layers)
 // ---------------------------------------------------------------------------
