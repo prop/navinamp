@@ -76,8 +76,9 @@ jobs:
   build-macos:
     name: Release build (Mac mini)
     # Self-hosted runner — NEVER widen this condition to pull_request:
-    # fork PRs must not execute code on private hardware.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # fork PRs must not execute code on private hardware. Tag builds are
+    # handled by the `release` job below instead.
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
     needs: test
     runs-on: [self-hosted, macOS]
     steps:
