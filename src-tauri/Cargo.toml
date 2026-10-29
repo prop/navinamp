@@ -18,13 +18,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 navinamp-audio = { path = "../crates/navinamp-audio" }
-navinamp-library = { version = "0.1.0", path = "../crates/navinamp-library" }
-navinamp-subsonic = { version = "0.1.0", path = "../crates/navinamp-subsonic" }
+navinamp-library = { path = "../crates/navinamp-library" }
+navinamp-subsonic = { path = "../crates/navinamp-subsonic" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-navinamp-skin = { version = "0.1.0", path = "../crates/navinamp-skin" }
+navinamp-skin = { path = "../crates/navinamp-skin" }
 souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
 
 [dev-dependencies]
