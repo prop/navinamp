@@ -107,6 +107,43 @@ jobs:
             echo "no notarization key configured — build stays ad-hoc signed"
           fi
 
+      - name: Prepare signing environment (if configured)
+        # Empty-string secrets must NOT reach the Tauri CLI: it treats
+        # APPLE_CERTIFICATE="" as "signing configured" and dies importing
+        # an empty PKCS#12. Only non-empty values go into the environment
+        # (heredoc form so the multiline base64 cert survives).
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          append() {
+            local key="$1" val="$2"
+            # Multiline values (the base64 cert may be wrapped) need the
+            # heredoc form of GITHUB_ENV; single-line values the plain one.
+            case "$val" in
+              *'
+'*)
+                echo "${key}<<VAL_EOF" >> "$GITHUB_ENV"
+                printf '%s\n' "$val" >> "$GITHUB_ENV"
+                echo "VAL_EOF" >> "$GITHUB_ENV"
+                ;;
+              *)
+                echo "${key}=${val}" >> "$GITHUB_ENV"
+                ;;
+            esac
+          }
+          append APPLE_SIGNING_IDENTITY "$APPLE_SIGNING_IDENTITY"
+          append APPLE_CERTIFICATE "$APPLE_CERTIFICATE"
+          append APPLE_CERTIFICATE_PASSWORD "$APPLE_CERTIFICATE_PASSWORD"
+          append APPLE_ID "$APPLE_ID"
+          append APPLE_PASSWORD "$APPLE_PASSWORD"
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "no signing identity configured — build stays ad-hoc signed"
+          fi
+
       - name: Set version from tag
         run: |
           VER="${GITHUB_REF_NAME#v}"
@@ -119,18 +156,10 @@ jobs:
 
       - name: Build release bundle
         env:
-          # When these secrets exist, the Tauri CLI signs (Developer ID),
-          # notarizes and staples automatically. Without them the build is
-          # ad-hoc signed (Gatekeeper prompts on other machines).
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarization via App Store Connect API key (if configured):
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
-          # Alternative simpler notarization path (choose either):
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         # APP only: Tauri's dmg step drives Finder via AppleScript, which
         # times out on this headless launchd runner (AppleEvent -1712).
         run: npm ci && npm run tauri build -- --bundles app
