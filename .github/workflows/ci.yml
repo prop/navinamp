@@ -52,9 +52,12 @@ jobs:
 
       - name: clippy
         run: |
-          set -o pipefail
+          # NB: the default shell is `bash -e`; drop errexit around the
+          # pipeline so the failure path below actually runs.
+          set +e
           cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee /tmp/clippy.log
           status=${PIPESTATUS[0]}
+          set -e
           if [ "$status" -ne 0 ]; then
             # Surface the actual errors as annotations (publicly readable
             # via the API — logs require sign-in).
