@@ -297,6 +297,18 @@
 {/if}
 
 <style>
+  /* Bundled OFL pixel font (Jason Kottke's Silkscreen) — the fallback
+     skin's LED displays render live digits over dim ghost bitmaps, and
+     only a pixel font matches their grid; a smooth font on top looks
+     wrong. License: src/assets/fonts/silkscreen-OFL.txt. */
+  @font-face {
+    font-family: "Silkscreen";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("../assets/fonts/silkscreen-latin.woff2") format("woff2");
+  }
+
   .glyphs {
     position: absolute;
     image-rendering: pixelated;
@@ -328,9 +340,14 @@
     user-select: none;
   }
 
-  /* Big time readout: centered over its dim "88:88" ghost bitmap. */
+  /* Big time readout: pixel font matched to the dim ghost's chunky digits,
+     centered over it. Verdana here looked thin and misaligned. */
   .txt.time {
     justify-content: center;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px; /* Silkscreen's grid at the ghost's 2x scale */
+    letter-spacing: 1px;
+    color: #66ff99;
   }
 
   .unit {

@@ -194,17 +194,6 @@
 </div>
 
 <style>
-  /* Bundled OFL pixel font (Jason Kottke's Silkscreen, designed for tiny UI
-     text — the closest readable thing to the classic 8px playlist look;
-     license: src/assets/fonts/silkscreen-OFL.txt). */
-  @font-face {
-    font-family: "Silkscreen";
-    font-style: normal;
-    font-weight: 400;
-    font-display: swap;
-    src: url("../assets/fonts/silkscreen-latin.woff2") format("woff2");
-  }
-
   .pl {
     width: 275px; /* matches the player window width */
     box-sizing: border-box;
@@ -240,15 +229,17 @@
     position: relative;
   }
 
+  /* Rows use the classic-editor treatment: small smooth UI text (real
+     Winamp used Tahoma 8pt here), NOT a pixel font — pixel glyphs are for
+     the LED displays only. Colors stay the skin's pledit palette. */
   .row {
     display: flex;
     align-items: center;
     height: 20px;
     line-height: 20px;
     padding: 0 6px;
-    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 8px; /* Silkscreen's native pixel grid */
-    letter-spacing: 0.02em;
+    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-size: 11px;
     color: var(--pl-normal); /* classic Winamp playlist green by default */
     cursor: default;
     touch-action: none;
@@ -271,7 +262,7 @@
     flex: none;
     width: 14px;
     color: var(--pl-marker);
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .text {
@@ -291,8 +282,8 @@
 
   .empty {
     padding: 6px 8px;
-    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 8px;
+    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-size: 11px;
     color: var(--pl-normal);
     opacity: 0.55;
   }
@@ -320,9 +311,10 @@
     color: #9a9a9a;
     border: 1px solid #3a3a3a;
     border-radius: 2px;
-    padding: 1px 6px;
-    font-size: 10px;
-    letter-spacing: 0.08em;
+    padding: 1px 7px;
+    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-size: 11px;
+    white-space: nowrap;
     cursor: pointer;
   }
 
@@ -338,8 +330,9 @@
 
   .totals {
     margin-left: auto;
-    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 8px;
+    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-size: 11px;
     color: #3ccb4e;
+    white-space: nowrap;
   }
 </style>
