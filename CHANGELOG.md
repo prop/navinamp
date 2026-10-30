@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/prop/navinamp/compare/v0.3.0...v0.4.0) (2026-10-30)
+
+
+### Features
+
+* **ui:** native-app feel — arrow cursor everywhere, no text selection ([53b093d](https://github.com/prop/navinamp/commit/53b093de2a2b89ddde195fec602247a983c9b35e))
+* **ui:** pixel-perfect fallback time display + pixel-font chrome ([be777f9](https://github.com/prop/navinamp/commit/be777f9420f30e6f197ebd3c2e88b8a84985e318))
+
+
+### Bug Fixes
+
+* **skin:** serialize params as a real property over IPC ([7d25206](https://github.com/prop/navinamp/commit/7d252063da7e2b97df1692e15567138ccfe7f038))
+* **ui:** playlist editor + time display typography ([a76ca6e](https://github.com/prop/navinamp/commit/a76ca6eb073a6a100b36ee3c4ae62823f7010168))
+
 ## [0.3.0](https://github.com/prop/navinamp/compare/v0.2.0...v0.3.0) (2026-10-29)
 
 
