@@ -67,6 +67,28 @@
     return undefined;
   });
 
+  /** Geometry overrides from params (fallback-skin 2x strip cells etc.). */
+  const bmSpec = $derived.by(() => {
+    const base = specForCharset(charset);
+    if (!base) return null;
+    const num = (k: string): number | undefined => {
+      const v = parseInt(params[k] ?? "", 10);
+      return Number.isFinite(v) && v > 0 ? v : undefined;
+    };
+    const cellW = num("glyphw");
+    const cellH = num("glyphh");
+    if (cellW === undefined && cellH === undefined) return base;
+    return {
+      ...base,
+      cellW: cellW ?? base.cellW,
+      cellH: cellH ?? base.cellH,
+      strideX: num("stridex") ?? cellW ?? base.strideX,
+      strideY: num("stridey") ?? cellH ?? base.strideY,
+      cols: num("cols") ?? base.cols,
+      advance: num("advance") ?? cellW ?? base.advance,
+    };
+  });
+
   const stripUrl = $derived.by(() => {
     const font = params["font"];
     return font ? images?.[`${font}.image`] : undefined;
@@ -75,7 +97,7 @@
   let font = $state<BmFont | null>(null);
   $effect(() => {
     const url = stripUrl;
-    const spec = specForCharset(charset);
+    const spec = bmSpec;
     font = null;
     if (!url || !spec) return;
     let alive = true;
@@ -297,18 +319,6 @@
 {/if}
 
 <style>
-  /* Bundled OFL pixel font (Jason Kottke's Silkscreen) — the fallback
-     skin's LED displays render live digits over dim ghost bitmaps, and
-     only a pixel font matches their grid; a smooth font on top looks
-     wrong. License: src/assets/fonts/silkscreen-OFL.txt. */
-  @font-face {
-    font-family: "Silkscreen";
-    font-style: normal;
-    font-weight: 400;
-    font-display: swap;
-    src: url("../assets/fonts/silkscreen-latin.woff2") format("woff2");
-  }
-
   .glyphs {
     position: absolute;
     image-rendering: pixelated;

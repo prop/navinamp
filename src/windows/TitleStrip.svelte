@@ -36,17 +36,20 @@
     cursor: default;
   }
 
+  /* Pixel font + tracked caps: the classic skinned-titlebar look. */
   .title {
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    color: #808080;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8px; /* Silkscreen's native pixel grid */
+    letter-spacing: 0.14em;
+    color: #8b939c;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .note {
-    font-size: 10px;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8px;
     color: #3ccb4e;
     white-space: nowrap;
   }

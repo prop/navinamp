@@ -493,6 +493,16 @@ function generate() {
   });
   bitmap("player.time.ghost", "player/time-ghost.png");
 
+  // Live-digit strip: 10 cells (0123456789), 12x16 each — the same 2x-scale
+  // cell the ghost's "88:88" uses, so digitoffsets in the time text object
+  // align the live ink EXACTLY over the ghost ink.
+  addPng("player/time-digits.png", 120, 16, (im) => {
+    for (let i = 0; i < 10; i++) {
+      drawText(im, i * 12, 0, [[String(i), GREEN]], 2);
+    }
+  });
+  bitmap("player.font.numbers", "player/time-digits.png");
+
   addPng("player/kbps.png", 48, 7, (im) =>
     drawText(im, 0, 0, [["320", GREEN], [" KBPS", GREEN_DIM]]),
   );
@@ -826,7 +836,7 @@ ${winButtons("player", "TOGGLE_SHADE")}
     <text id="player.songticker" display="songticker" x="8" y="6" w="150" h="9" font="Verdana, Tahoma, sans-serif" fontsize="8" color="#00CC33"/>
     <animatedlayer id="player.playstate" image="player.playstate.anim" x="162" y="5" w="16" h="16" length="4"/>
     <layer id="player.time.ghost" image="player.time.ghost" x="180" y="4" w="72" h="16"/>
-    <text id="player.time" display="time" x="180" y="4" w="72" h="16" text=" " font="Verdana, Tahoma, sans-serif" fontsize="10" color="#00CC33"/>
+    <text id="player.time" display="time" x="180" y="4" w="72" h="16" text=" " font="player.font.numbers" charset="classic-numbers" glyphw="12" glyphh="16" stridex="12" stridey="16" cols="10" advance="12" digitoffsets="7,19,43,55" color="#66FF99"/>
     <text id="player.status" display="status" x="8" y="21" w="120" h="9" text="STOPPED" font="Verdana, Tahoma, sans-serif" fontsize="8" color="#00CC33"/>
     <layer id="player.kbps" image="player.display.kbps" x="8" y="36" w="48" h="7"/>
     <layer id="player.khz" image="player.display.khz" x="62" y="36" w="36" h="7"/>

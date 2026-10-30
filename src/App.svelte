@@ -29,6 +29,18 @@
 {/if}
 
 <style>
+  /* Bundled OFL pixel font (Jason Kottke's Silkscreen) — used by the skin
+     text renderer and window chrome in every window; declared here so the
+     face exists document-wide regardless of which components mount.
+     License: src/assets/fonts/silkscreen-OFL.txt. */
+  @font-face {
+    font-family: "Silkscreen";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("./assets/fonts/silkscreen-latin.woff2") format("woff2");
+  }
+
   :global(html),
   :global(body) {
     margin: 0;
