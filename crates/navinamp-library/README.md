@@ -50,16 +50,18 @@ CREATE TABLE tracks (
     date_added      INTEGER NOT NULL,       -- unix seconds, set on FIRST insert
     source          TEXT NOT NULL DEFAULT 'local',
     remote_id       TEXT,                   -- Navidrome id when source='navidrome'
-    art_id          TEXT                    -- reserved, always NULL for now
+    art_id          TEXT                    -- local: art-cache content hash; remote: coverArt id
 );
 -- indexes: album_key, artist, genre, (artist, album)
 ```
 
 Plus:
 
-- **`meta(key, value)`** — a two-column bookkeeping table (`last_scan_at`).
-  It holds no track data; `tracks` remains the single track table.
+- **`meta(key, value)`** — a two-column bookkeeping table (`last_scan_at`,
+  `art_backfilled`). It holds no track data; `tracks` remains the single
+  track table.
 - **`tracks_fts`** — the FTS5 index (below).
+- **`<db dir>/art-cache/`** — the album-art cache (below).
 
 Text tags are stored as `''`, never `NULL`, so display code never fights
 `Option<String>`; numbers stay `NULL` when genuinely unknown. Paths are
@@ -118,8 +120,52 @@ transaction (a scan lands wholesale or not at all):
 Per-file failures (corrupt file, unreadable tag) are collected in
 `ScanReport::errors` and the scan continues; only database-level failures
 propagate as `Err`. User data (`rating`, `play_count`, `last_played_at`)
-and provenance (`source`, `remote_id`, `art_id`, `date_added`) survive
-re-tagging — the upsert refreshes only scanner-owned columns.
+and provenance (`source`, `remote_id`, `date_added`) survive
+re-tagging — the upsert refreshes only scanner-owned columns (`art_id`
+among them now; remote rows are never touched by the local upsert since
+`navidrome://` paths cannot collide with filesystem paths).
+
+## Album art
+
+Extraction happens **inside the scanner's tag-read pass** — the file is
+open anyway, so art costs no extra I/O on changed files:
+
+1. **Embedded wins**: the tag's first `CoverFront` picture (falling back
+   to its first picture of any type) is that file's art.
+2. **Folder art fills**: files without embedded art use a sibling image —
+   `folder.jpg|jpeg|png`, `cover.*`, `front.*` (case-insensitive,
+   priority order) — resolved **once per directory per scan** (memoized;
+   one `read_dir` + one image read per directory).
+3. **Content-addressed cache**: bytes land in
+   `<db dir>/art-cache/<art_id>.<ext>` where
+   `art_id = hex(sha256(content))[..16]` (16 hex chars) and the extension
+   is sniffed from magic bytes (png/jpg/gif/bmp/webp — only formats a
+   webview renders). Identical content → identical id → the write is
+   skipped if the file exists, so a cover shared by ten tracks (or ten
+   directories) is stored exactly once. Failures degrade to "no art",
+   never to scan errors.
+
+**Incrementality**: unchanged files keep their `art_id` (they are not
+re-opened). One exception: the *first* art-aware scan of a database
+(`meta.art_backfilled` absent) re-derives art for unchanged rows, so
+libraries indexed by pre-art builds gain covers without a forced full
+rescan; the marker is then set forever. A file that changes re-derives
+art (possibly to `NULL` — art genuinely gone after a re-tag).
+
+**Remote rows** never touch the cache: the Navidrome sync stores the
+server's `coverArt` id directly (`RemoteTrack::art_id`), and the caller
+builds authed `getCoverArt` URLs from it.
+
+**Serving** is not this crate's business: the Tauri shell serves
+`<art_id>` → cached bytes over its `navinamp-art` URI scheme. GC is
+deliberately absent — cache files are content-addressed with no
+refcounts, removals never delete art, and orphans are harmless (see
+`art.rs`).
+
+`albums()` picks the group's art as the **first non-null `art_id` in
+disc/track order**, paired with the `source` of the track that carries
+it (`Album::art_source`) so the frontend knows whether an id is a local
+content hash or a Navidrome `coverArt` id.
 
 ## Remote sync (Navidrome)
 
@@ -172,12 +218,12 @@ wrap it in a `Mutex` for shared access.
 
 ## Out of scope / limitations
 
-- **Album art extraction is not implemented** — `art_id` stays `NULL` for
-  local rows (Navidrome rows get the server's `coverArt` id).
-  Plan §5's embedded-art + `folder.jpg` + LRU thumbnail cache is a later
-  milestone; the column exists so art can be added without a migration.
 - **No filesystem watching** (`notify` lands in a later milestone);
   rescans are cheap and incremental in the meantime.
+- **Art cache garbage collection is absent by design** (see “Album
+  art”): content-addressed files with no refcounts; orphans accumulate
+  only when files change their art or tracks are removed. A later
+  maintenance sweep can diff the cache against `tracks.art_id`.
 - No writes to user data yet (`rating`, `play_count`,
   `last_played_at`) — they arrive with playback integration.
 - Remote (`source='navidrome'`) rows: sync is implemented (`sync_remote`,
@@ -194,6 +240,9 @@ wrap it in a `Mutex` for shared access.
   path as real files. Validity is pinned by `fixture_smoke.rs`.
 - WAV: canonical 44-byte RIFF header + PCM16 stereo, exact duration by
   construction.
+- Embedded art: a minimal valid 1×1 PNG / signature-valid JPEG pushed
+  through lofty's picture API; folder art is the same bytes written next
+  to the tracks.
 
 Coverage: full scan + tag/property round-trip (incl. unicode), rescan
 no-op, retag → UPDATE (with `date_added` survival), delete → removal,
@@ -201,7 +250,12 @@ out-of-root rows survive, FTS prefix/case/diacritic/multi-term/limit
 search, album grouping fallback, stats, corrupt-file tolerance, non-audio
 skipping, unresolvable root tolerance, paging filters, progress events,
 camelCase IPC shape, second-connection visibility (WAL), overlapping roots,
-single-file root. Remote sync: insert with derived paths, resync → UPDATE
-(user data + `date_added` survival, `art_id` refresh), remove-unseen
-scoped away from local rows, empty-batch wipe, FTS visibility of remote
-rows, empty-id tolerance.
+single-file root. Album art: embedded extraction + cache layout, folder
+fallback (case-insensitive), content dedup across files and directories,
+`albums()` art id + source, incremental keep/update-to-NULL semantics,
+one-time backfill, `art_for_track` lookup, in-memory libraries (art
+disabled), plus unit tests for magic-byte sniffing and id shapes. Remote
+sync: insert with derived paths, resync → UPDATE (user data +
+`date_added` survival, `art_id` refresh), remove-unseen scoped away from
+local rows, empty-batch wipe, FTS visibility of remote rows, empty-id
+tolerance.

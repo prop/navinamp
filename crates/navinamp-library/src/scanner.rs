@@ -1,7 +1,9 @@
 //! Incremental scanner: walk roots, read tags with lofty, upsert into
-//! `tracks`, remove vanished rows under the scanned roots.
+//! `tracks`, remove vanished rows under the scanned roots. Album art is
+//! derived in the same pass (see `art.rs` for the extraction policy and
+//! cache layout).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,6 +14,7 @@ use walkdir::WalkDir;
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
 use lofty::tag::{Accessor, ItemKey};
 
+use crate::art;
 use crate::model::{ScanFileError, ScanProgress, ScanReport};
 
 /// Audio extensions the scanner picks up (compared case-insensitively).
@@ -39,6 +42,9 @@ struct FreshTrack {
     samplerate: Option<i64>,
     channels: Option<i64>,
     codec: String,
+    /// The file's chosen embedded picture (front cover preferred), when it
+    /// carries one. Cached + hashed by the scan loop (`art::store`).
+    embedded_art: Option<Vec<u8>>,
 }
 
 /// Normalized album grouping key: the album artist (falling back to the
@@ -160,15 +166,60 @@ fn read_track(path: &Path) -> Result<FreshTrack, String> {
         samplerate: props.sample_rate().map(i64::from),
         channels: props.channels().map(i64::from),
         codec: codec_name(tagged.file_type()),
+        embedded_art: embedded_art(&tagged),
     })
+}
+
+/// The file's chosen embedded picture bytes — front cover preferred, first
+/// picture as fallback (see `art::embedded_picture`). Shared by the
+/// regular tag-read pass and the backfill pass.
+fn embedded_art(tagged: &lofty::file::TaggedFile) -> Option<Vec<u8>> {
+    let pictures = tagged
+        .primary_tag()
+        .or_else(|| tagged.first_tag())
+        .map(|tag| tag.pictures())
+        .unwrap_or(&[]);
+    art::embedded_picture(pictures).map(|picture| picture.data().to_vec())
+}
+
+/// Derives and caches the art id for one file: embedded bytes when present
+/// (and cacheable), else the directory's folder image (memoized per scan).
+fn store_art(
+    embedded: Option<&[u8]>,
+    path: &Path,
+    art_dir: Option<&Path>,
+    folder_memo: &mut HashMap<PathBuf, Option<String>>,
+) -> Option<String> {
+    embedded
+        .and_then(|bytes| art::store(art_dir, bytes))
+        .or_else(|| {
+            let dir = path.parent()?;
+            art::folder_art(dir, art_dir, folder_memo)
+        })
+}
+
+/// Art-only read for the backfill pass (unchanged files of a pre-art
+/// database): parse the file once for its picture, folder fallback as
+/// above. Any I/O or parse failure is `None` — backfill must never turn a
+/// healthy row into an error.
+fn read_art(
+    path: &Path,
+    art_dir: Option<&Path>,
+    folder_memo: &mut HashMap<PathBuf, Option<String>>,
+) -> Option<String> {
+    let tagged = lofty::read_from_path(path).ok()?;
+    store_art(embedded_art(&tagged).as_deref(), path, art_dir, folder_memo)
 }
 
 /// Runs the full incremental scan (see `README.md` for semantics).
 ///
-/// `progress` is called once after discovery and once per processed file, so
-/// the UI layer can throttle event emission however it likes.
+/// `art_dir` is where album-art bytes are cached (`None` disables art
+/// extraction — in-memory databases). Progress is called once after
+/// discovery and once per processed file, so the UI layer can throttle
+/// event emission however it likes.
 pub(super) fn scan_roots(
     conn: &Connection,
+    art_dir: Option<&Path>,
     roots: &[PathBuf],
     mut progress: impl FnMut(ScanProgress),
 ) -> rusqlite::Result<ScanReport> {
@@ -228,9 +279,27 @@ pub(super) fn scan_roots(
     // at all. `unchecked_transaction` because `Library` hands out `&self`.
     let tx = conn.unchecked_transaction()?;
     {
-        let mut lookup = tx.prepare("SELECT mtime, size FROM tracks WHERE path = ?1")?;
+        let mut lookup = tx.prepare("SELECT mtime, size, art_id FROM tracks WHERE path = ?1")?;
         let mut upsert = tx.prepare(UPSERT_SQL)?;
+        let mut set_art = tx.prepare("UPDATE tracks SET art_id = ?1 WHERE path = ?2")?;
         let mut delete = tx.prepare("DELETE FROM tracks WHERE id = ?1")?;
+
+        // First art-aware scan of this database? Rows indexed by pre-art
+        // builds carry no art and their files are "unchanged", so they
+        // would never gain covers — backfill once, then never again.
+        let backfill_art = tx
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'art_backfilled'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .is_none();
+
+        // Folder-image resolution is memoized per directory: one read_dir
+        // + one image read per directory per scan, however many tracks it
+        // holds (and content-addressing dedups even across directories).
+        let mut folder_memo: HashMap<PathBuf, Option<String>> = HashMap::new();
 
         // Phase 2 — read/upsert each candidate, skipping unchanged files.
         let now_secs = SystemTime::now()
@@ -265,17 +334,34 @@ pub(super) fn scan_roots(
             // One lookup decides both "changed?" and "new?" up front.
             let existing = lookup
                 .query_row([&path_str], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
                 })
                 .optional()?;
             let was_new = existing.is_none();
-            let unchanged = existing.is_some_and(|(m, s)| m == stat.0 && s == stat.1);
+            let unchanged = existing
+                .as_ref()
+                .is_some_and(|(m, s, _)| *m == stat.0 && *s == stat.1);
 
             if unchanged {
+                // Backfill pass only: unchanged files are never re-read
+                // otherwise — they keep whatever art_id they already have.
+                if backfill_art {
+                    let existing_art = existing.and_then(|(_, _, art)| art);
+                    let art_id = read_art(path, art_dir, &mut folder_memo);
+                    if art_id != existing_art {
+                        set_art.execute(rusqlite::params![art_id, path_str])?;
+                    }
+                }
                 report.unchanged += 1;
             } else {
                 match read_track(path) {
                     Ok(t) => {
+                        let art_id =
+                            store_art(t.embedded_art.as_deref(), path, art_dir, &mut folder_memo);
                         upsert.execute(rusqlite::params![
                             path_str,
                             t.mtime,
@@ -295,6 +381,7 @@ pub(super) fn scan_roots(
                             t.channels,
                             t.codec,
                             now_secs,
+                            art_id,
                         ])?;
                         if was_new {
                             report.added += 1;
@@ -335,6 +422,16 @@ pub(super) fn scan_roots(
                 }
             }
         }
+
+        // The art backfill (if any) ran to completion inside this
+        // transaction; mark it done so it never runs again.
+        if backfill_art {
+            tx.prepare(
+                "INSERT INTO meta(key, value) VALUES ('art_backfilled', '1')
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )?
+            .execute([])?;
+        }
     }
 
     report.duration_ms = started.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
@@ -349,16 +446,19 @@ pub(super) fn scan_roots(
     Ok(report)
 }
 
-/// Insert-or-retag. On conflict, everything the scanner owns is refreshed;
-/// user data (`rating`, `play_count`, `last_played_at`, `date_added`) and
-/// provenance (`source`, `remote_id`, `art_id`) survive untouched.
+/// Insert-or-retag. On conflict, everything the scanner owns is refreshed
+/// — including `art_id`, derived in the same pass (embedded picture,
+/// folder-image fallback; see `art.rs`); user data (`rating`,
+/// `play_count`, `last_played_at`) and provenance (`source`, `remote_id`,
+/// `date_added`) survive untouched. Remote rows are never touched here:
+/// their paths (`navidrome://…`) cannot collide with filesystem paths.
 const UPSERT_SQL: &str = "\
 INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
-    channels, codec, date_added
+    channels, codec, date_added, art_id
 ) VALUES (
-    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
 )
 ON CONFLICT(path) DO UPDATE SET
     mtime         = excluded.mtime,
@@ -376,7 +476,8 @@ ON CONFLICT(path) DO UPDATE SET
     bitrate_kbps  = excluded.bitrate_kbps,
     samplerate    = excluded.samplerate,
     channels      = excluded.channels,
-    codec         = excluded.codec";
+    codec         = excluded.codec,
+    art_id        = excluded.art_id";
 
 #[cfg(test)]
 mod tests {

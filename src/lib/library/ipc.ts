@@ -10,7 +10,7 @@
  * instead of a crash.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 // ─── library_* payload types (mirrors of the Rust structs) ─────────────────
@@ -48,7 +48,11 @@ export interface Track {
   /** `local` today; `navidrome` rows arrive with the M5 sync. */
   source: string;
   remoteId: string | null;
-  /** Reserved for the album-art pipeline; always `null` for now. */
+  /**
+   * Album-art reference. For `local` rows: a 16-hex content hash served by
+   * the `navinamp-art` scheme (see `localArtUrl`). For `navidrome` rows:
+   * the server's `coverArt` id (see `navidromeArtUrl`). `null` = no art.
+   */
   artId: string | null;
 }
 
@@ -63,6 +67,17 @@ export interface Album {
   year: number | null;
   trackCount: number;
   totalSecs: number;
+  /**
+   * First non-null art id among the album's tracks (disc/track order) —
+   * same semantics as `Track.artId`. `null` when no track has art.
+   */
+  artId: string | null;
+  /**
+   * `source` of the track that provided `artId` (`local` | `navidrome`) —
+   * picks the serving route (`localArtUrl` vs `navidromeArtUrl`). `null`
+   * exactly when `artId` is.
+   */
+  artSource: string | null;
 }
 
 /** Whole-library counters for the status bar / empty-state UI. */
@@ -219,6 +234,40 @@ export function libraryRoots(): Promise<string[]> {
  */
 export function expandAudioPaths(paths: string[]): Promise<string[]> {
   return invoke<string[]>("expand_audio_paths", { paths });
+}
+
+// ─── album art ──────────────────────────────────────────────────────────────
+
+/**
+ * The stored art id for one track path — a local content hash (build a
+ * `navinamp-art:` URL from it via `localArtUrl`) or, for `navidrome://`
+ * paths, the server's `coverArt` id (feed to `navidromeArtUrl`). `null`
+ * when the track has no art or is unknown. Pick the route from the
+ * row's `source`.
+ */
+export function artForTrack(path: string): Promise<string | null> {
+  return invoke<string | null>("art_for_track", { path });
+}
+
+/**
+ * Translate a remote `coverArt` id into an authed `getCoverArt` URL.
+ * `size` optionally requests a server-side square scale (px) — pass a
+ * small one for thumbnails. Mirrors `navidromeStreamUrl` (navidrome/ipc):
+ * the URL embeds the session token, so hand it straight to `<img src>`.
+ */
+export function navidromeArtUrl(remoteId: string, size?: number): Promise<string> {
+  return invoke<string>("navidrome_art_url", { remoteId, size });
+}
+
+/**
+ * Webview URL for a LOCAL art id (a 16-hex content hash) through the
+ * `navinamp-art` scheme — `navinamp-art://localhost/<id>` on macOS/Linux,
+ * `http://navinamp-art.localhost/<id>` on Windows/Android. Pure string
+ * building (`convertFileSrc`), no IPC; the Rust scheme handler serves the
+ * cached bytes with immutable-cache headers.
+ */
+export function localArtUrl(artId: string): string {
+  return convertFileSrc(artId, "navinamp-art");
 }
 
 export function smartViewsList(): Promise<SavedSmartView[]> {

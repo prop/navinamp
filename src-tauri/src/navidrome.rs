@@ -368,6 +368,22 @@ pub async fn navidrome_stream_url(
     Ok(client.stream_url(&remote_id, format, bitrate).to_string())
 }
 
+/// The cover-art URL for a remote art id (a song or album `coverArt` id —
+/// exactly what the sync stores in `tracks.art_id` for navidrome rows).
+/// Mirrors [`navidrome_stream_url`]: a pure builder over the connected
+/// client; `size` optionally requests a server-side square scale in
+/// pixels (thumbnails pass a small one to keep payloads tiny). The URL
+/// embeds the auth token, so it is returned, never logged.
+#[tauri::command]
+pub async fn navidrome_art_url(
+    state: State<'_, NavidromeState>,
+    remote_id: String,
+    size: Option<u32>,
+) -> Result<String, String> {
+    let client = ensure_client(&state).await?;
+    Ok(client.cover_art_url(&remote_id, size).to_string())
+}
+
 /// Scrobble a track: `submission=false` → "now playing", `true` → played.
 #[tauri::command]
 pub async fn navidrome_scrobble(

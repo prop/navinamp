@@ -44,6 +44,8 @@
     librarySearch,
     libraryStats,
     libraryTracks,
+    localArtUrl,
+    navidromeArtUrl,
     onLibraryProgress,
     onLibraryScanned,
     smartViewRun,
@@ -609,6 +611,77 @@
     };
   });
 
+  // ── album cover thumbnails (ALBUMS tree only) ─────────────────────────────
+  // Covers appear on album rows — never per track row (the track table
+  // renders 100k-row lists; albums are the bounded set). Local art is a
+  // pure URL build (the `navinamp-art` scheme serves cached bytes from
+  // Rust, immutable-cache headers); navidrome art needs an authed URL per
+  // cover id, resolved lazily in small batches the first time the ALBUMS
+  // group shows each album. Ids are content hashes / server ids — stable
+  // across refreshes — so results cache by id and late replies are
+  // harmless. Unresolvable/failed art keeps the ♪ placeholder.
+
+  /** navidrome coverArt id → authed URL (session-local). */
+  let remoteArtUrls = $state.raw<Map<string, string>>(new Map());
+  /** Art ids whose <img> errored (dead link) → back to the placeholder. */
+  let failedArtIds = $state.raw<Set<string>>(new Set());
+  /** Ids already queued for `fetchRemoteArt`; each is fetched at most once. */
+  const requestedRemoteArt = new Set<string>();
+
+  const REMOTE_ART_BATCH = 8;
+
+  function albumCoverSrc(a: Album): string | null {
+    const id = a.artId;
+    if (id == null || failedArtIds.has(id)) return null;
+    if (a.artSource === REMOTE_SOURCE) return remoteArtUrls.get(id) ?? null;
+    if (a.artSource === "local") return localArtUrl(id);
+    return null;
+  }
+
+  function failArt(id: string): void {
+    if (failedArtIds.has(id)) return;
+    const next = new Set(failedArtIds);
+    next.add(id);
+    failedArtIds = next;
+  }
+
+  async function fetchRemoteArt(ids: string[]): Promise<void> {
+    for (let i = 0; i < ids.length; i += REMOTE_ART_BATCH) {
+      const batch = ids.slice(i, i + REMOTE_ART_BATCH);
+      const results = await Promise.allSettled(
+        batch.map((id) => navidromeArtUrl(id, 64)),
+      );
+      const next = new Map(remoteArtUrls);
+      let changed = false;
+      results.forEach((r, k) => {
+        if (r.status === "fulfilled") {
+          next.set(batch[k], r.value);
+          changed = true;
+        }
+      });
+      if (changed) remoteArtUrls = next;
+    }
+  }
+
+  $effect(() => {
+    if (!openGroups.albums) return;
+    const wanted: string[] = [];
+    for (const a of albumsShown) {
+      const id = a.artId;
+      if (
+        id != null &&
+        a.artSource === REMOTE_SOURCE &&
+        !remoteArtUrls.has(id) &&
+        !failedArtIds.has(id) &&
+        !requestedRemoteArt.has(id)
+      ) {
+        requestedRemoteArt.add(id);
+        wanted.push(id);
+      }
+    }
+    if (wanted.length > 0) void fetchRemoteArt(wanted);
+  });
+
   // ── helpers ────────────────────────────────────────────────────────────────
 
   function select(sel: Sel): void {
@@ -772,12 +845,23 @@
         {/if}
         {#each albumsShown as a (a.albumKey)}
           <button
-            class="leaf"
+            class="leaf album"
             class:on={selKey(selection) === `album:${a.albumKey}`}
             title={a.artist}
-            onclick={() => select({ kind: "album", value: a.albumKey })}
-            >{a.name}{a.year != null ? ` (${a.year})` : ""}</button
-          >
+            onclick={() => select({ kind: "album", value: a.albumKey })}>
+            {#if albumCoverSrc(a)}
+              <img
+                class="alb-art"
+                src={albumCoverSrc(a)}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                onerror={() => a.artId != null && failArt(a.artId)} />
+            {:else}
+              <span class="alb-art none" aria-hidden="true">♪</span>
+            {/if}
+            <span class="alb-name">{a.name}{a.year != null ? ` (${a.year})` : ""}</span>
+          </button>
         {/each}
       {/if}
 
@@ -1184,6 +1268,40 @@
   .tree .node.on {
     color: #8dff9e;
     background: #12301b;
+  }
+
+  /* ── album covers (ALBUMS tree leaves only) ── */
+  .tree .leaf.album {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    line-height: normal;
+    contain-intrinsic-size: auto 28px; /* taller than plain leaves */
+  }
+
+  .tree .leaf.album .alb-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .alb-art {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    object-fit: cover;
+    border: 1px solid #2a2a2a;
+  }
+
+  /* No art (or a failed load): the classic green note placeholder. */
+  .alb-art.none {
+    display: grid;
+    place-items: center;
+    color: #2f8f3f;
+    background: #0d1a10;
+    font-size: 13px;
   }
 
   .cnt.on-dot {

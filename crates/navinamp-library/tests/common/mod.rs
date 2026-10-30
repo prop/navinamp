@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{BoundTaggedFile, TaggedFileExt};
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::timestamp::Timestamp;
 use lofty::tag::{Accessor, ItemKey, Tag, TagType};
 
@@ -152,6 +153,64 @@ pub fn write_mp3(path: &Path, frames: usize, meta: &Meta, mtime_secs: i64) {
     if *meta != Meta::default() {
         tag_mp3(path, meta);
     }
+}
+
+/// A minimal but valid 1×1 transparent PNG — the embedded-art fixture.
+/// (`#[allow]`: shared test module — not every test binary uses it.)
+#[allow(dead_code)]
+pub fn png_bytes() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ]
+}
+
+/// A minimal JPEG (JFIF header + EOI — signature-valid, never decoded).
+/// (`#[allow]`: shared test module — not every test binary uses it.)
+#[allow(dead_code)]
+pub fn jpeg_bytes() -> Vec<u8> {
+    vec![
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+    ]
+}
+
+/// Attaches an embedded picture (through lofty) to an existing fixture —
+/// the art twin of [`tag_mp3`]. The picture is written as a front cover;
+/// an existing tag is extended, not replaced, and the mtime is restored.
+/// (`#[allow]`: shared test module — not every test binary uses it.)
+#[allow(dead_code)]
+pub fn attach_picture(path: &Path, mime: MimeType, bytes: &[u8]) {
+    let mtime = std::fs::metadata(path).unwrap().modified().unwrap();
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let mut bound = BoundTaggedFile::read_from(file, ParseOptions::new()).unwrap();
+
+    let mut tag = bound
+        .primary_tag()
+        .or_else(|| bound.first_tag())
+        .cloned()
+        .unwrap_or_else(|| Tag::new(TagType::Id3v2));
+    tag.push_picture(
+        Picture::unchecked(bytes.to_vec())
+            .pic_type(PictureType::CoverFront)
+            .mime_type(mime)
+            .build(),
+    );
+    bound.insert_tag(tag);
+    bound.save(WriteOptions::new()).unwrap();
+
+    // lofty rewrote the file; put the caller's mtime back.
+    std::fs::File::open(path)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
 }
 
 /// A unique per-test scratch directory under the system temp dir, with

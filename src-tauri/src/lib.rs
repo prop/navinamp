@@ -1,3 +1,4 @@
+mod art;
 mod audio;
 mod commands;
 mod library;
@@ -13,6 +14,9 @@ use tauri::Manager;
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Serves cached album-art bytes to the webview (`<img src>`), see
+        // `art.rs` for the accepted URL shapes.
+        .register_uri_scheme_protocol(art::SCHEME, art::handle)
         .manage(audio::Audio::default())
         .manage(skin::SkinCache::default())
         .manage(library::LibraryState::default())
@@ -60,6 +64,7 @@ pub fn run() {
             library::library_roots,
             library::expand_audio_paths,
             library::library_mark_played,
+            library::art_for_track,
             smart::smart_views_list,
             smart::smart_view_save,
             smart::smart_view_delete,
@@ -70,6 +75,7 @@ pub fn run() {
             navidrome::navidrome_disconnect,
             navidrome::navidrome_sync,
             navidrome::navidrome_stream_url,
+            navidrome::navidrome_art_url,
             navidrome::navidrome_scrobble,
             navidrome::navidrome_star,
             navidrome::navidrome_set_streaming,

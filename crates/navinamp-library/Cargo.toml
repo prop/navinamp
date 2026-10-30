@@ -10,9 +10,12 @@ lofty = "0.25"
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2"
 walkdir = "2"
 
 [dev-dependencies]
 # integration tests open a second raw connection for direct `tracks` inserts
 rusqlite = { version = "0.41", features = ["bundled"] }
+# art tests recompute content ids to pin the cache layout
+sha2 = "0.10"

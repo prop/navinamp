@@ -55,6 +55,7 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
     out
 }
 
+mod art;
 mod model;
 mod query;
 mod remote;
@@ -71,6 +72,12 @@ pub use scanner::{AUDIO_EXTENSIONS, album_key};
 pub use smart::{
     Field, MatchMode, Op, RuleGroup, RuleRow, RuleValue, SavedSmartView, SmartViewDef, SortField,
 };
+
+/// Name of the album-art cache directory (a sibling of the database file),
+/// as derived by [`Library::open`]. The Tauri shell reuses this constant
+/// so its `navinamp-art` scheme handler reads the exact same directory the
+/// scanner writes.
+pub const ART_CACHE_DIR: &str = art::CACHE_DIR;
 
 use std::path::{Path, PathBuf};
 
@@ -101,14 +108,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub struct Library {
     conn: Connection,
+    /// `<db dir>/art-cache` — where the scanner caches album-art bytes
+    /// (see `art.rs`). `None` for `:memory:` databases: no directory to
+    /// cache in, so art extraction is disabled there.
+    art_dir: Option<PathBuf>,
 }
 
 impl Library {
     /// Opens (creating if needed) the library at `path`, applies the schema
     /// and enables WAL + a 5 s busy timeout so multiple connections — e.g.
     /// the app's query connection and a scanning worker — coexist.
+    ///
+    /// The art cache is `<parent of path>/art-cache`, created on demand by
+    /// the scanner.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        if let Some(parent) = path.as_ref().parent() {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
@@ -117,18 +132,40 @@ impl Library {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         schema::init(&conn)?;
-        Ok(Self { conn })
+        // `:memory:` has no directory side; anything else caches art next
+        // to the db file (a path with no parent directory — bare relative
+        // names — has nowhere to cache either).
+        let art_dir = if path.to_str() == Some(":memory:") {
+            None
+        } else {
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(|parent| parent.join(art::CACHE_DIR))
+        };
+        Ok(Self { conn, art_dir })
+    }
+
+    /// The art-cache directory (sibling of the database file), or `None`
+    /// for in-memory databases. The scanner writes here; the serving side
+    /// (Tauri's `navinamp-art` scheme) reads here.
+    pub fn art_dir(&self) -> Option<&Path> {
+        self.art_dir.as_deref()
     }
 
     /// Scans `roots` incrementally. See the scanner docs / `README.md` for
     /// the full contract (upsert-by-mtime+size, root-scoped removal,
-    /// per-file error tolerance).
+    /// per-file error tolerance, album-art extraction policy in `art.rs`).
     pub fn scan_roots(
         &self,
         roots: &[PathBuf],
         progress: impl FnMut(ScanProgress),
     ) -> Result<ScanReport> {
-        Ok(scanner::scan_roots(&self.conn, roots, progress)?)
+        Ok(scanner::scan_roots(
+            &self.conn,
+            self.art_dir.as_deref(),
+            roots,
+            progress,
+        )?)
     }
 
     /// Upserts a full batch of remote (Navidrome) tracks and removes
@@ -199,6 +236,14 @@ impl Library {
     /// path is a silent no-op.
     pub fn mark_played(&self, path: &str) -> Result<()> {
         Ok(query::mark_played(&self.conn, path)?)
+    }
+
+    /// The stored art id for the track at `path`, if any — a local
+    /// content hash (servable from the art cache) or, for `navidrome`
+    /// rows, the server's `coverArt` id. Unknown paths answer `None`; the
+    /// caller picks the serving route from the row's `source`.
+    pub fn art_for_track(&self, path: &str) -> Result<Option<String>> {
+        Ok(query::art_for_track(&self.conn, path)?)
     }
 
     // -- Smart Views (Winamp3-style smart playlists) -----------------------

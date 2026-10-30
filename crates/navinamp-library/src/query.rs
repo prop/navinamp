@@ -124,18 +124,27 @@ pub(super) fn search(conn: &Connection, q: &str, limit: u32) -> rusqlite::Result
 ///
 /// `MIN` picks a deterministic representative where sloppily-tagged members
 /// disagree; `album_key` guarantees they at least agree on the normalized
-/// (album)artist + album.
+/// (album)artist + album. The two correlated subqueries fetch the album's
+/// art — the first non-null `art_id` in disc/track order — paired with the
+/// `source` of the very track that carries it, so callers know whether the
+/// id is a local content hash or a Navidrome `coverArt` id.
 pub(super) fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
     let mut stmt = conn.prepare_cached(
         "SELECT
-             album_key,
-             MIN(album)                                        AS name,
-             MIN(COALESCE(NULLIF(album_artist, ''), NULLIF(artist, ''), '')) AS artist,
-             MIN(year)                                         AS year,
-             COUNT(*)                                          AS track_count,
-             COALESCE(SUM(duration_secs), 0.0)                 AS total_secs
-         FROM tracks
-         GROUP BY album_key
+             t.album_key,
+             MIN(t.album)                                        AS name,
+             MIN(COALESCE(NULLIF(t.album_artist, ''), NULLIF(t.artist, ''), '')) AS artist,
+             MIN(t.year)                                         AS year,
+             COUNT(*)                                            AS track_count,
+             COALESCE(SUM(t.duration_secs), 0.0)                 AS total_secs,
+             (SELECT t2.art_id FROM tracks t2
+               WHERE t2.album_key = t.album_key AND t2.art_id IS NOT NULL
+               ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1),
+             (SELECT t2.source FROM tracks t2
+               WHERE t2.album_key = t.album_key AND t2.art_id IS NOT NULL
+               ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1)
+         FROM tracks t
+         GROUP BY t.album_key
          ORDER BY artist, year, name",
     )?;
     let albums = stmt
@@ -147,6 +156,8 @@ pub(super) fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
                 year: row.get(3)?,
                 track_count: row.get::<_, i64>(4)?.max(0) as u64,
                 total_secs: row.get(5)?,
+                art_id: row.get(6)?,
+                art_source: row.get(7)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -246,6 +257,19 @@ pub(super) fn mark_played(conn: &Connection, path: &str) -> rusqlite::Result<()>
         rusqlite::params![path, now],
     )?;
     Ok(())
+}
+
+/// The stored art id of the track at `path`, if any (local content hash
+/// or Navidrome `coverArt` id — the caller disambiguates via the row's
+/// `source`). Unknown paths answer `None`; this is a point lookup on the
+/// unique `path` column.
+pub(super) fn art_for_track(conn: &Connection, path: &str) -> rusqlite::Result<Option<String>> {
+    let art: Option<Option<String>> = conn
+        .query_row("SELECT art_id FROM tracks WHERE path = ?1", [path], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    Ok(art.flatten())
 }
 
 /// Whole-library counters; `last_scan` comes from the `meta` table.

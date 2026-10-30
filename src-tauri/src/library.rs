@@ -82,6 +82,18 @@ pub(crate) fn db_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("navinamp.db"))
 }
 
+/// `<app_data_dir>/art-cache` — a sibling of the database file, i.e. the
+/// exact directory `navinamp-library` derives and the scanner writes
+/// (see `Library::open` / `navinamp_library::ART_CACHE_DIR`). The
+/// `navinamp-art` scheme handler (`art.rs`) serves from here.
+pub(crate) fn art_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {e}"))?;
+    Ok(dir.join(navinamp_library::ART_CACHE_DIR))
+}
+
 /// `<app_data_dir>/library-roots.json`.
 fn roots_file(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -309,6 +321,22 @@ pub fn library_mark_played(
 ) -> Result<(), String> {
     with_library(&app, &state, |library| {
         library.mark_played(&path).map_err(|e| e.to_string())
+    })
+}
+
+/// The stored art id for one track path — a local content hash (build a
+/// `navinamp-art:` URL from it) or, for `navidrome://` paths, the server's
+/// `coverArt` id (feed to `navidrome_art_url`). `null` when the track has
+/// no art or is unknown; the frontend picks the serving route from the
+/// row's `source`.
+#[tauri::command]
+pub fn art_for_track(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    path: String,
+) -> Result<Option<String>, String> {
+    with_library(&app, &state, |library| {
+        library.art_for_track(&path).map_err(|e| e.to_string())
     })
 }
 

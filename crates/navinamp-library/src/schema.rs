@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     date_added      INTEGER NOT NULL,          -- unix seconds
     source          TEXT NOT NULL DEFAULT 'local',
     remote_id       TEXT,
-    art_id          TEXT
+    art_id          TEXT                       -- local: content hash into art-cache; remote: coverArt id
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_album_key ON tracks(album_key);

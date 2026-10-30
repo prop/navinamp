@@ -1777,7 +1777,7 @@ mod tests {
         let merged = merged_defaults(&persisted, &screens);
         let json = persist_json(&merged);
         let parsed = parse_persisted(&json);
-        assert_eq!(parsed.len(), 3, "always all three windows");
+        assert_eq!(parsed.len(), 4, "always all four windows");
         assert_eq!(parsed["main"].layout, Layout::Shade);
         assert_eq!(parsed["main"].x, 10);
         assert!(parsed["library"].visible == parsed.get("library").unwrap().visible);
@@ -1818,7 +1818,7 @@ mod tests {
         assert!(!parsed.contains_key("broken"));
         // ghost parses fine but merged_defaults ignores unknown labels
         let merged = merged_defaults(&parsed, &[Rect::at(0, 0, 1000, 800)]);
-        assert_eq!(merged.len(), 3);
+        assert_eq!(merged.len(), 4);
         assert!(!merged.contains_key("ghost"));
     }
 

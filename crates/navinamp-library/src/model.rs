@@ -45,8 +45,11 @@ pub struct Track {
     /// `local` today; `navidrome` rows arrive with the Navidrome sync (M5).
     pub source: String,
     pub remote_id: Option<String>,
-    /// Reserved for the album-art pipeline (out of scope for now, always
-    /// `NULL`).
+    /// Album-art reference. For `local` rows: a 16-hex content hash into
+    /// the art cache (`<db dir>/art-cache/<art_id>.<ext>`, served by the
+    /// app's `navinamp-art` scheme). For `navidrome` rows: the server's
+    /// `coverArt` id (feed it to the Subsonic `getCoverArt` URL builder).
+    /// `None` = no art found.
     pub art_id: Option<String>,
 }
 
@@ -63,6 +66,13 @@ pub struct Album {
     pub year: Option<i64>,
     pub track_count: u64,
     pub total_secs: f64,
+    /// First non-null `art_id` among the album's tracks (disc/track order)
+    /// — same semantics as [`Track::art_id`]. `None` when no track has art.
+    pub art_id: Option<String>,
+    /// `source` of the track that provided `art_id` (`local` |
+    /// `navidrome`), telling the frontend which serving route to use.
+    /// `None` exactly when `art_id` is.
+    pub art_source: Option<String>,
 }
 
 /// Whole-library counters for the status bar / empty-state UI.
