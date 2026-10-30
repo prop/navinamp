@@ -29,6 +29,22 @@
 {/if}
 
 <style>
+  /* Native-app feel: arrow cursor everywhere (never the webby I-beam or
+     hand), no text selection — EXCEPT real inputs, which keep their text
+     cursor and selectability. !important beats component-scoped rules. */
+  :global(*) {
+    cursor: default !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
+
+  :global(input),
+  :global(textarea) {
+    cursor: text !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
+  }
+
   /* Bundled OFL pixel font (Jason Kottke's Silkscreen) — used by the skin
      text renderer and window chrome in every window; declared here so the
      face exists document-wide regardless of which components mount.
