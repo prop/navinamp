@@ -24,7 +24,7 @@ pub type Params = BTreeMap<String, String>;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skin {
     /// Attributes on the root `<skin>` element, if any.
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     /// `<elements>` section: assets referenced by groups and objects.
     pub elements: Elements,
@@ -85,7 +85,7 @@ pub struct Bitmap {
     pub w: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub h: Option<u32>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -106,7 +106,7 @@ pub struct BitmapFont {
     pub charwidth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charheight: Option<u32>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -116,7 +116,7 @@ pub struct TrueTypeFont {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -126,7 +126,7 @@ pub struct ColorElem {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -135,7 +135,7 @@ pub struct ColorElem {
 pub struct GammaSet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<GenericNode>,
@@ -152,7 +152,7 @@ pub struct GroupDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     pub objects: Vec<GuiObject>,
 }
@@ -163,7 +163,7 @@ pub struct Container {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     pub layouts: Vec<Layout>,
     /// Unknown container-level children, preserved verbatim.
@@ -176,7 +176,7 @@ pub struct Container {
 pub struct Layout {
     pub id: String,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     pub objects: Vec<GuiObject>,
 }
@@ -314,7 +314,7 @@ pub struct Layer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -326,7 +326,7 @@ pub struct AnimatedLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -347,7 +347,7 @@ pub struct Button {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tooltip: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -367,7 +367,7 @@ pub struct ToggleButton {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tooltip: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -387,7 +387,7 @@ pub struct Slider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbimage: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -422,7 +422,7 @@ pub struct Text {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -432,7 +432,7 @@ pub struct Vis {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -442,7 +442,7 @@ pub struct Status {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -454,7 +454,7 @@ pub struct Grid {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
 }
 
@@ -465,7 +465,7 @@ pub struct GroupInstance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub rect: Rect,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<GenericNode>,
@@ -478,7 +478,7 @@ pub struct GenericNode {
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(flatten, default, skip_serializing_if = "Params::is_empty")]
+    #[serde(default, skip_serializing_if = "Params::is_empty")]
     pub params: Params,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<GenericNode>,
