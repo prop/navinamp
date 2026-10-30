@@ -62,7 +62,7 @@ use tauri::{
 use self::geom::{BREAK_PX, DragInput, LINK_EPS_PX, Rect, SNAP_PX};
 
 /// The three window labels, in `WindowsInfo` field order.
-pub const LABELS: [&str; 3] = ["main", "playlist", "library"];
+pub const LABELS: [&str; 4] = ["main", "playlist", "library", "eq"];
 
 /// Persisted-state file name inside the app config dir.
 const PERSIST_FILE: &str = "windows.json";
@@ -870,6 +870,7 @@ fn default_state(label: &str) -> WinState {
     let (rect, visible) = match label {
         "main" => (Rect::at(60, 60, 275, 280), true),
         "playlist" => (Rect::at(60, 340, 275, 232), true),
+        "eq" => (Rect::at(335, 340, 275, 116), false),
         _ => (Rect::at(120, 120, 900, 620), false),
     };
     WinState {
@@ -1115,6 +1116,7 @@ impl WindowManager {
                     true,
                     "NaVinaMP — Playlist Editor",
                 ),
+                "eq" => (Rect::at(335, 340, 275, 116), false, "NaVinaMP — Equalizer"),
                 _ => (
                     Rect::at(120, 120, 900, 620),
                     true,
