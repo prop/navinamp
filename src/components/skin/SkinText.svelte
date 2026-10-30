@@ -91,15 +91,34 @@
 
   const stripUrl = $derived.by(() => {
     const font = params["font"];
-    return font ? images?.[`${font}.image`] : undefined;
+    if (!font) return undefined;
+    // Primary keying: the pipeline materializes `<bitmapfont>` strips as
+    // `images["<font>.image"]`. The direct `<font>` key is a defensive
+    // fallback for payload variants.
+    return images?.[`${font}.image`] ?? images?.[font];
   });
 
   let font = $state<BmFont | null>(null);
+  let stripWarned = false;
   $effect(() => {
     const url = stripUrl;
     const spec = bmSpec;
     font = null;
-    if (!url || !spec) return;
+    if (!url || !spec) {
+      // Diagnostics: WHY did a display="time" object fall back to HTML?
+      // (The classic time should render via numbers.bmp glyphs — if you
+      // see thin HTML digits, this warning names the broken link.)
+      if (!stripWarned && o?.display === "time") {
+        stripWarned = true;
+        console.warn(
+          `[navinamp] time fell back to HTML — font:${params["font"] ?? "∅"} ` +
+            `strip:${url ?? "∅"} charset:${charset ?? "∅"} ` +
+            `images-keys:${images ? Object.keys(images).length : "no-images"}`,
+        );
+      }
+      return;
+    }
+    stripWarned = false;
     let alive = true;
     loadBmFont(url, spec)
       .then((f) => {
