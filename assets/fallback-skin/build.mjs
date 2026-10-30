@@ -424,6 +424,34 @@ function channelPaint(im, w, { tickEvery = 12, centerTick = false, active = fals
   im.rect(0, 12, w, 1, INK);
 }
 
+/**
+ * Vertical EQ channel (14×63): channelPaint rotated into a groove — ink
+ * outline, recessed walls, dB graduations along both walls and a strong
+ * center line marking 0 dB.
+ */
+function eqChannelPaint(im, active) {
+  const w = im.w;
+  const h = im.h;
+  vgrad(im, 1, 1, w - 2, h - 2, active ? hex("#1a1e24") : hex("#15181d"), active ? hex("#141820") : hex("#101318"));
+  const tick = active ? hex("#3d4750") : hex("#232a33");
+  const strong = active ? hex("#55606b") : hex("#39424c");
+  const mid = h >> 1;
+  for (let y = 5; y < h - 4; y += 6) {
+    if (Math.abs(y - mid) < 4) continue; // keep the 0 dB line clear
+    im.rect(2, y, 3, 1, tick);
+    im.rect(w - 5, y, 3, 1, tick);
+  }
+  im.rect(2, mid, w - 4, 1, strong); // 0 dB graduation
+  im.rect(1, 1, w - 2, 1, WALL_D);
+  im.rect(1, 1, 1, h - 2, WALL_D);
+  im.rect(1, h - 2, w - 2, 1, WALL_L);
+  im.rect(w - 2, 1, 1, h - 2, WALL_L);
+  im.rect(0, 0, w, 1, INK);
+  im.rect(0, h - 1, w, 1, INK);
+  im.rect(0, 0, 1, h, INK);
+  im.rect(w - 1, 0, 1, h, INK);
+}
+
 // ---------------------------------------------------------------------------
 // Skin content: PNGs, bitmap defs, skin.xml.
 // ---------------------------------------------------------------------------
@@ -443,6 +471,21 @@ const PLAYLIST_ACTIONS = [
   ["sel", "PLAYLIST_SELECT", "Select all"],
   ["misc", "PLAYLIST_MISC", "Playlist options"],
 ];
+// EQ metrics (classic Winamp EQ geometry in a 275x116 window): the
+// ON/AUTO/PRESETS row at y=18, 11 vertical 14x63 channels — preamp at x=21,
+// band i at 78+18i (60 Hz..16 kHz), labels strip under the channels.
+// EQ_SET index mapping (NaVinaMP, mirrors the .wsz synthesizer):
+// 0 = preamp, 1..10 = bands.
+const EQ_BAND_HZ = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000];
+const EQ_BAND_LABELS = ["60", "170", "310", "600", "1K", "3K", "6K", "12K", "14K", "16K"];
+const EQ_PRE_X = 21;
+const EQ_BAND_X0 = 78;
+const EQ_BAND_PITCH = 18;
+const EQ_SLIDER_Y = 38;
+const EQ_SLIDER_W = 14;
+const EQ_SLIDER_H = 63;
+const EQ_LABELS_Y = 101;
+const EQ_LABELS_W = 256; // preamp label start .. "16K" end
 const WIN_BUTTONS = [
   ["min", "Minimize"],
   ["shade", "Window shade"],
@@ -635,9 +678,9 @@ function generate() {
     });
   });
 
-  // Bottom-strip toggles (playlist / shade): 2 x 3 states, 54x18 cells.
-  addPng("player/toggles.png", 108, 54, (im) => {
-    const labels = ["PLAYLIST", "SHADE"];
+  // Bottom-strip toggles (playlist / shade / eq): 3 x 3 states, 54x18 cells.
+  addPng("player/toggles.png", 162, 54, (im) => {
+    const labels = ["PLAYLIST", "SHADE", "EQ"];
     labels.forEach((label, i) => {
       STATES.forEach((state, s) => {
         const x = i * 54;
@@ -647,7 +690,7 @@ function generate() {
       });
     });
   });
-  ["playlist", "shade"].forEach((name, i) => {
+  ["playlist", "shade", "eq"].forEach((name, i) => {
     STATES.forEach((state, s) => {
       bitmap(`player.toggle.${name}.${state}`, "player/toggles.png", {
         x: i * 54,
@@ -758,6 +801,103 @@ function generate() {
     });
   });
 
+  // ---- whole-file bitmaps: eq ---------------------------------------------
+
+  addPng("eq/window.png", 275, 116, (im) => windowChrome(im, 275, 116));
+  bitmap("eq.window", "eq/window.png");
+
+  addPng("eq/titlebar.png", 275, 14, (im) => titlebarPaint(im, 275));
+  bitmap("titlebar.eq.bg", "eq/titlebar.png");
+
+  addPng("eq/title-eq.png", 53, 8, (im) =>
+    embossedText(im, 0, 0, "EQUALIZER", hex("#dde2e7"), hex("#0d1013")),
+  );
+  bitmap("eq.title.logo", "eq/title-eq.png");
+
+  // Curve panel: recessed display with a flat dim-green 0 dB line (the live
+  // curve is renderer-drawn over it).
+  addPng("eq/graph.png", 113, 19, (im) => {
+    recessPanel(im, 113, 19, hex("#060a08"), hex("#0b110d"));
+    im.rect(2, 9, 109, 1, GREEN_DIM);
+  });
+  bitmap("eq.graph", "eq/graph.png");
+
+  // Vertical EQ channels (normal + dragged variants).
+  addPng("eq/channel.png", 14, 63, (im) => eqChannelPaint(im, false));
+  bitmap("eq.slider.channel", "eq/channel.png");
+  addPng("eq/channel-on.png", 14, 63, (im) => eqChannelPaint(im, true));
+  bitmap("eq.slider.channel.on", "eq/channel-on.png");
+
+  // Shared EQ thumb: 14x11 art centered on a 14x14 canvas — the renderer
+  // sizes a vertical slider's thumb to a square of the track width, so the
+  // transparent padding keeps the art pixel-exact instead of stretching it.
+  addPng("eq/thumb.png", 14, 14, (im) => {
+    const y0 = 1;
+    brushed(im, 2, y0 + 2, 10, 7, hex("#7e868f"), hex("#5a6169"), 2);
+    im.rect(5, y0 + 3, 4, 1, hex("#3a4046"));
+    im.rect(5, y0 + 5, 4, 1, hex("#3a4046"));
+    im.rect(5, y0 + 7, 4, 1, hex("#3a4046"));
+    im.rect(5, y0 + 4, 4, 1, hex("#b6bcc3"));
+    im.rect(5, y0 + 6, 4, 1, hex("#b6bcc3"));
+    im.rect(1, y0 + 1, 12, 1, HI);
+    im.rect(1, y0 + 1, 1, 9, HI);
+    im.rect(1, y0 + 9, 12, 1, SHADOW);
+    im.rect(12, y0 + 1, 1, 9, SHADOW);
+    im.rect(0, y0, 14, 1, INK);
+    im.rect(0, y0 + 10, 14, 1, INK);
+    im.rect(0, y0, 1, 11, INK);
+    im.rect(13, y0, 1, 11, INK);
+  });
+  bitmap("eq.slider.thumb", "eq/thumb.png");
+
+  // PRE + band labels: one alpha strip, texts at their absolute x spots.
+  addPng("eq/labels.png", EQ_LABELS_W, 9, (im) => {
+    const draw = (label, cx) => {
+      embossedText(im, cx - (textWidth(label) >> 1), 0, label, hex("#262b31"), hex("#8f97a0"));
+    };
+    draw("PRE", EQ_PRE_X + 7);
+    EQ_BAND_LABELS.forEach((lbl, i) =>
+      draw(lbl, EQ_BAND_X0 + i * EQ_BAND_PITCH + (EQ_SLIDER_W >> 1)),
+    );
+  });
+  bitmap("eq.labels", "eq/labels.png");
+
+  // ---- sprite sheets: eq ---------------------------------------------------
+
+  // ON / AUTO toggles (uneven cells: 25 + 33 wide) x 3 states, 12 tall.
+  addPng("eq/toggles.png", 58, 36, (im) => {
+    let x = 0;
+    for (const [label, w] of [
+      ["ON", 25],
+      ["AUTO", 33],
+    ]) {
+      STATES.forEach((state, s) => {
+        const y = s * 12;
+        buttonFace(im, x, y, w, 12, state);
+        labelOn(im, label, x + ((w - textWidth(label) - 1) >> 1), y + ((12 - 7) >> 1), state);
+      });
+      x += w;
+    }
+  });
+  bitmap("eq.on.normal", "eq/toggles.png", { x: 0, y: 0, w: 25, h: 12 });
+  bitmap("eq.on.hover", "eq/toggles.png", { x: 0, y: 12, w: 25, h: 12 });
+  bitmap("eq.on.down", "eq/toggles.png", { x: 0, y: 24, w: 25, h: 12 });
+  bitmap("eq.auto.normal", "eq/toggles.png", { x: 25, y: 0, w: 33, h: 12 });
+  bitmap("eq.auto.hover", "eq/toggles.png", { x: 25, y: 12, w: 33, h: 12 });
+  bitmap("eq.auto.down", "eq/toggles.png", { x: 25, y: 24, w: 33, h: 12 });
+
+  // PRESETS cycler button: 3 states, 44x12.
+  addPng("eq/presets.png", 44, 36, (im) => {
+    STATES.forEach((state, s) => {
+      const y = s * 12;
+      buttonFace(im, 0, y, 44, 12, state);
+      labelOn(im, "PRESETS", (44 - textWidth("PRESETS") - 1) >> 1, y + ((12 - 7) >> 1), state);
+    });
+  });
+  bitmap("eq.presets.normal", "eq/presets.png", { x: 0, y: 0, w: 44, h: 12 });
+  bitmap("eq.presets.hover", "eq/presets.png", { x: 0, y: 12, w: 44, h: 12 });
+  bitmap("eq.presets.down", "eq/presets.png", { x: 0, y: 24, w: 44, h: 12 });
+
   // ---- bitmap font strip (ASCII 32..95, green on transparent) -------------
 
   addPng("player-fonts/font.png", 384, 8, (im) => {
@@ -792,6 +932,17 @@ function generate() {
     ([name, action, tip], i) =>
       `    <button id="playlist.${name}" action="${action}" image="playlist.btn.${name}.normal" hoverimage="playlist.btn.${name}.hover" downimage="playlist.btn.${name}.down" x="${i * 39}" y="0" w="36" h="16" tooltip="${tip}"/>`,
   ).join("\n");
+
+  // EQ channels: EQ_SET sliders whose index param selects the band —
+  // 0 = preamp, 1..10 = 60 Hz..16 kHz (NaVinaMP's mapping; the renderer
+  // routes index 0 to eq_set_preamp and i to eq_set_band(i-1)).
+  const eqSliders = [
+    `      <slider id="eq.preamp" action="EQ_SET" image="eq.slider.channel" downimage="eq.slider.channel.on" thumbimage="eq.slider.thumb" x="${EQ_PRE_X}" y="${EQ_SLIDER_Y}" w="${EQ_SLIDER_W}" h="${EQ_SLIDER_H}" orientation="vertical" index="0" band="preamp" tooltip="Preamp"/>`,
+    ...EQ_BAND_HZ.map(
+      (hz, i) =>
+        `      <slider id="eq.band${i}" action="EQ_SET" image="eq.slider.channel" downimage="eq.slider.channel.on" thumbimage="eq.slider.thumb" x="${EQ_BAND_X0 + i * EQ_BAND_PITCH}" y="${EQ_SLIDER_Y}" w="${EQ_SLIDER_W}" h="${EQ_SLIDER_H}" orientation="vertical" index="${i + 1}" band="${hz}" tooltip="${hz} Hz band"/>`,
+    ),
+  ].join("\n");
 
   const elementsXml =
     bitmapDefs
@@ -870,6 +1021,12 @@ ${winButtons("playlist")}
 ${actionButtons}
   </groupdef>
 
+  <!-- EQ window chrome (reuses the shared window-button sheet). -->
+  <groupdef id="eq.titlebar" background="titlebar.eq.bg" x="0" y="0" w="275" h="14">
+    <layer id="eq.title.logo" image="eq.title.logo" x="4" y="3" w="53" h="8"/>
+${winButtons("eq")}
+  </groupdef>
+
   <container id="main" name="NaVinaMP Player">
     <layout id="normal" x="0" y="0" w="275" h="280" background="player.window">
       <layer id="player.background" image="player.window" x="0" y="0" w="275" h="280"/>
@@ -883,6 +1040,7 @@ ${actionButtons}
       <vis id="player.vis" x="14" y="145" w="247" h="88"/>
       <togglebutton id="player.playlist.toggle" action="TOGGLE_PLAYLIST" image="player.toggle.playlist.normal" hoverimage="player.toggle.playlist.hover" downimage="player.toggle.playlist.down" x="10" y="243" w="54" h="18" tooltip="Playlist editor"/>
       <togglebutton id="player.shade.toggle" action="TOGGLE_SHADE" image="player.toggle.shade.normal" hoverimage="player.toggle.shade.hover" downimage="player.toggle.shade.down" x="68" y="243" w="54" h="18" tooltip="Shade mode"/>
+      <togglebutton id="player.eq.toggle" action="TOGGLE_EQ" image="player.toggle.eq.normal" hoverimage="player.toggle.eq.hover" downimage="player.toggle.eq.down" x="126" y="243" w="54" h="18" tooltip="Equalizer"/>
       <layer id="player.footer.logo" image="player.logo" x="120" y="266" w="36" h="8"/>
     </layout>
 
@@ -903,6 +1061,24 @@ ${actionButtons}
       <layer id="playlist.totals.bg" image="playlist.totals.ghost" x="170" y="206" w="78" h="7"/>
       <status id="playlist.totals" x="170" y="203" w="97" h="12"/>
       <layer id="playlist.resize.grip" image="playlist.resize.grip" x="258" y="223" w="9" h="7"/>
+    </layout>
+  </container>
+
+  <!-- Equalizer (275x116): ON/AUTO toggles + PRESETS cycler above 11
+       vertical EQ_SET channels (index 0 = preamp, 1..10 = 60Hz..16kHz —
+       NaVinaMP's mapping; the renderer routes index 0 to eq_set_preamp).
+       AUTO is renderer-local today (no backend concept yet); PRESETS cycles
+       the classic preset table band-by-band, leaving the preamp alone. -->
+  <container id="eq" name="Equalizer">
+    <layout id="normal" x="0" y="0" w="275" h="116" background="eq.window">
+      <layer id="eq.background" image="eq.window" x="0" y="0" w="275" h="116"/>
+      <group id="eq.titlebar" x="0" y="0" w="275" h="14"/>
+      <togglebutton id="eq.on" action="EQ_TOGGLE" image="eq.on.normal" hoverimage="eq.on.hover" downimage="eq.on.down" x="14" y="18" w="25" h="12" tooltip="EQ on/off"/>
+      <togglebutton id="eq.auto" action="EQ_AUTO" image="eq.auto.normal" hoverimage="eq.auto.hover" downimage="eq.auto.down" x="39" y="18" w="33" h="12" tooltip="Auto"/>
+      <layer id="eq.graph" image="eq.graph" x="86" y="17" w="113" h="19"/>
+      <button id="eq.presets" action="EQ_PRESETS" image="eq.presets.normal" hoverimage="eq.presets.hover" downimage="eq.presets.down" x="217" y="18" w="44" h="12" tooltip="Cycle presets"/>
+${eqSliders}
+      <layer id="eq.labels" image="eq.labels" x="0" y="${EQ_LABELS_Y}" w="${EQ_LABELS_W}" h="9"/>
     </layout>
   </container>
 

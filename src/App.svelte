@@ -1,9 +1,10 @@
 <script lang="ts">
   /**
    * App is now a ROUTER on the window label (M6b): the Tauri config creates
-   * three OS windows — "main" (player: owns queue/playback state), and the
-   * bus-driven "playlist" / "library" views. An unknown label degrades to
-   * the player view (lib/window/identity normalizes it before we get here).
+   * four OS windows — "main" (player: owns queue/playback state), and the
+   * bus-driven "playlist" / "library" / "eq" views. An unknown label
+   * degrades to the player view (lib/window/identity normalizes it before
+   * we get here).
    *
    * initWindowBus() must run before any view mounts: it wires the
    * windows-changed listener in every window, the player-only listeners
@@ -11,6 +12,7 @@
    * non-player listeners (queue-state consumer + mount-time snapshot
    * request). See lib/window/bus.svelte.ts for the protocol.
    */
+  import EqWindow from "./windows/EqWindow.svelte";
   import LibraryWindow from "./windows/LibraryWindow.svelte";
   import PlayerWindow from "./windows/PlayerWindow.svelte";
   import PlaylistWindow from "./windows/PlaylistWindow.svelte";
@@ -24,6 +26,8 @@
   <PlaylistWindow />
 {:else if LABEL === "library"}
   <LibraryWindow />
+{:else if LABEL === "eq"}
+  <EqWindow />
 {:else}
   <PlayerWindow />
 {/if}

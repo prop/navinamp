@@ -18,7 +18,7 @@ export function objectRect(object: GuiObject): Rect {
 export type PlaybackStatus = "stopped" | "playing" | "paused";
 
 /** The slider actions NaVinaMP's engine handles natively (see `SliderAction`). */
-export type SliderActionKind = "seek" | "volume" | "balance";
+export type SliderActionKind = "seek" | "volume" | "balance" | "eq";
 
 /** Parse the well-known slider actions, case-insensitively (`Slider::action_kind`). */
 export function sliderActionKind(slider: Slider): SliderActionKind | null {
@@ -30,9 +30,24 @@ export function sliderActionKind(slider: Slider): SliderActionKind | null {
       return "volume";
     case "BALANCE":
       return "balance";
+    case "EQ_SET":
+      return "eq";
     default:
       return null;
   }
+}
+
+/**
+ * The `index` param of an EQ_SET slider — NaVinaMP's mapping (mirrors the
+ * .wsz synthesizer, `crates/navinamp-skin/src/wsz.rs` `eq_window`):
+ * **0 = preamp, 1..10 = bands 60 Hz … 16 kHz** (band N is `eq_set_band(N-1)`).
+ * Null when the param is absent or out of range — such a slider stays inert.
+ */
+export function eqSliderIndex(slider: Slider): number | null {
+  const raw = slider.params?.["index"];
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 10 ? n : null;
 }
 
 /** Human-readable form of a parse `Warning` (mirror of its `Display` impl). */

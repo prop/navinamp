@@ -25,7 +25,7 @@
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import { queue, isAudioPath } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
-  import { listSkins, loadSkin } from "../lib/skin/load";
+  import { loadDefaultSkin } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
   import { formatWarning } from "../lib/skin/wasabi";
@@ -164,10 +164,7 @@
 
   async function loadInitialSkin(): Promise<SkinPayload> {
     try {
-      const skins = await listSkins();
-      const pick = skins.find((s) => s.id !== "fallback") ?? skins[0];
-      console.log(`[navinamp] skin: ${pick?.fileName ?? "mock"}`);
-      return await loadSkin(pick.id);
+      return await loadDefaultSkin();
     } catch (e) {
       console.warn(`[navinamp] skin load failed (${e}; using mock)`);
       return mockSkinPayload();
@@ -268,6 +265,9 @@
       case "TOGGLE_PLAYLIST":
         windowSetVisible("playlist", !windowIsVisible("playlist")).catch(warnIpc);
         break;
+      case "TOGGLE_EQ":
+        windowSetVisible("eq", !windowIsVisible("eq")).catch(warnIpc);
+        break;
       case "TOGGLE_SHADE":
         windowToggleLayout("main").catch(warnIpc);
         break;
@@ -346,6 +346,7 @@
       volume={state.volume}
       {ticker}
       playlistVisible={windowIsVisible("playlist")}
+      eqVisible={windowIsVisible("eq")}
       shadeActive={layoutMode === "shade"}
       onaction={skinAction}
       onseek={(secs) => cmd("audio_seek", { secs })}

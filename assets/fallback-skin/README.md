@@ -2,9 +2,9 @@
 
 The built-in skin for NaVinaMP, in the spirit of the Winamp3 default: a
 275×280 player window (plus a 275×14 shade strip), a 275×232 playlist
-editor, dark metallic chrome, brushed-steel body, recessed near-black
-display panels with green (#00CC33) readouts, 1px bevels everywhere, and a
-5×7 bitmap font.
+editor, a 275×116 equalizer, dark metallic chrome, brushed-steel body,
+recessed near-black display panels with green (#00CC33) readouts, 1px
+bevels everywhere, and a 5×7 bitmap font.
 
 **All artwork is original and drawn programmatically** by
 [`build.mjs`](./build.mjs) — no Nullsoft assets, no downloaded skins
@@ -15,7 +15,7 @@ display panels with green (#00CC33) readouts, 1px bevels everywhere, and a
 ```sh
 cd assets/fallback-skin
 npm install        # dev deps only: pngjs + fflate
-node build.mjs     # → out/fallback.wal  (74 KB, ZIP: skin.xml + 33 PNGs)
+node build.mjs     # → out/fallback.wal  (96 KB, ZIP: skin.xml + 44 PNGs)
 ```
 
 Node ≥ 20, no network at build time. The script:
@@ -49,7 +49,7 @@ Node ≥ 20, no network at build time. The script:
 | 96–108 | Balance (x=10, 110×13, center detent tick) + volume (x=155, 110×13) sliders |
 | 114–135 | Transport group `player.transport` at 52,114: PREV PLAY PAUSE STOP NEXT EJECT, 26×22 each, gap 3 |
 | 141–236 | Recessed vis panel 255×96 with dot grid + `vis` object at 14,145 (247×88) |
-| 243–260 | Bottom strip: PLAYLIST + SHADE togglebuttons (54×18) at x=10/68 |
+| 243–260 | Bottom strip: PLAYLIST + SHADE + EQ togglebuttons (54×18) at x=10/68/126 (EQ carries `action="TOGGLE_EQ"` → the EQ OS window's visibility) |
 | 261–279 | Footer groove + etched NAVINAMP logo at 120,266 |
 
 The titlebar's shade window-button carries `action="TOGGLE_SHADE"` (the
@@ -76,6 +76,23 @@ strips generically as "layouts with no `player.titlebar` group that are
 | 201–217 | Action group `playlist.actions` at 8,201: ADD REM SEL MISC (36×16 each, gap 3) |
 | 203–215 | Totals: dim ghost "0 ITEMS 0:00" + `status` object |
 | 223–230 | Resize grip (diagonal grooves) at 258,223 |
+
+### Equalizer — container `eq`, layout `normal`, 275×116
+
+Classic Winamp EQ geometry (matches the .wsz synthesizer's `eq_window`):
+
+| y-range | Content |
+|---|---|
+| 0–13 | Title bar (group `eq.titlebar`): embossed **EQUALIZER** logo, decorative min/shade/close window buttons |
+| 17–30 | Curve panel 113×19 at 86,17 (recessed, flat dim-green 0 dB line — the live curve is renderer-drawn) |
+| 18–29 | ON toggle (`action="EQ_TOGGLE"`, 25×12 at x=14), AUTO toggle (`action="EQ_AUTO"`, 33×12 at x=39, renderer-local visual state), PRESETS button (`action="EQ_PRESETS"`, 44×12 at x=217 — the app cycles the classic preset table) |
+| 38–100 | 11 vertical EQ_SET channels (14×63): preamp `index="0"` at x=21, band i `index="1..10"` at 78+18·i (60 Hz…16 kHz) |
+| 101–109 | Label strip: **PRE** + 60/170/310/600/1K/3K/6K/12K/14K/16K, embossed on the steel |
+
+The EQ_SET `index` param is NaVinaMP's mapping: 0 = preamp
+(`eq_set_preamp`), 1..10 = bands (`eq_set_band(index-1)`) — identical to
+what `crates/navinamp-skin`'s .wsz synthesizer emits, so both skin dialects
+share one renderer path.
 
 ## Color system
 
@@ -113,17 +130,19 @@ uppercase) is defined as glyph maps in `build.mjs` and used three ways:
 
 ## Bitmaps
 
-87 `<bitmap>` definitions over 33 PNG files. Whole-file bitmaps for
-window/panel/channel art; five **sprite sheets** with `x`/`y`/`w`/`h`
+108 `<bitmap>` definitions over 44 PNG files. Whole-file bitmaps for
+window/panel/channel art; seven **sprite sheets** with `x`/`y`/`w`/`h`
 sub-rects where a grid is natural:
 
 | Sheet | Cells | Bitmap ids |
 |---|---|---|
 | `player/transport.png` (156×66) | 6 glyphs × 3 states, 26×22 | `player.btn.{prev,play,pause,stop,next,eject}.{normal,hover,down}` |
-| `player/titlebar-buttons.png` (42×30) | 3 × 3, 14×10 | `player.win.{min,shade,close}.*` (shared by both title bars) |
-| `player/toggles.png` (108×54) | 2 × 3, 54×18 | `player.toggle.{playlist,shade}.*` |
+| `player/titlebar-buttons.png` (42×30) | 3 × 3, 14×10 | `player.win.{min,shade,close}.*` (shared by all three title bars) |
+| `player/toggles.png` (162×54) | 3 × 3, 54×18 | `player.toggle.{playlist,shade,eq}.*` |
 | `player/shade-buttons.png` (65×36) | 5 × 3, 13×12 | `player.shadebtn.{play,pause,stop,next,restore}.*` |
 | `playlist/actions.png` (144×48) | 4 × 3, 36×16 | `playlist.btn.{add,rem,sel,misc}.*` |
+| `eq/toggles.png` (58×36) | 2 × 3, 25/33×12 | `eq.{on,auto}.{normal,hover,down}` |
+| `eq/presets.png` (44×36) | 1 × 3, 44×12 | `eq.presets.{normal,hover,down}` |
 
 Button states: normal (raised, dark engraved glyph + light emboss), hover
 (+8 brightness), down (sunken, glyph nudged 1px; toggle/action buttons glow
@@ -142,5 +161,8 @@ not font characters.
   renderer paints nothing over the ghost bitmap; when live time lands,
   `display` should take precedence over `params.text`.
 - Slider thumbs are 13×13 squares (the renderer sizes thumbs to the track
-  cross-dimension). `vis`/`status` currently render as labelled
-  placeholders; the recessed panels beneath them are final art.
+  cross-dimension). The EQ channels are the vertical variant: 14×63 grooves
+  with a strong 0 dB center line, thumb art 14×11 centered on a 14×14
+  transparent canvas so the square box renders it pixel-exact. `vis`/
+  `status` currently render as labelled placeholders; the recessed panels
+  beneath them are final art.
