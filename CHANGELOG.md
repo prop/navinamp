@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0](https://github.com/prop/navinamp/compare/v0.4.0...v0.5.0) (2026-10-30)
+
+
+### Features
+
+* **eq:** skinned EQ window + fallback-skin EQ layout ([3de1dab](https://github.com/prop/navinamp/commit/3de1dab94f727bfa8ff128307845400df4273d72))
+* **library:** album art pipeline + covers; fix windows tests for the eq label ([614aea6](https://github.com/prop/navinamp/commit/614aea60d0c65eda0ad5519182dac412e7b14004))
+* **windows:** fourth OS window 'eq' (275x116, hidden by default, docked right of playlist) ([3e763d4](https://github.com/prop/navinamp/commit/3e763d439909280d8aef0899ba985c27524d79d3))
+
 ## [0.4.0](https://github.com/prop/navinamp/compare/v0.3.0...v0.4.0) (2026-10-30)
 
 
