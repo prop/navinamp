@@ -827,13 +827,14 @@ impl WinInfo {
     }
 }
 
-/// `windows_get()` result: always all three windows, field names are the
+/// `windows_get()` result: always all four windows, field names are the
 /// window labels.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct WindowsInfo {
     pub main: WinInfo,
     pub playlist: WinInfo,
     pub library: WinInfo,
+    pub eq: WinInfo,
 }
 
 /// Payload of the `windows-changed` event.
@@ -1256,6 +1257,7 @@ impl WindowManager {
             main: get("main"),
             playlist: get("playlist"),
             library: get("library"),
+            eq: get("eq"),
         }
     }
 
@@ -1858,11 +1860,13 @@ mod tests {
             main: info,
             playlist: info,
             library: info,
+            eq: info,
         };
         let json = serde_json::to_string(&wins).unwrap();
         assert!(json.contains("\"main\""));
         assert!(json.contains("\"playlist\""));
         assert!(json.contains("\"library\""));
+        assert!(json.contains("\"eq\""));
     }
 
     #[test]
