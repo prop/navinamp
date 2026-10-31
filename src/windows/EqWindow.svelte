@@ -145,6 +145,12 @@
 
   function cyclePreset(): void {
     if (presets.length === 0) return;
+    // Applying a preset implies wanting to HEAR it: auto-enable the EQ
+    // stage (it ships disabled — a disabled EQ makes presets inaudible).
+    if (!eq.enabled) {
+      eq.enabled = true;
+      eqSetEnabled(true).catch(warnEq);
+    }
     presetIndex = (presetIndex + 1) % presets.length;
     const bands = normalize(presets[presetIndex]?.bandsDb);
     eq.bandsDb = bands;
