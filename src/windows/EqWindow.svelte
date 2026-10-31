@@ -122,6 +122,7 @@
     } else if (skinIndex <= EQ_BAND_COUNT) {
       eq.bandsDb[skinIndex - 1] = db;
       eqSetBand(skinIndex - 1, db).catch(warnEq);
+      manual = true; // user edit → the label stops claiming a preset
     }
   }
 
@@ -136,6 +137,12 @@
 
   let presets: EqPreset[] = [];
   let presetIndex = $state(-1); // -1 = none applied yet
+  let manual = $state(false); // user dragged a slider → no preset matches
+  let lastApplied: number[] | null = null;
+
+  const presetLabel = $derived(
+    presetIndex >= 0 && presets[presetIndex] ? presets[presetIndex].name : "",
+  );
 
   $effect(() => {
     eqPresets()
@@ -154,6 +161,8 @@
     presetIndex = (presetIndex + 1) % presets.length;
     const bands = normalize(presets[presetIndex]?.bandsDb);
     eq.bandsDb = bands;
+    lastApplied = bands;
+    manual = false;
     bands.forEach((db, i) => eqSetBand(i, db).catch(warnEq));
   }
 
@@ -235,6 +244,16 @@
         ></div>
       {/each}
     </div>
+    {#if manual || presetLabel}
+      <!-- Preset-name readout in the curve-panel area (classic Winamp draws
+           its EQ curve graph there). -->
+      <div
+        class="preset-label"
+        style="left:{86 * scale}px; top:{17 * scale}px; width:{113 * scale}px; height:{19 * scale}px; font-size:{8 * scale}px;"
+      >
+        {manual ? "manual" : presetLabel}
+      </div>
+    {/if}
   {:else}
     <!-- No skin / no eq container: the HTML panel (same IPC wiring). -->
     <div class="fallback">
@@ -250,6 +269,19 @@
     width: max-content;
     background: #000;
     user-select: none;
+  }
+
+  /* Preset-name readout, over the curve-panel area of the skin layout. */
+  .preset-label {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #66ff99;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
   }
 
   /* HTML fallback column: fixed width so the ResizeObserver settles once. */
