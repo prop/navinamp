@@ -265,9 +265,20 @@
       case "TOGGLE_PLAYLIST":
         windowSetVisible("playlist", !windowIsVisible("playlist")).catch(warnIpc);
         break;
-      case "TOGGLE_EQ":
-        windowSetVisible("eq", !windowIsVisible("eq")).catch(warnIpc);
+      case "TOGGLE_EQ": {
+        const before = windowIsVisible("eq");
+        console.warn(`[navinamp] TOGGLE_EQ click — visible before: ${before}`);
+        windowSetVisible("eq", !before)
+          .then(() => {
+            console.warn(
+              `[navinamp] TOGGLE_EQ ipc ok — visible now: ${windowIsVisible("eq")}`,
+            );
+          })
+          .catch((e) => {
+            console.warn(`[navinamp] TOGGLE_EQ ipc FAILED: ${e}`);
+          });
         break;
+      }
       case "TOGGLE_SHADE":
         windowToggleLayout("main").catch(warnIpc);
         break;

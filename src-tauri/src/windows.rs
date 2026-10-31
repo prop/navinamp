@@ -1140,6 +1140,24 @@ impl WindowManager {
         }
 
         // Apply persisted geometry + visibility to all three windows.
+        // TEMP DIAGNOSTIC (NAVAMP_WIN_TEST=1): verify every labeled window
+        // exists and the eq window can be shown. Remove after the EQ-button
+        // investigation.
+        if std::env::var("NAVAMP_WIN_TEST").is_ok() {
+            for label in LABELS {
+                match app.get_webview_window(label) {
+                    Some(win) => {
+                        println!("[win-test] {label}: exists, visible={:?}", win.is_visible())
+                    }
+                    None => println!("[win-test] {label}: MISSING"),
+                }
+            }
+            if let Some(win) = app.get_webview_window("eq") {
+                let _ = win.show();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                println!("[win-test] eq show -> visible={:?}", win.is_visible());
+            }
+        }
         for label in LABELS {
             let Some(win) = app.get_webview_window(label) else {
                 continue;
