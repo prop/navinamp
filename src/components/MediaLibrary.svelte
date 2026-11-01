@@ -461,6 +461,43 @@
     }
   }
 
+  // ── sync-time aggregate refreshes ─────────────────────────────────────────
+  // The pane query streams rows already, but the header stats and the
+  // ALL TRACKS / ARTISTS / ALBUMS / GENRES stores are snapshots. Refresh them
+  // during the walk (stats every second, the heavier lists every ~10s) so
+  // already-synced items appear before the sync completes.
+
+  let aggregateSeq = 0;
+
+  function refreshStats(): void {
+    void libraryStats().then(
+      (s) => {
+        stats = s;
+        statsError = null;
+      },
+      () => undefined, // keep the previous snapshot; refreshAll is final
+    );
+  }
+
+  async function refreshAggregates(): Promise<void> {
+    const seq = ++aggregateSeq;
+    try {
+      const [s, tracks, albumsNow] = await Promise.all([
+        libraryStats(),
+        libraryTracks(),
+        libraryAlbums(),
+      ]);
+      if (seq !== aggregateSeq) return;
+      stats = s;
+      statsError = null;
+      allTracks = tracks;
+      tracksError = null;
+      albums = albumsNow;
+    } catch {
+      // Keep the previous snapshot; a failed partial refresh is harmless.
+    }
+  }
+
   $effect(() => {
     void refreshAll();
   });
@@ -760,19 +797,31 @@
   }
 
   let lastProgressRefresh = 0;
+  let lastStatsRefresh = 0;
+  let lastAggregateRefresh = 0;
   $effect(() => {
     void refreshNavStatus();
     const up = onNavidromeProgress((p) => {
       // Events also fire for syncs started elsewhere — latch onto them.
       navSyncing = true;
       navProgress = p;
+      const now = performance.now();
       // Batches land in the DB as the walk advances; refresh the current
       // pane (and the tree count) at most once a second while syncing.
-      const now = performance.now();
       if (now - lastProgressRefresh >= 1000) {
         lastProgressRefresh = now;
         dataVersion++; // re-run the current node query
         void refreshNavStatus(); // live REMOTE TRACKS count
+      }
+      // Header counts are cheap counts; the aggregate lists are heavier and
+      // refresh on a slower cadence.
+      if (now - lastStatsRefresh >= 1000) {
+        lastStatsRefresh = now;
+        refreshStats();
+      }
+      if (now - lastAggregateRefresh >= 10_000) {
+        lastAggregateRefresh = now;
+        void refreshAggregates();
       }
     });
     const us = onNavidromeSynced((payload) => {
@@ -1011,7 +1060,7 @@
       </button>
       {#if openGroups.artists}
         {#if artistNames.length === 0 && tracksError == null}
-          <div class="leaf empty">no artists</div>
+          <div class="leaf empty">{navSyncing ? "syncing…" : "no artists"}</div>
         {/if}
         {#each artistNames as name (name)}
           <button
@@ -1030,7 +1079,7 @@
       </button>
       {#if openGroups.albums}
         {#if albumsShown.length === 0 && tracksError == null}
-          <div class="leaf empty">no albums</div>
+          <div class="leaf empty">{navSyncing ? "syncing…" : "no albums"}</div>
         {/if}
         {#each albumsShown as a (a.albumKey)}
           <button
@@ -1063,7 +1112,7 @@
       </button>
       {#if openGroups.genres}
         {#if genreNames.length === 0 && tracksError == null}
-          <div class="leaf empty">no genres</div>
+          <div class="leaf empty">{navSyncing ? "syncing…" : "no genres"}</div>
         {/if}
         {#each genreNames as name (name)}
           <button
@@ -1513,6 +1562,7 @@
     min-height: 0;
     display: grid;
     grid-template-columns: 176px 1fr;
+    overflow: hidden;
   }
 
   /* ── left tree ── */
@@ -1743,6 +1793,8 @@
   /* ── right table ── */
   .table {
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     background: #000;
@@ -1775,6 +1827,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
     scrollbar-width: thin;
     scrollbar-color: #2f4f33 #000;
   }

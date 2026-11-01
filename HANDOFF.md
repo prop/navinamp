@@ -50,8 +50,12 @@
 - Context menus (playlist + library rows): Play/Remove/Enqueue, star,
   rating, Copy path; the stock webview menu is replaced on those rows
 - Navidrome sync renders incrementally: rows are upserted to the library in
-  album batches during the walk, and the REMOTE TRACKS pane + tree count
-  refresh about once a second; pruning only runs after a complete walk
+  album batches during the walk; the REMOTE TRACKS pane + tree count refresh
+  about once a second, header stats every second, and the ALL TRACKS /
+  ARTISTS / ALBUMS / GENRES aggregates every ~10s; pruning only runs after a
+  complete walk
+- Track list containment: the 320px table now clips/scolls its rows instead
+  of painting over the footer and EQ panel (overscroll contained)
 
 ## Next up
 
