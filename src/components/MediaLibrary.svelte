@@ -1770,6 +1770,13 @@
     scrollbar-color: #2f4f33 #000;
   }
 
+  /* Never shrink tree rows to fit the fixed-height panel: with hundreds of
+     leaves a default flex-shrink compresses them to illegible slivers. The
+     tree scrolls instead. */
+  .tree > * {
+    flex: none;
+  }
+
   .tree .node,
   .tree .leaf {
     text-align: left;
