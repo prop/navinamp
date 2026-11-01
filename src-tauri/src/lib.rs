@@ -80,6 +80,8 @@ pub fn run() {
             navidrome::navidrome_scrobble,
             navidrome::navidrome_star,
             navidrome::navidrome_rate,
+            navidrome::navidrome_playlists,
+            navidrome::navidrome_playlist_tracks,
             navidrome::navidrome_set_streaming,
             windows::windows_get,
             windows::window_set_visible,

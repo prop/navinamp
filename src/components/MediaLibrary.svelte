@@ -61,6 +61,8 @@
   import { emptySmartViewDef } from "../lib/library/smartView";
   import {
     isSyncReport,
+    navidromePlaylistTracks,
+    navidromePlaylists,
     navidromeRate,
     navidromeStar,
     navidromeStatus,
@@ -68,6 +70,7 @@
     onNavidromeProgress,
     onNavidromeSynced,
     REMOTE_SOURCE,
+    type NavidromePlaylist,
     type NavidromeProgressPayload,
     type NavidromeStatus,
     type NavidromeSyncReport,
@@ -97,7 +100,9 @@
     /** Navidrome SERVER STATUS card pane (no track list). */
     | { kind: "server" }
     /** All synced `source="navidrome"` rows. */
-    | { kind: "remote" };
+    | { kind: "remote" }
+    /** One server playlist, fetched live (value = Subsonic playlist id). */
+    | { kind: "playlist"; value: string };
 
   function selKey(s: Sel): string {
     return "value" in s ? `${s.kind}:${s.value}` : s.kind;
@@ -172,6 +177,9 @@
           rows = await libraryAlbumTracks(sel.value); // no source arg → filtered below
         } else if (sel.kind === "remote") {
           rows = await libraryTracks({ source: REMOTE_SOURCE });
+        } else if (sel.kind === "playlist") {
+          // Ephemeral rows straight from the server — never imported.
+          rows = await navidromePlaylistTracks(sel.value);
         } else if (sel.kind === "artist") {
           rows = await libraryTracks({
             artist: sel.value,
@@ -336,6 +344,7 @@
     if (selection.kind === "all") return "library is empty — use “Scan folder…” above";
     if (selection.kind === "smart") return "this smart view returned no tracks";
     if (selection.kind === "remote") return "no navidrome tracks — connect & sync in SERVER STATUS";
+    if (selection.kind === "playlist") return "this server playlist is empty";
     return "no tracks in this category";
   });
 
@@ -541,6 +550,30 @@
       navError = friendlyIpcError("navidrome", e);
     }
   }
+
+  // Server playlists (browse-only): fetched once per connection and on
+  // demand; opening one queries the server live via `getPlaylist`.
+  let navPlaylists = $state.raw<NavidromePlaylist[] | null>(null);
+  let navPlaylistsError = $state<string | null>(null);
+
+  async function refreshPlaylists(): Promise<void> {
+    try {
+      navPlaylists = await navidromePlaylists();
+      navPlaylistsError = null;
+    } catch (e) {
+      navPlaylists = null;
+      navPlaylistsError = friendlyIpcError("navidrome playlists", e);
+    }
+  }
+
+  $effect(() => {
+    if (navStatus?.configured === true) {
+      void refreshPlaylists();
+    } else {
+      navPlaylists = null;
+      navPlaylistsError = null;
+    }
+  });
 
   async function syncNow(): Promise<void> {
     if (navSyncing) return;
@@ -972,6 +1005,34 @@
           class:on={selKey(selection) === "remote"}
           onclick={() => select({ kind: "remote" })}
           >REMOTE TRACKS <span class="cnt">({remoteTrackCount})</span></button>
+        {#if navStatus?.configured}
+          <div class="leaf sub">
+            <span class="sublabel">PLAYLISTS</span>
+            <span class="cnt">({navPlaylists?.length ?? 0})</span>
+            <button class="edit" title="reload playlists from the server" onclick={() => void refreshPlaylists()}
+              >↻</button>
+          </div>
+          {#if navPlaylistsError}
+            <div class="leaf empty err" title={navPlaylistsError}>playlists unavailable</div>
+          {:else if navPlaylists == null}
+            <div class="leaf empty">loading playlists…</div>
+          {:else if navPlaylists.length === 0}
+            <div class="leaf empty">no server playlists</div>
+          {:else}
+            {#each navPlaylists as p (p.id)}
+              <div class="leaf smart" class:on={selKey(selection) === `playlist:${p.id}`}>
+                <button
+                  class="leafbtn"
+                  title={`${p.songCount} track${p.songCount === 1 ? "" : "s"} on the server`}
+                  onclick={() => {
+                    selectedIds = new Set(); // playlist rows use ephemeral ids
+                    select({ kind: "playlist", value: p.id });
+                  }}>{p.name}</button>
+                <span class="cnt">{p.songCount}</span>
+              </div>
+            {/each}
+          {/if}
+        {/if}
         {#if navError}
           <div class="leaf empty err" title={navError}>navidrome unavailable</div>
         {/if}
@@ -1485,6 +1546,42 @@
   .leaf.smart.on .leafbtn {
     color: #8dff9e;
     background: #12301b;
+  }
+
+  /* Static sub-heading inside a tree group (e.g. NAVIDROME → PLAYLISTS). */
+  .leaf.sub {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 20px;
+    color: #6f6f6f;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    content-visibility: visible;
+  }
+
+  .leaf.sub .sublabel {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .leaf.sub .edit {
+    flex: none;
+    border-color: transparent;
+    background: transparent;
+    color: #4f4f4f;
+    padding: 1px 4px;
+  }
+
+  .leaf.sub .edit:hover {
+    color: #3ccb4e;
+  }
+
+  .leaf.smart .cnt {
+    flex: none;
+    padding-right: 4px;
+    color: #2f6f3a;
+    font-size: 10px;
   }
 
   /* ── right table ── */

@@ -30,8 +30,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navinamp_library::{Library, RemoteTrack};
-use navinamp_subsonic::{AlbumDetail, SongSummary, StreamFormat, SubsonicClient};
+use navinamp_library::{Library, RemoteTrack, Track, remote_path};
+use navinamp_subsonic::{AlbumDetail, PlaylistSummary, SongSummary, StreamFormat, SubsonicClient};
 
 use crate::library::{LibraryState, db_file, with_library};
 
@@ -431,6 +431,73 @@ pub async fn navidrome_rate(
         .map_err(|e| scrub_urls(&e.to_string()))
 }
 
+/// All playlists visible to the connected user (server order).
+#[tauri::command]
+pub async fn navidrome_playlists(
+    state: State<'_, NavidromeState>,
+) -> Result<Vec<PlaylistSummary>, String> {
+    let client = ensure_client(&state).await?;
+    client
+        .get_playlists()
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))
+}
+
+/// One server playlist's tracks as ephemeral library rows — nothing is
+/// written to the local DB, so the playlist view always reflects the server.
+/// Negative ids keep these rows distinct from stored ids (both are positive),
+/// and `remote_id` makes them playable through the normal remote path.
+#[tauri::command]
+pub async fn navidrome_playlist_tracks(
+    state: State<'_, NavidromeState>,
+    playlist_id: String,
+) -> Result<Vec<Track>, String> {
+    let client = ensure_client(&state).await?;
+    let songs = client
+        .get_playlist(&playlist_id)
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))?;
+    Ok(playlist_rows(&songs))
+}
+
+/// Map server playlist entries onto [`Track`] rows for the library table.
+fn playlist_rows(songs: &[SongSummary]) -> Vec<Track> {
+    songs
+        .iter()
+        .enumerate()
+        .map(|(i, song)| Track {
+            id: -((i as i64) + 1),
+            path: remote_path(&song.id),
+            mtime: 0,
+            size: song
+                .size
+                .map(|s| i64::try_from(s).unwrap_or(i64::MAX))
+                .unwrap_or(0),
+            title: song.title.clone(),
+            artist: song.artist.clone(),
+            album_artist: song.artist.clone(),
+            album: song.album.clone(),
+            album_key: String::new(),
+            genre: song.genre.clone().unwrap_or_default(),
+            year: (song.year > 0).then_some(i64::from(song.year)),
+            track_no: (song.track_no > 0).then_some(i64::from(song.track_no)),
+            disc_no: (song.disc_no > 0).then_some(i64::from(song.disc_no)),
+            duration_secs: song.duration_secs as f64,
+            bitrate_kbps: (song.bitrate_kbps > 0).then_some(i64::from(song.bitrate_kbps)),
+            samplerate: song.sampling_rate.map(i64::from),
+            channels: song.channel_count.map(i64::from),
+            codec: song.suffix.clone(),
+            rating: i64::from(song.user_rating.min(5)),
+            play_count: i64::try_from(song.play_count).unwrap_or(i64::MAX),
+            last_played_at: None,
+            date_added: 0,
+            source: SOURCE.into(),
+            remote_id: Some(song.id.clone()),
+            art_id: song.cover_art_id.clone(),
+        })
+        .collect()
+}
+
 /// Set the streaming format/bitrate used by [`navidrome_stream_url`].
 /// `original` forces the bitrate off (the file is served as stored).
 #[tauri::command]
@@ -732,5 +799,46 @@ mod tests {
         .unwrap();
         assert!(text.contains("\"bitrateKbps\":128"), "{text}");
         assert!(text.contains("\"syncedAt\":1"), "{text}");
+    }
+
+    fn song(id: &str) -> SongSummary {
+        SongSummary {
+            id: id.into(),
+            parent_id: "al-1".into(),
+            title: format!("Song {id}"),
+            artist: "Aphex Twin".into(),
+            artist_id: "ar-1".into(),
+            album: "Selected Ambient Works".into(),
+            album_id: "al-1".into(),
+            track_no: 1,
+            disc_no: 0,
+            year: 1992,
+            genre: Some("Electronic".into()),
+            duration_secs: 293,
+            bitrate_kbps: 906,
+            suffix: "flac".into(),
+            content_type: "audio/flac".into(),
+            sampling_rate: Some(44_100),
+            channel_count: Some(2),
+            size: Some(31_615_915),
+            cover_art_id: Some("al-1".into()),
+            play_count: 7,
+            user_rating: 4,
+            starred: false,
+        }
+    }
+
+    #[test]
+    fn playlist_rows_are_ephemeral_playable_tracks() {
+        let rows = playlist_rows(&[song("a"), song("b")]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].id, rows[1].id), (-1, -2));
+        assert_eq!(rows[0].path, "navidrome://a");
+        assert_eq!(rows[0].remote_id.as_deref(), Some("a"));
+        assert_eq!(rows[0].source, "navidrome");
+        assert_eq!(rows[0].rating, 4);
+        assert_eq!(rows[0].duration_secs, 293.0);
+        assert_eq!(rows[0].art_id.as_deref(), Some("al-1"));
+        assert_eq!(rows[0].codec, "flac");
     }
 }

@@ -12,6 +12,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { Track } from "../library/ipc";
 
 /** `source` value of synced Navidrome rows in the unified library. */
 export const REMOTE_SOURCE = "navidrome";
@@ -98,6 +99,29 @@ export function navidromeStar(remoteId: string, starred: boolean): Promise<void>
 /** Set the server-side rating (0 = clear, 1–5 stars) for a remote track. */
 export function navidromeRate(remoteId: string, rating: number): Promise<void> {
   return invoke<void>("navidrome_rate", { remoteId, rating });
+}
+
+/** One server playlist from `getPlaylists`. */
+export interface NavidromePlaylist {
+  id: string;
+  name: string;
+  songCount: number;
+  /** Total playlist duration in seconds. */
+  durationSecs: number;
+}
+
+/** All playlists visible to the connected user (browse-only). */
+export function navidromePlaylists(): Promise<NavidromePlaylist[]> {
+  return invoke<NavidromePlaylist[]>("navidrome_playlists");
+}
+
+/**
+ * One playlist's tracks as EPHEMERAL library rows (negative ids, source
+ * `navidrome`). They play like synced remote rows but are never written to
+ * the local DB, so the view always reflects the server.
+ */
+export function navidromePlaylistTracks(playlistId: string): Promise<Track[]> {
+  return invoke<Track[]>("navidrome_playlist_tracks", { playlistId });
 }
 
 /** Persist streaming prefs; `bitrateKbps` is only meaningful for transcodes. */
