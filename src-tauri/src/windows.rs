@@ -1269,6 +1269,7 @@ impl WindowManager {
                 let _ = win.hide();
             }
         }
+        crate::menu::sync_visibility(app, label, visible);
         self.tick();
         Ok(self.info_from_state())
     }

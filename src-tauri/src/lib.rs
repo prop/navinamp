@@ -3,6 +3,7 @@ mod audio;
 mod commands;
 mod library;
 mod media;
+mod menu;
 mod navidrome;
 mod skin;
 mod smart;
@@ -29,6 +30,11 @@ pub fn run() {
             // Creates the playlist/library windows, restores persisted
             // geometry and registers the queue-event relays.
             app.state::<windows::WindowManager>().init(app.handle());
+            // Native Window-menu toggles; after the manager so the initial
+            // checkmarks match the restored visibility.
+            if let Err(e) = menu::init(app.handle()) {
+                eprintln!("navinamp: cannot install menu: {e}");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
