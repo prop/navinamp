@@ -47,6 +47,10 @@
     durationSecs: number | null;
     volume: number;
     underrunFrames: number;
+    /** Engine track metadata (classic kbps/kHz/mono-stereo readouts). */
+    bitrateKbps: number | null;
+    sampleRateHz: number | null;
+    channels: number | null;
   };
 
   let state = $state<AudioState>({
@@ -55,6 +59,9 @@
     durationSecs: null,
     volume: 1,
     underrunFrames: 0,
+    bitrateKbps: null,
+    sampleRateHz: null,
+    channels: null,
   });
   let seeking = $state<number | null>(null);
 
@@ -359,6 +366,9 @@
       playlistVisible={windowIsVisible("playlist")}
       eqVisible={windowIsVisible("eq")}
       shadeActive={layoutMode === "shade"}
+      bitrateKbps={state.bitrateKbps}
+      sampleRateHz={state.sampleRateHz}
+      channels={state.channels}
       onaction={skinAction}
       onseek={(secs) => cmd("audio_seek", { secs })}
       onvolume={(v) => cmd("audio_set_volume", { volume: v })}

@@ -18,18 +18,17 @@
 - Queue persistence, recursive folder adds, always-on-top toggles
 - Runaway-window guard, native cursor/no-selection
 - Semantic releases (release-please) + Mac mini CI runner
+- Engine metadata in `audio_state` (bitrate, source sample rate, channels):
+  classic kbps/kHz digits and mono/stereo indicators are live
 
 ## Next up (priority order)
 
-1. **Engine metadata in `audio_state`** — bitrate, sample rate, channels.
-   Lights up the classic skin's bitrate/kHz digits and mono/stereo
-   indicators (currently blank/dim by design).
-2. **Ratings UI** — smart views can filter rating; nothing sets it.
+1. **Ratings UI** — smart views can filter rating; nothing sets it.
    Local write + Navidrome star/rating sync.
-3. **Navidrome playlist sync** — browse/import server playlists; publish
+2. **Navidrome playlist sync** — browse/import server playlists; publish
    smart views as server playlists (subsonic client methods exist).
-4. **Persisted volume + EQ** across restarts (localStorage or config file).
-5. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
+3. **Persisted volume + EQ** across restarts (localStorage or config file).
+4. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
    restart; the loader picks alphabetically).
 
 ## Known follow-ups / deferred
@@ -37,6 +36,9 @@
 - EQ: AUTO button (visual only), preset saving, live curve rendering,
   EQ window close button (decorative), duplicate HTML EqPanel in the
   library DEV section
+- Metadata bitrate is average source bytes ÷ duration; streams whose
+  container declares no duration (some transcodes) leave the kbps digits
+  blank by design
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
 - Devtools in release builds (needs the tauri `devtools` feature)

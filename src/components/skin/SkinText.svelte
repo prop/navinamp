@@ -16,10 +16,10 @@
    *        main.bmp, so it is skipped); hidden while stopped, blinking while
    *        paused (classic behavior).
    *      – params["display"]="bitrate"/"khz": the digit cells next to the
-   *        "kbps"/"khz" labels that are baked into main.bmp. The engine does
-   *        not report bitrate/sample-rate metadata yet, so these render
-   *        EMPTY (never garbage like the object id) — real values plug in
-   *        here once audio_state carries them.
+   *        "kbps"/"khz" labels that are baked into main.bmp. Values come
+   *        from the engine's `audio_state` metadata (average kbps, source
+   *        kHz); the cells stay empty when idle or when the engine does not
+   *        report metadata.
    *  · HTML TEXT (`.wal` skins / the fallback skin) — font-styled spans;
    *    the Wasabi `display` attribute decides the CONTENT and takes
    *    precedence over `params.text` — the fallback skin sets text=" " on
@@ -45,11 +45,16 @@
     position: number;
     /** Songticker content ("Artist - Title"), fed from queue.currentItem. */
     ticker: string;
+    /** Average bitrate (kbps) of the current track, from audio_state. */
+    bitrateKbps?: number | null;
+    /** Source sample rate (Hz) of the current track, from audio_state. */
+    sampleRateHz?: number | null;
     /** bitmap id -> data URL (the layout's image table). */
     images?: Record<string, string>;
   }
 
-  let { obj, status, position, ticker, images }: Props = $props();
+  let { obj, status, position, ticker, bitrateKbps = null, sampleRateHz = null, images }: Props =
+    $props();
 
   const o = $derived(obj.object.kind === "text" ? obj.object : null);
   const params = $derived(o?.params ?? {});
@@ -152,12 +157,12 @@
       case "status":
         return status.toUpperCase();
       // Classic synthesized readouts: digit cells beside the "kbps"/"khz"
-      // labels baked into main.bmp. Idle: the labels show through and the
-      // digit cells stay empty. TODO(metadata): render engine bitrate /
-      // sample-rate once audio_state carries them.
+      // labels baked into main.bmp. Emptied when the engine reports no
+      // metadata (stopped, or a source without a known duration).
       case "bitrate":
+        return bitrateKbps == null ? "" : String(Math.round(bitrateKbps));
       case "khz":
-        return "";
+        return sampleRateHz == null ? "" : String(Math.round(sampleRateHz / 1000));
       default:
         break;
     }
@@ -166,8 +171,9 @@
     // only matters for in-window constructions).
     switch (params["display"]) {
       case "bitrate":
+        return bitrateKbps == null ? "" : String(Math.round(bitrateKbps));
       case "khz":
-        return "";
+        return sampleRateHz == null ? "" : String(Math.round(sampleRateHz / 1000));
       default:
         return params["text"] ?? "";
     }

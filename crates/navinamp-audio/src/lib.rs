@@ -118,7 +118,7 @@ mod spectrum;
 
 pub use eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_RANGE_DB, EqPreset, EqState, eq_presets};
 pub use error::AudioError;
-pub use shared::PlaybackStatus;
+pub use shared::{PlaybackStatus, TrackMetadata};
 pub use sink::{AudioSink, SinkConfig};
 pub use sink_cpal::CpalSink;
 pub use sink_test::TestSink;
@@ -261,6 +261,12 @@ impl EngineHandle {
     /// Duration of the current track, if known.
     pub fn duration_secs(&self) -> Option<f64> {
         self.shared.duration_secs()
+    }
+
+    /// Audio properties of the current track (source sample rate, channel
+    /// count, average bitrate); `None` while stopped.
+    pub fn metadata(&self) -> Option<TrackMetadata> {
+        self.shared.metadata()
     }
 
     /// Target volume (0..=1).

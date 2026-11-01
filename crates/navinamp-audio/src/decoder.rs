@@ -39,6 +39,8 @@ pub(crate) struct PcmSource {
     pub replaygain_gain: f32,
     /// Exact frames decoded so far (media time).
     decoded_frames: u64,
+    /// Average bitrate of the source (kbps), when size and duration are known.
+    pub bitrate_kbps: Option<u32>,
     /// f32 interleaving buffer, grown to the largest packet seen.
     sample_buf: SampleBuffer<f32>,
     sample_buf_frames: u64,
@@ -54,9 +56,10 @@ impl PcmSource {
     /// file's ReplayGain tags are read in the same pass (lofty, best-effort).
     pub(crate) fn open(path: &Path) -> Result<Self, AudioError> {
         let mut file = File::open(path).map_err(AudioError::Io)?;
+        let source_len = file.metadata().ok().map(|m| m.len());
         let replaygain_gain = replaygain::scan(&mut file);
         file.rewind().map_err(AudioError::Io)?;
-        Self::probe(Box::new(file), replaygain_gain)
+        Self::probe(Box::new(file), replaygain_gain, source_len)
     }
 
     /// Open and probe a remote HTTP(S) media stream by content. The
@@ -67,13 +70,18 @@ impl PcmSource {
     /// ranged GET on range-capable servers).
     pub(crate) fn open_remote(url: &str) -> Result<Self, AudioError> {
         let mut stream = HttpStream::open(url).map_err(AudioError::Io)?;
+        let source_len = Some(stream.total_len());
         let replaygain_gain = replaygain::scan(&mut stream);
         stream.rewind().map_err(AudioError::Io)?;
-        Self::probe(Box::new(stream), replaygain_gain)
+        Self::probe(Box::new(stream), replaygain_gain, source_len)
     }
 
     /// Probe `source` (a `Read + Seek` media source) and build the decoder.
-    fn probe(source: Box<dyn MediaSource>, replaygain_gain: f32) -> Result<Self, AudioError> {
+    fn probe(
+        source: Box<dyn MediaSource>,
+        replaygain_gain: f32,
+        source_len: Option<u64>,
+    ) -> Result<Self, AudioError> {
         let mss = MediaSourceStream::new(source, Default::default());
 
         // Enable gapless so the reader provides encoder delay/padding trim info.
@@ -104,6 +112,12 @@ impl PcmSource {
             .codec_params
             .n_frames
             .map(|n| n as f64 / f64::from(rate));
+        // Average bitrate: source bytes over media duration. This is the
+        // classic "kbps" readout (VBR files show their average). Unknown
+        // duration or size (rare) leaves it blank rather than guessing.
+        let bitrate_kbps = source_len
+            .zip(duration_hint_secs)
+            .and_then(|(bytes, secs)| average_kbps(bytes, secs));
 
         let mut decoder = get_codecs()
             .make(&track.codec_params, &DecoderOptions::default())
@@ -166,6 +180,7 @@ impl PcmSource {
             duration_hint_secs,
             replaygain_gain,
             decoded_frames: (primed_interleaved.len() / channels_count) as u64,
+            bitrate_kbps,
             sample_buf: SampleBuffer::new(initial_frames, spec),
             sample_buf_frames: initial_frames,
             primed: primed_interleaved,
@@ -295,5 +310,38 @@ impl PcmSource {
 
         let t = self.time_base.calc_time(seeked.required_ts);
         Ok(t.seconds as f64 + t.frac)
+    }
+}
+
+/// Average bitrate in kbps from a source's byte length and media duration.
+/// Returns `None` for degenerate inputs instead of displaying garbage.
+fn average_kbps(bytes: u64, duration_secs: f64) -> Option<u32> {
+    if !duration_secs.is_finite() || duration_secs <= 0.0 || bytes == 0 {
+        return None;
+    }
+    let kbps = (bytes as f64 * 8.0 / duration_secs / 1000.0).round();
+    (kbps.is_finite() && (1.0..=100_000.0).contains(&kbps)).then_some(kbps as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::average_kbps;
+
+    #[test]
+    fn average_kbps_computes_classic_readout() {
+        // 0.5 s of 16-bit stereo 44.1 kHz PCM ≈ 1.41 Mbps (plus a tiny header).
+        let bytes = 44_100u64 * 2 * 2 / 2;
+        assert_eq!(average_kbps(bytes, 0.5), Some(1411));
+        // Typical 3-minute 192 kbps MP3.
+        assert_eq!(average_kbps(192_000 * 180 / 8, 180.0), Some(192));
+    }
+
+    #[test]
+    fn average_kbps_rejects_degenerate_inputs() {
+        assert_eq!(average_kbps(0, 10.0), None);
+        assert_eq!(average_kbps(1000, 0.0), None);
+        assert_eq!(average_kbps(1000, -1.0), None);
+        assert_eq!(average_kbps(1000, f64::NAN), None);
+        assert_eq!(average_kbps(1, 1e9), None); // rounds to 0 kbps
     }
 }

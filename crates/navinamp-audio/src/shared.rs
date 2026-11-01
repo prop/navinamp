@@ -32,6 +32,20 @@ pub enum PlaybackStatus {
     Paused,
 }
 
+/// Audio properties of the currently loaded track (what the classic Winamp
+/// display shows as kbps / kHz / mono-stereo). `sample_rate_hz` and
+/// `channels` describe the *source* media (before any sink-rate resampling),
+/// while `bitrate_kbps` is the average compressed bitrate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrackMetadata {
+    /// Source sample rate in Hz (e.g. 44100).
+    pub sample_rate_hz: u32,
+    /// Source channel count (1 = mono, 2 = stereo, …).
+    pub channels: u16,
+    /// Average bitrate in kbps, when the container/duration exposes it.
+    pub bitrate_kbps: Option<u32>,
+}
+
 impl PlaybackStatus {
     pub(crate) const fn to_u8(self) -> u8 {
         match self {
@@ -75,6 +89,8 @@ pub(crate) struct Shared {
     pub underrun_frames: AtomicU64,
     /// Append-only session log (pruned occasionally by the producer).
     pub sessions: Mutex<Vec<Session>>,
+    /// Properties of the current track (producer-writes, UI-reads).
+    metadata: Mutex<Option<TrackMetadata>>,
     /// EQ parameter store (lock-free; see `eq.rs`). Cloned into the output
     /// callback's DSP chain at sink construction.
     pub eq: std::sync::Arc<EqParams>,
@@ -97,6 +113,7 @@ impl Shared {
             frames_played: AtomicU64::new(0),
             underrun_frames: AtomicU64::new(0),
             sessions: Mutex::new(Vec::new()),
+            metadata: Mutex::new(None),
             eq: std::sync::Arc::new(EqParams::new()),
             tap: std::sync::Arc::new(SpectrumTap::new()),
             sink_rate: AtomicU32::new(44_100),
@@ -141,6 +158,16 @@ impl Shared {
         {
             last.duration_secs = Some(duration_secs);
         }
+    }
+
+    /// Publish the current track's audio properties (`None` when stopped).
+    pub(crate) fn set_metadata(&self, metadata: Option<TrackMetadata>) {
+        *self.metadata.lock().unwrap() = metadata;
+    }
+
+    /// The current track's audio properties (producer-writes, UI-reads).
+    pub(crate) fn metadata(&self) -> Option<TrackMetadata> {
+        *self.metadata.lock().unwrap()
     }
 
     /// The session containing the current playback position.

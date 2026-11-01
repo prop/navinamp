@@ -38,6 +38,12 @@ pub struct AudioStatePayload {
     pub duration_secs: Option<f64>,
     pub volume: f32,
     pub underrun_frames: u64,
+    /// Average bitrate of the current track in kbps (classic kbps readout).
+    pub bitrate_kbps: Option<u32>,
+    /// Source sample rate in Hz (classic kHz readout).
+    pub sample_rate_hz: Option<u32>,
+    /// Source channel count (mono/stereo indicators).
+    pub channels: Option<u16>,
 }
 
 fn status_name(s: PlaybackStatus) -> &'static str {
@@ -173,19 +179,28 @@ pub fn audio_set_volume(state: State<'_, Audio>, volume: f32) -> Result<(), Stri
 pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
     let guard = state.0.lock().unwrap();
     match guard.as_ref() {
-        Some(engine) => AudioStatePayload {
-            status: status_name(engine.status()).into(),
-            position_secs: engine.position_secs(),
-            duration_secs: engine.duration_secs(),
-            volume: engine.volume(),
-            underrun_frames: engine.underrun_frames(),
-        },
+        Some(engine) => {
+            let meta = engine.metadata();
+            AudioStatePayload {
+                status: status_name(engine.status()).into(),
+                position_secs: engine.position_secs(),
+                duration_secs: engine.duration_secs(),
+                volume: engine.volume(),
+                underrun_frames: engine.underrun_frames(),
+                bitrate_kbps: meta.and_then(|m| m.bitrate_kbps),
+                sample_rate_hz: meta.map(|m| m.sample_rate_hz),
+                channels: meta.map(|m| m.channels),
+            }
+        }
         None => AudioStatePayload {
             status: status_name(PlaybackStatus::Stopped).into(),
             position_secs: 0.0,
             duration_secs: None,
             volume: 1.0,
             underrun_frames: 0,
+            bitrate_kbps: None,
+            sample_rate_hz: None,
+            channels: None,
         },
     }
 }
@@ -255,5 +270,46 @@ pub fn audio_spectrum(state: State<'_, Audio>) -> Spectrum {
     match guard.as_ref() {
         Some(engine) => engine.spectrum(),
         None => Spectrum::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_state_payload_serializes_metadata_camel_case() {
+        let payload = AudioStatePayload {
+            status: "playing".into(),
+            position_secs: 12.5,
+            duration_secs: Some(210.0),
+            volume: 0.8,
+            underrun_frames: 0,
+            bitrate_kbps: Some(192),
+            sample_rate_hz: Some(44_100),
+            channels: Some(2),
+        };
+        let v = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(v["bitrateKbps"], 192);
+        assert_eq!(v["sampleRateHz"], 44_100);
+        assert_eq!(v["channels"], 2);
+    }
+
+    #[test]
+    fn idle_payload_serializes_null_metadata() {
+        let payload = AudioStatePayload {
+            status: "stopped".into(),
+            position_secs: 0.0,
+            duration_secs: None,
+            volume: 1.0,
+            underrun_frames: 0,
+            bitrate_kbps: None,
+            sample_rate_hz: None,
+            channels: None,
+        };
+        let v = serde_json::to_value(&payload).expect("serialize");
+        assert!(v["bitrateKbps"].is_null());
+        assert!(v["sampleRateHz"].is_null());
+        assert!(v["channels"].is_null());
     }
 }

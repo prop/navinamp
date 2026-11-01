@@ -186,6 +186,12 @@ enum Body {
 }
 
 impl<F: HttpFetch> HttpStream<F> {
+    /// Total resource length in bytes (the `total` field is always known —
+    /// `Content-Length` or a `Content-Range` total is required up front).
+    pub(crate) fn total_len(&self) -> u64 {
+        self.total
+    }
+
     /// Open `url`, fetching through `fetch` (tests inject a fake here).
     pub(crate) fn with_fetch(url: &str, fetch: F) -> io::Result<Self> {
         let resp = fetch.get(url, 0)?;

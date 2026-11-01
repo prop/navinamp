@@ -35,6 +35,10 @@
     position?: number;
     duration?: number;
     volume?: number;
+    /** Engine track metadata for the classic kbps/kHz and mono/stereo readouts. */
+    bitrateKbps?: number | null;
+    sampleRateHz?: number | null;
+    channels?: number | null;
     /** Songticker content ("Artist - Title" from queue.currentItem). */
     ticker?: string;
     /** TOGGLE_PLAYLIST on-state (the playlist window's visibility). */
@@ -66,6 +70,9 @@
     position = 0,
     duration = 0,
     volume = 0.5,
+    bitrateKbps = null,
+    sampleRateHz = null,
+    channels = null,
     ticker = "",
     playlistVisible = false,
     shadeActive = false,
@@ -186,9 +193,17 @@
           oncommit={(v) => sliderCommit(obj.object, v)}
         />
       {:else if obj.object.kind === "text"}
-        <SkinText {obj} {status} {position} {ticker} images={layout.images} />
+        <SkinText
+          {obj}
+          {status}
+          {position}
+          {ticker}
+          {bitrateKbps}
+          {sampleRateHz}
+          images={layout.images}
+        />
       {:else if obj.object.kind === "status"}
-        <SkinStatus {obj} images={layout.images} {status} />
+        <SkinStatus {obj} images={layout.images} {status} {channels} />
       {:else if obj.object.kind === "vis"}
         <SkinVis {obj} {status} />
       {:else}

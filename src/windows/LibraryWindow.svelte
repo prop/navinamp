@@ -61,6 +61,9 @@
     durationSecs: number | null;
     volume: number;
     underrunFrames: number;
+    bitrateKbps: number | null;
+    sampleRateHz: number | null;
+    channels: number | null;
   };
   let devState = $state<AudioState>({
     status: "stopped",
@@ -68,6 +71,9 @@
     durationSecs: null,
     volume: 1,
     underrunFrames: 0,
+    bitrateKbps: null,
+    sampleRateHz: null,
+    channels: null,
   });
   let seeking = $state<number | null>(null);
 
@@ -231,6 +237,19 @@
 
         <p class="status {devState.status}">
           {devState.status.toUpperCase()}
+          {#if devState.bitrateKbps != null || devState.sampleRateHz != null}
+            <span class="meta">
+              {devState.bitrateKbps ?? "—"} kbps ·
+              {devState.sampleRateHz != null
+                ? (devState.sampleRateHz / 1000).toFixed(1)
+                : "—"} kHz ·
+              {devState.channels != null
+                ? devState.channels === 1
+                  ? "mono"
+                  : "stereo"
+                : "—"}
+            </span>
+          {/if}
           {#if devState.underrunFrames > 0}
             <span class="warn">(underruns: {devState.underrunFrames})</span>
           {/if}
@@ -360,6 +379,12 @@
   }
 
   .status.stopped {
+    color: #808080;
+  }
+
+  .meta {
+    margin-left: 0.75rem;
+    letter-spacing: 0.02em;
     color: #808080;
   }
 

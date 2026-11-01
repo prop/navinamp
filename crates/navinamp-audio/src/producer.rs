@@ -24,7 +24,7 @@ use crate::error::AudioError;
 use crate::events::Events;
 use crate::resample::{ConvertStage, convert_channels};
 use crate::ring::{RingProducer, ring_buffer};
-use crate::shared::{PlaybackStatus, Session, Shared};
+use crate::shared::{PlaybackStatus, Session, Shared, TrackMetadata};
 use crate::sink::{AudioSink, SinkConfig};
 use crate::{Command, Event, TrackSource};
 
@@ -315,6 +315,7 @@ impl Producer {
         self.next = None;
         self.draining = false;
         self.drain_started = None;
+        self.shared.set_metadata(None);
         self.hard_reset();
         self.shared.set_status(PlaybackStatus::Stopped);
     }
@@ -556,6 +557,13 @@ impl Producer {
             duration_secs: duration,
             rate: self.sink_cfg.sample_rate,
         });
+        // Publish the track's audio properties for the classic kbps/kHz and
+        // mono/stereo readouts (source rate, not the possibly-resampled sink).
+        self.shared.set_metadata(Some(TrackMetadata {
+            sample_rate_hz: src.rate(),
+            channels: src.channels().min(u16::MAX as usize) as u16,
+            bitrate_kbps: src.bitrate_kbps,
+        }));
         self.events.emit(Event::TrackStarted {
             id,
             duration_secs: duration,
@@ -575,6 +583,7 @@ impl Producer {
         self.draining = false;
         self.drain_started = None;
         self.current = None;
+        self.shared.set_metadata(None);
         self.shared.set_status(PlaybackStatus::Stopped);
         self.events.emit(Event::EndOfQueue);
     }

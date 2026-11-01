@@ -74,9 +74,9 @@
 //! | `digitoffsets` | e.g. `12,24,42,54` | x offsets of the time display's four digit cells inside the object rect (the `:` colon is baked into main.bmp, so there is no colon glyph to draw) |
 //!
 //! Readout semantics: the bitrate/kHz **Text** objects use the typed `display`
-//! attribute with the values `bitrate`/`khz` (rendered empty until the engine
-//! reports metadata — the `kbps`/`khz` labels beside them are **baked into
-//! main.bmp**); the mono/stereo **Status** objects use `params["display"]`
+//! attribute with the values `bitrate`/`khz` (filled from the engine's
+//! `audio_state` metadata — the `kbps`/`khz` labels beside them are **baked
+//! into** main.bmp); the mono/stereo **Status** objects use `params["display"]`
 //! with the values `mono`/`stereo` (the channel-indicator labels: dim
 //! `image` until the engine reports channels, lit `activeimage` after).
 //! (`params` is serde-flattened, so a Text object cannot carry a
@@ -704,9 +704,9 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     // labels that are baked into main.bmp (x=111..126 and 156..166, y=43 —
     // Webamp's #kbps/#khz rects). Semantics ride in the TYPED `display`
     // attribute ("bitrate"/"khz" — see the conventions table); the renderer
-    // draws them EMPTY until the engine reports metadata — never an object
-    // id. (`params["display"]` would collide with the typed field under
-    // serde's flatten, hence the attribute.)
+    // fills them from the engine's audio_state metadata (`params["display"]`
+    // would collide with the typed field under serde's flatten, hence the
+    // attribute).
     for (id, x, w) in [("bitrate", 111, 15), ("khz", 156, 10)] {
         let mut params = Params::new();
         if let Some(font) = &text_font {

@@ -660,3 +660,52 @@ fn mono_source_is_duplicated_to_stereo() {
     wait_event(&sink, &rx, |e| matches!(e, Event::EndOfQueue));
     drive(&sink, || engine.status() == PlaybackStatus::Stopped);
 }
+
+// ---------------------------------------------------------------------------
+// (j) track metadata: source rate / channels / average bitrate, cleared on stop
+// ---------------------------------------------------------------------------
+
+#[test]
+fn metadata_reports_source_rate_channels_and_bitrate() {
+    let (wav, _expected) = stereo_sine_fixture("metadata-stereo", RATE, 0.5, 440.0);
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    assert_eq!(engine.metadata(), None, "idle engine has no metadata");
+
+    engine
+        .send(Command::Play(TrackSource::File(wav)))
+        .expect("play");
+    wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+
+    let meta = engine.metadata().expect("metadata while playing");
+    assert_eq!(meta.sample_rate_hz, RATE);
+    assert_eq!(meta.channels, 2);
+    let kbps = meta.bitrate_kbps.expect("wav bitrate");
+    // 16-bit stereo 44.1 kHz PCM = 1411 kbps (plus a 44-byte header).
+    assert!((1400..=1420).contains(&kbps), "kbps {kbps}");
+
+    engine.send(Command::Stop).expect("stop");
+    drive(&sink, || engine.status() == PlaybackStatus::Stopped);
+    assert_eq!(engine.metadata(), None, "metadata cleared on stop");
+
+    // A mono 48 kHz file on a 44.1 kHz sink: metadata follows the SOURCE, not
+    // the resampled output.
+    let pcm = sine_i16(48_000, 24_000, 440.0, 0.5, 1);
+    let path = temp_path("metadata-mono-48k");
+    write_wav(&path, 48_000, 1, &pcm).expect("write mono 48k wav");
+    engine
+        .send(Command::Play(TrackSource::File(path)))
+        .expect("play mono");
+    wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+
+    let meta = engine.metadata().expect("mono metadata");
+    assert_eq!(meta.sample_rate_hz, 48_000);
+    assert_eq!(meta.channels, 1);
+
+    // Let the queue end; metadata must go with it.
+    wait_event(&sink, &rx, |e| matches!(e, Event::EndOfQueue));
+    drive(&sink, || engine.status() == PlaybackStatus::Stopped);
+    assert_eq!(engine.metadata(), None, "metadata cleared at end of queue");
+}
