@@ -177,6 +177,20 @@ impl Library {
         Ok(remote::sync_remote(&self.conn, &tracks)?)
     }
 
+    /// Upsert one batch of remote rows **without pruning** — the incremental
+    /// sync writes while it walks, so the library UI can render rows before
+    /// the whole server library has landed. Call [`Self::prune_remote`] with
+    /// every id seen once the walk completes.
+    pub fn upsert_remote(&self, tracks: &[RemoteTrack]) -> Result<RemoteSyncReport> {
+        Ok(remote::upsert_remote(&self.conn, tracks)?)
+    }
+
+    /// Remove navidrome rows not present in `seen` (the completed sync's id
+    /// set). Local rows are never touched. Returns the number removed.
+    pub fn prune_remote(&self, seen: &std::collections::HashSet<String>) -> Result<u64> {
+        Ok(remote::prune_remote(&self.conn, seen)?)
+    }
+
     /// Ranked FTS5 search over title/artist/album/genre; each whitespace
     /// term is matched as a case-insensitive prefix (`beatl` → Beatles).
     pub fn search(&self, q: &str, limit: u32) -> Result<Vec<Track>> {

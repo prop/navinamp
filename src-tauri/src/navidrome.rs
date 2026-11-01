@@ -23,6 +23,7 @@
 //! Credential hygiene: Subsonic stream/API URLs embed the auth token;
 //! every error string that crosses IPC is scrubbed of URLs (`<url>`).
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -41,6 +42,9 @@ const PROGRESS_EVENT: &str = "navidrome-progress";
 const SYNCED_EVENT: &str = "navidrome-synced";
 /// Emit progress at most every N albums (plus the very last one).
 const PROGRESS_EVERY: u64 = 32;
+/// Flush decoded rows to the library at least every N tracks (so the UI can
+/// render partial results during a long sync) or on every progress tick.
+const SYNC_BATCH_TRACKS: usize = 512;
 /// The `source` value for synced rows.
 const SOURCE: &str = "navidrome";
 
@@ -732,6 +736,7 @@ fn run_sync(
         emit_progress(app, 0, total);
 
         let mut tracks: Vec<RemoteTrack> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         let mut scanned: u64 = 0;
         for artist in &artists {
             // Per-artist failure ( vanished artist, network hiccup) is
@@ -752,7 +757,12 @@ fn run_sync(
             for album in albums {
                 match client.get_album(&album.id).await {
                     Ok(detail) => {
-                        tracks.extend(detail.songs.iter().map(|song| map_song(&detail, song)))
+                        for song in &detail.songs {
+                            if !song.id.is_empty() {
+                                seen.insert(song.id.clone());
+                            }
+                            tracks.push(map_song(&detail, song));
+                        }
                     }
                     Err(e) => report.errors.push(format!(
                         "album `{}`: {}",
@@ -762,20 +772,44 @@ fn run_sync(
                 }
                 scanned += 1;
                 if scanned.is_multiple_of(PROGRESS_EVERY) || scanned == total {
+                    // Persist the rows decoded so far *before* announcing
+                    // progress: the library pane refreshes on these events.
+                    flush_remote_batch(library, &mut tracks, &mut report)?;
                     emit_progress(app, scanned.min(total), total);
+                } else if tracks.len() >= SYNC_BATCH_TRACKS {
+                    flush_remote_batch(library, &mut tracks, &mut report)?;
                 }
             }
         }
 
-        let db_report = library
-            .sync_remote(tracks)
-            .map_err(|e| format!("library sync failed: {e}"))?;
-        report.tracks_added = db_report.added;
-        report.tracks_updated = db_report.updated;
-        report.tracks_removed = db_report.removed;
+        flush_remote_batch(library, &mut tracks, &mut report)?;
+        // Prune only after a complete walk: a failed sync must never delete
+        // rows it simply did not reach.
+        report.tracks_removed = library
+            .prune_remote(&seen)
+            .map_err(|e| format!("library sync prune failed: {e}"))?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
     })
+}
+
+/// Upsert one decoded batch so the library pane can render partial results
+/// while the walk continues; the final prune only runs after a full success.
+fn flush_remote_batch(
+    library: &Library,
+    tracks: &mut Vec<RemoteTrack>,
+    report: &mut SyncReport,
+) -> Result<(), String> {
+    if tracks.is_empty() {
+        return Ok(());
+    }
+    let batch = std::mem::take(tracks);
+    let db = library
+        .upsert_remote(&batch)
+        .map_err(|e| format!("library sync failed: {e}"))?;
+    report.tracks_added += db.added;
+    report.tracks_updated += db.updated;
+    Ok(())
 }
 
 /// Song + enclosing album → library row. `album_artist` comes from the

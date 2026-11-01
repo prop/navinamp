@@ -152,12 +152,18 @@
   let nodeTracks = $state.raw<Track[] | null>(null);
   let nodeError = $state<string | null>(null);
   let nodeLoading = $state(false);
+  /** Last queried node (selection + chip); distinguishes a real node change
+   *  from a background re-run (scan/sync progress) so rows don't blank. */
+  let nodeQueryKey = "";
 
   $effect(() => {
     // Track selection + dataVersion + source chip; re-runs the pane query.
     const sel = selection;
     void dataVersion;
     void sourceFilter;
+    const key = `${selKey(sel)}::${sourceFilter}`;
+    const changed = key !== nodeQueryKey;
+    nodeQueryKey = key;
     let cancelled = false;
     if (sel.kind === "all" || sel.kind === "server") {
       nodeTracks = null;
@@ -167,6 +173,9 @@
         cancelled = true;
       };
     }
+    // A new node starts from "loading…"; a background refresh keeps the
+    // current rows visible until the new result lands.
+    if (changed) nodeTracks = null;
     nodeLoading = true;
     nodeError = null;
     (async () => {
@@ -314,11 +323,6 @@
 
   const albumsShown = $derived(
     sourceFilter === "all" ? albums : albums.filter((a) => chipAlbumKeys.has(a.albumKey)),
-  );
-
-  /** Synced remote rows, for the REMOTE TRACKS count in the tree. */
-  const remoteTrackCount = $derived(
-    allTracks.reduce((n, t) => (t.source === REMOTE_SOURCE ? n + 1 : n), 0),
   );
 
   const displayed = $derived.by(() => {
@@ -534,6 +538,15 @@
   // ── navidrome (M5) ─────────────────────────────────────────────────────────
 
   let navStatus = $state.raw<NavidromeStatus | null>(null);
+
+  /** Synced remote rows, for the REMOTE TRACKS count in the tree. While
+   *  connected this reads the backend's live count, which advances during a
+   *  sync as batches land. */
+  const remoteTrackCount = $derived(
+    navStatus?.configured === true
+      ? navStatus.trackCount
+      : allTracks.reduce((n, t) => (t.source === REMOTE_SOURCE ? n + 1 : n), 0),
+  );
   let navError = $state<string | null>(null);
   let navSyncing = $state(false);
   let navProgress = $state.raw<NavidromeProgressPayload | null>(null);
@@ -746,12 +759,21 @@
     }
   }
 
+  let lastProgressRefresh = 0;
   $effect(() => {
     void refreshNavStatus();
     const up = onNavidromeProgress((p) => {
       // Events also fire for syncs started elsewhere — latch onto them.
       navSyncing = true;
       navProgress = p;
+      // Batches land in the DB as the walk advances; refresh the current
+      // pane (and the tree count) at most once a second while syncing.
+      const now = performance.now();
+      if (now - lastProgressRefresh >= 1000) {
+        lastProgressRefresh = now;
+        dataVersion++; // re-run the current node query
+        void refreshNavStatus(); // live REMOTE TRACKS count
+      }
     });
     const us = onNavidromeSynced((payload) => {
       navSyncing = false;
@@ -1203,7 +1225,7 @@
         <div class="rows" role="listbox" aria-label="track list">
           {#if viewError}
             <div class="msg err">{viewError}</div>
-          {:else if nodeLoading && searchResults == null && selection.kind !== "all"}
+          {:else if nodeLoading && nodeTracks == null && searchResults == null && selection.kind !== "all"}
             <div class="msg">loading…</div>
           {:else if displayed.length === 0}
             {#if selection.kind === "remote" && searchResults == null}
@@ -1302,6 +1324,14 @@
   </div>
 
   <footer class="bar">
+    {#if navSyncing}
+      <span class="syncnote">
+        navidrome syncing…
+        {navProgress
+          ? `${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
+          : ""}
+      </span>
+    {/if}
     <span class="totals">{footerText}</span>
     {#if displayed.length > 0 && selectedIds.size > 0}
       <span class="selnote">{selectedIds.size.toLocaleString()} selected</span>
@@ -2051,6 +2081,12 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 10px;
     color: #3ccb4e;
+  }
+
+  .syncnote {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    color: #d8a63c;
   }
 
   .selnote {

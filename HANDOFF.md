@@ -49,6 +49,9 @@
   now draws the live response curve
 - Context menus (playlist + library rows): Play/Remove/Enqueue, star,
   rating, Copy path; the stock webview menu is replaced on those rows
+- Navidrome sync renders incrementally: rows are upserted to the library in
+  album batches during the walk, and the REMOTE TRACKS pane + tree count
+  refresh about once a second; pruning only runs after a complete walk
 
 ## Next up
 

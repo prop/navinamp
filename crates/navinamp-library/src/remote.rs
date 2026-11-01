@@ -34,10 +34,11 @@ pub fn remote_id_from_path(path: &str) -> Option<&str> {
     path.strip_prefix("navidrome://")
 }
 
-/// Upserts `tracks` (source `navidrome`) and removes navidrome rows whose
-/// `remote_id` is absent from the batch. See the module docs for the exact
-/// semantics; `frozen` is the caller's report.
-pub(super) fn sync_remote(
+/// Upserts one batch of remote tracks, **without removals**. The sync walk
+/// calls this incrementally so the library UI can render rows before the
+/// whole server library has landed; call [`prune_remote`] with every id seen
+/// once the walk completes.
+pub(super) fn upsert_remote(
     conn: &Connection,
     tracks: &[RemoteTrack],
 ) -> rusqlite::Result<RemoteSyncReport> {
@@ -94,34 +95,51 @@ pub(super) fn sync_remote(
                 report.updated += 1;
             }
         }
+    }
+    tx.commit()?;
+    Ok(report)
+}
 
-        // Removal, scoped strictly to navidrome rows: collect the batch's
-        // ids, then delete rows of this source whose id is missing. Local
-        // rows are not considered candidates at all.
-        let mut seen: HashSet<&str> = HashSet::with_capacity(tracks.len());
-        for t in tracks {
-            if !t.remote_id.is_empty() {
-                seen.insert(t.remote_id.as_str());
-            }
-        }
-        {
-            let mut stmt =
-                tx.prepare("SELECT id, remote_id FROM tracks WHERE source = 'navidrome'")?;
-            let candidates: Vec<(i64, Option<String>)> = stmt
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<Result<_, _>>()?;
-            drop(stmt);
-            let mut delete = tx.prepare("DELETE FROM tracks WHERE id = ?1")?;
-            for (id, remote_id) in candidates {
-                let keep = remote_id.as_deref().is_some_and(|rid| seen.contains(rid));
-                if !keep {
-                    delete.execute([id])?;
-                    report.removed += 1;
-                }
+/// Deletes navidrome rows whose `remote_id` is absent from `seen`. Scoped
+/// strictly to `source = 'navidrome'` — local rows are never candidates.
+/// Returns the number removed. Only called after a *complete* sync walk, so
+/// a failed sync never prunes rows it simply did not reach.
+pub(super) fn prune_remote(conn: &Connection, seen: &HashSet<String>) -> rusqlite::Result<u64> {
+    let tx = conn.unchecked_transaction()?;
+    let mut removed = 0u64;
+    {
+        let mut stmt = tx.prepare("SELECT id, remote_id FROM tracks WHERE source = 'navidrome'")?;
+        let candidates: Vec<(i64, Option<String>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut delete = tx.prepare("DELETE FROM tracks WHERE id = ?1")?;
+        for (id, remote_id) in candidates {
+            let keep = remote_id.as_deref().is_some_and(|rid| seen.contains(rid));
+            if !keep {
+                delete.execute([id])?;
+                removed += 1;
             }
         }
     }
     tx.commit()?;
+    Ok(removed)
+}
+
+/// One-shot upsert + prune (tests and callers that already hold the full
+/// batch). The incremental sync path uses [`upsert_remote`] per batch and
+/// [`prune_remote`] at the end.
+pub(super) fn sync_remote(
+    conn: &Connection,
+    tracks: &[RemoteTrack],
+) -> rusqlite::Result<RemoteSyncReport> {
+    let mut report = upsert_remote(conn, tracks)?;
+    let seen: HashSet<String> = tracks
+        .iter()
+        .filter(|t| !t.remote_id.is_empty())
+        .map(|t| t.remote_id.clone())
+        .collect();
+    report.removed = prune_remote(conn, &seen)?;
     Ok(report)
 }
 

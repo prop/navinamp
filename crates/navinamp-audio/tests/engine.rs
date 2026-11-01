@@ -14,7 +14,10 @@ use navinamp_audio::{Command, EngineHandle, Event, PlaybackStatus, TestSink, Tra
 use common::{as_expected_f32, sine_i16, stereo_sine_fixture, temp_path, write_wav};
 
 const RATE: u32 = 44100;
-const TIMEOUT: Duration = Duration::from_secs(10);
+// Wall-clock budget for pull-driven conditions. Generous on purpose: the
+// whole workspace's tests run in parallel, and a loaded machine can starve
+// the audio producer far beyond real-time.
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 fn engine_on(sink: &TestSink) -> EngineHandle {
     EngineHandle::start_with_sink(sink.clone()).expect("engine start")

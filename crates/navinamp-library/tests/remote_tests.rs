@@ -296,3 +296,40 @@ fn empty_remote_ids_are_skipped() {
         0
     );
 }
+
+#[test]
+fn batched_upserts_defer_pruning_until_the_walk_completes() {
+    let (_scratch, library) = db("remote-batched");
+    library
+        .sync_remote(vec![rt("t1", "A"), rt("t2", "B")])
+        .unwrap();
+
+    // A mid-walk batch inserts rows but never removes unseen ones.
+    let report = library.upsert_remote(&[rt("t3", "C")]).unwrap();
+    assert_eq!((report.added, report.updated, report.removed), (1, 0, 0));
+    assert_eq!(
+        library
+            .tracks_filtered(&TrackFilter {
+                source: Some("navidrome".into()),
+                ..TrackFilter::default()
+            })
+            .unwrap()
+            .len(),
+        3
+    );
+
+    // The final prune (complete walk) removes rows missing from `seen`.
+    let seen: std::collections::HashSet<String> =
+        ["t1", "t3"].iter().map(|id| (*id).to_string()).collect();
+    assert_eq!(library.prune_remote(&seen).unwrap(), 1);
+    let ids: Vec<String> = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap()
+        .into_iter()
+        .filter_map(|t| t.remote_id)
+        .collect();
+    assert_eq!(ids, vec!["t1", "t3"]);
+}
