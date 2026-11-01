@@ -34,6 +34,7 @@
    * friendly inline notes via `friendlyIpcError` — never a crash.
    */
   import { open } from "@tauri-apps/plugin-dialog";
+  import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import SmartViewEditor from "./SmartViewEditor.svelte";
   import {
     friendlyIpcError,
@@ -690,6 +691,56 @@
     }
   }
 
+  // ── row context menu (play / enqueue / star / rating) ───────────────────
+
+  interface RowMenu {
+    x: number;
+    y: number;
+    track: Track;
+  }
+  let rowMenu = $state<RowMenu | null>(null);
+
+  const rowMenuItems = $derived.by((): ContextMenuItem[] => {
+    const m = rowMenu;
+    if (!m) return [];
+    const t = m.track;
+    const list: ContextMenuItem[] = [
+      { id: "play", label: "Play now" },
+      { id: "enqueue", label: "Enqueue" },
+      { id: "sep", label: "", separator: true },
+    ];
+    if (t.source === REMOTE_SOURCE && t.remoteId != null) {
+      list.push({
+        id: "star",
+        label: isStarred(t) ? "Unstar on Navidrome" : "Star on Navidrome",
+      });
+    }
+    list.push({ id: "rate", label: "rating", rating: ratingOf(t) });
+    return list;
+  });
+
+  function openRowMenu(e: MouseEvent, t: Track): void {
+    e.preventDefault();
+    rowMenu = { x: e.clientX, y: e.clientY, track: t };
+  }
+
+  function rowMenuSelect(id: string): void {
+    const m = rowMenu;
+    rowMenu = null;
+    if (!m) return;
+    const t = m.track;
+    if (id === "play") {
+      onplaynow([toMeta(t)]);
+    } else if (id === "enqueue") {
+      onenqueue([toMeta(t)]);
+    } else if (id === "star") {
+      void toggleStar(t);
+    } else if (id.startsWith("rate:")) {
+      const rating = Number(id.slice("rate:".length));
+      if (Number.isFinite(rating)) void rateTrack(t, rating);
+    }
+  }
+
   $effect(() => {
     void refreshNavStatus();
     const up = onNavidromeProgress((p) => {
@@ -1188,7 +1239,8 @@
                 tabindex="-1"
                 title={t.path}
                 onpointerdown={(e) => rowDown(e, i)}
-                ondblclick={() => onplaynow([toMeta(t)])}>
+                ondblclick={() => onplaynow([toMeta(t)])}
+                oncontextmenu={(e) => openRowMenu(e, t)}>
                 <span class="c-num">{i + 1}</span>
                 <span class="c-title">{#if t.source === REMOTE_SOURCE}<span class="rmark" title="navidrome track">◈ </span>{/if}{t.title !== "" ? t.title : baseName(t.path)}</span>
                 <span class="c-artist">{t.artist}</span>
@@ -1267,6 +1319,15 @@
       onclose={() => (showSettings = false)}
       onchanged={() => void onNavChanged()}
       onlog={onlog} />
+  {/if}
+
+  {#if rowMenu}
+    <ContextMenu
+      x={rowMenu.x}
+      y={rowMenu.y}
+      items={rowMenuItems}
+      onselect={rowMenuSelect}
+      onclose={() => (rowMenu = null)} />
   {/if}
 </div>
 

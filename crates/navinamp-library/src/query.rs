@@ -288,6 +288,17 @@ pub(super) fn set_starred(
     Ok(())
 }
 
+/// One track by its stored `path` (local path or `navidrome://id`), if it
+/// exists. Used by the context menus to show the current star/rating state.
+pub(super) fn track_by_path(conn: &Connection, path: &str) -> rusqlite::Result<Option<Track>> {
+    conn.query_row(
+        &format!("SELECT {} FROM tracks WHERE path = ?1", track_columns("")),
+        [path],
+        track_from_row,
+    )
+    .optional()
+}
+
 /// The stored art id of the track at `path`, if any (local content hash
 /// or Navidrome `coverArt` id — the caller disambiguates via the row's
 /// `source`). Unknown paths answer `None`; this is a point lookup on the

@@ -251,6 +251,11 @@ impl Library {
         Ok(query::set_starred(&self.conn, remote_id, starred)?)
     }
 
+    /// One row by stored `path` (local path or `navidrome://id`), if known.
+    pub fn track_by_path(&self, path: &str) -> Result<Option<Track>> {
+        Ok(query::track_by_path(&self.conn, path)?)
+    }
+
     /// The stored art id for the track at `path`, if any — a local
     /// content hash (servable from the art cache) or, for `navidrome`
     /// rows, the server's `coverArt` id. Unknown paths answer `None`; the

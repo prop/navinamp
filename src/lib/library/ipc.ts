@@ -233,6 +233,15 @@ export function librarySetRating(path: string, rating: number): Promise<void> {
   return invoke<void>("library_set_rating", { path, rating });
 }
 
+/**
+ * One library row by stored path (local or `navidrome://…`); `null` when the
+ * path is unknown (e.g. a remote track not synced yet). Context menus use it
+ * to reflect the current star/rating state.
+ */
+export function libraryTrack(path: string): Promise<Track | null> {
+  return invoke<Track | null>("library_track", { path });
+}
+
 /** The persisted scan roots, as configured by the last `library_scan`. */
 export function libraryRoots(): Promise<string[]> {
   return invoke<string[]>("library_roots");

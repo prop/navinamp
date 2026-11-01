@@ -706,3 +706,21 @@ fn open_migrates_a_tracks_table_created_before_starred() {
     assert!(tracks.iter().all(|t| !t.starred));
     library.set_starred("anything", true).unwrap();
 }
+
+#[test]
+fn track_by_path_returns_the_row_or_none() {
+    let (_scratch, library) = scanned_library("track-by-path");
+    let path = library.tracks_filtered(&TrackFilter::default()).unwrap()[0]
+        .path
+        .clone();
+
+    let track = library.track_by_path(&path).unwrap().expect("known path");
+    assert_eq!(track.path, path);
+    assert!(!track.starred);
+    assert!(
+        library
+            .track_by_path("/no/such/track.mp3")
+            .unwrap()
+            .is_none()
+    );
+}

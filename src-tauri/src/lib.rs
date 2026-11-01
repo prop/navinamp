@@ -72,6 +72,7 @@ pub fn run() {
             library::expand_audio_paths,
             library::library_mark_played,
             library::library_set_rating,
+            library::library_track,
             library::art_for_track,
             smart::smart_views_list,
             smart::smart_view_save,

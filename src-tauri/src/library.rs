@@ -339,6 +339,20 @@ pub fn library_set_rating(
     })
 }
 
+/// One library row by stored path (`navidrome://…` for remote tracks), or
+/// `null` when the path is unknown (e.g. a remote track not synced yet).
+/// Context menus use it to show the current star/rating state.
+#[tauri::command]
+pub fn library_track(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    path: String,
+) -> Result<Option<navinamp_library::Track>, String> {
+    with_library(&app, &state, |library| {
+        library.track_by_path(&path).map_err(|e| e.to_string())
+    })
+}
+
 /// The stored art id for one track path — a local content hash (build a
 /// `navinamp-art:` URL from it) or, for `navidrome://` paths, the server's
 /// `coverArt` id (feed to `navidrome_art_url`). `null` when the track has

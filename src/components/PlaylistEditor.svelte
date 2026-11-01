@@ -14,6 +14,9 @@
    */
   import type { QueueItem } from "../lib/player/queue.svelte";
   import type { SkinTheme } from "../lib/skin/theme";
+  import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
+  import { librarySetRating, libraryTrack } from "../lib/library/ipc";
+  import { navidromeRate, navidromeStar } from "../lib/navidrome/ipc";
 
   interface Props {
     items: QueueItem[];
@@ -104,6 +107,124 @@
     if (to !== from) onmove(from, to);
   }
 
+  // ── right-click menu (play / remove / star / rating) ─────────────────────
+  // Playlist items carry no star/rating state, so the open menu looks the row
+  // up in the library (fetch once per path, then cached in this window).
+
+  interface StarInfo {
+    starred: boolean;
+    rating: number;
+  }
+  interface MenuState {
+    x: number;
+    y: number;
+    index: number;
+  }
+
+  let menu = $state<MenuState | null>(null);
+  let menuInfo = $state<StarInfo | null>(null);
+  const starCache = new Map<string, StarInfo>();
+
+  const menuItems = $derived.by((): ContextMenuItem[] => {
+    const m = menu;
+    if (!m) return [];
+    const item = items[m.index];
+    if (!item) return [];
+    const list: ContextMenuItem[] = [
+      { id: "play", label: "Play" },
+      { id: "remove", label: "Remove from queue", danger: true },
+    ];
+    if (item.remoteId != null) {
+      list.push({ id: "sep", label: "", separator: true });
+      if (menuInfo == null) {
+        list.push({ id: "star-loading", label: "loading star state…", disabled: true });
+      } else {
+        list.push({
+          id: "star",
+          label: menuInfo.starred ? "Unstar on Navidrome" : "Star on Navidrome",
+        });
+        list.push({ id: "rate", label: "rating", rating: menuInfo.rating });
+      }
+    }
+    return list;
+  });
+
+  function openMenu(e: MouseEvent, index: number): void {
+    e.preventDefault();
+    const item = items[index];
+    if (!item) return;
+    selected = index;
+    const cached = item.remoteId != null ? starCache.get(item.path) : null;
+    menuInfo = cached ?? null;
+    menu = { x: e.clientX, y: e.clientY, index };
+    if (item.remoteId != null && cached == null) {
+      void libraryTrack(item.path)
+        .then((track) => {
+          const info = { starred: track?.starred ?? false, rating: track?.rating ?? 0 };
+          starCache.set(item.path, info);
+          if (menu?.index === index) menuInfo = info;
+        })
+        .catch(() => {
+          if (menu?.index === index) menuInfo = { starred: false, rating: 0 };
+        });
+    }
+  }
+
+  async function mirrorStar(item: QueueItem, starred: boolean): Promise<void> {
+    if (item.remoteId == null) return;
+    const previous = starCache.get(item.path) ?? { starred: !starred, rating: 0 };
+    const next = { ...previous, starred };
+    starCache.set(item.path, next);
+    menuInfo = next;
+    try {
+      await navidromeStar(item.remoteId, starred);
+    } catch (e) {
+      starCache.set(item.path, previous);
+      menuInfo = previous;
+      console.warn(`[navinamp] star failed: ${e}`);
+    }
+  }
+
+  async function setItemRating(item: QueueItem, rating: number): Promise<void> {
+    const previous = starCache.get(item.path) ?? { starred: false, rating: 0 };
+    const next = { ...previous, rating };
+    starCache.set(item.path, next);
+    menuInfo = next;
+    try {
+      await librarySetRating(item.path, rating);
+    } catch (e) {
+      starCache.set(item.path, previous);
+      menuInfo = previous;
+      console.warn(`[navinamp] rating failed: ${e}`);
+      return;
+    }
+    if (item.remoteId != null) {
+      try {
+        await navidromeRate(item.remoteId, rating);
+      } catch (e) {
+        console.warn(`[navinamp] rating push failed (kept locally): ${e}`);
+      }
+    }
+  }
+
+  function menuSelect(id: string): void {
+    const m = menu;
+    menu = null;
+    if (!m) return;
+    const item = items[m.index];
+    if (!item) return;
+    if (id === "play") {
+      onplay(m.index);
+    } else if (id === "remove") {
+      onremove(m.index);
+    } else if (id === "star") {
+      void mirrorStar(item, !(menuInfo?.starred ?? false));
+    } else if (id.startsWith("rate:")) {
+      const rating = Number(id.slice("rate:".length));
+      if (Number.isFinite(rating)) void setItemRating(item, rating);
+    }
+  }
+
   function listKey(e: KeyboardEvent & { currentTarget: HTMLElement }): void {
     if (items.length === 0) return;
     switch (e.key) {
@@ -164,6 +285,7 @@
           onpointerup={rowUp}
           onpointercancel={() => (drag = null)}
           ondblclick={() => onplay(i)}
+          oncontextmenu={(e) => openMenu(e, i)}
         >
           <span class="marker">{i === currentIndex ? "▶" : ""}</span>
           <span class="text">{i + 1}. {label(item)}</span>
@@ -192,6 +314,15 @@
     <span class="totals">{totalText}</span>
   </footer>
 </div>
+
+{#if menu}
+  <ContextMenu
+    x={menu.x}
+    y={menu.y}
+    items={menuItems}
+    onselect={menuSelect}
+    onclose={() => (menu = null)} />
+{/if}
 
 <style>
   .pl {
