@@ -20,6 +20,13 @@
   import EqPanel from "../components/EqPanel.svelte";
   import MediaLibrary from "../components/MediaLibrary.svelte";
   import {
+    chooseSkin,
+    listSkins,
+    loadSkin,
+    selectedSkinId,
+    type SkinInfo,
+  } from "../lib/skin/load";
+  import {
     emitMediaCommand,
     queueIntent,
     queuePlayNow,
@@ -44,6 +51,54 @@
   const queueNote = $derived(
     `QUEUE ${snap?.currentIndex == null ? "--" : snap.currentIndex + 1}/${snap?.items.length ?? 0}`,
   );
+
+  // ── skin switcher (validates, persists, broadcasts; player + EQ reload) ──
+
+  let skins = $state.raw<SkinInfo[]>([]);
+  let skinChoice = $state("");
+  let skinBusy = $state(false);
+  let skinNote = $state<string | null>(null);
+  let skinError = $state<string | null>(null);
+
+  /** Prefer the persisted choice, then the loader's default pick. */
+  function currentSkinId(list: SkinInfo[]): string {
+    const wanted = selectedSkinId();
+    if (wanted != null && list.some((s) => s.id === wanted)) return wanted;
+    return list.find((s) => s.id !== "fallback")?.id ?? list[0]?.id ?? "";
+  }
+
+  async function refreshSkins(): Promise<void> {
+    try {
+      const list = await listSkins();
+      skins = list;
+      skinChoice = currentSkinId(list);
+      skinError = null;
+    } catch (e) {
+      skinError = `skin list: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async function applySkin(): Promise<void> {
+    if (skinChoice === "" || skinBusy) return;
+    skinBusy = true;
+    skinNote = null;
+    skinError = null;
+    try {
+      // Validate + warm the backend cache before telling the windows.
+      await loadSkin(skinChoice);
+      await chooseSkin(skinChoice);
+      skinNote = `applied ${skinChoice}`;
+      logLine(`skin: ${skinChoice}`);
+    } catch (e) {
+      skinError = `skin: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      skinBusy = false;
+    }
+  }
+
+  $effect(() => {
+    void refreshSkins();
+  });
 
   let log = $state<string[]>([]);
 
@@ -159,6 +214,22 @@
     onlog={logLine} />
 
   <EqPanel />
+
+  <section class="skinbar">
+    <span class="skinlabel">skin</span>
+    <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
+      {#each skins as s (s.id)}
+        <option value={s.id}>{s.id}{s.id === "fallback" ? " (built-in)" : ""}</option>
+      {/each}
+    </select>
+    <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
+      {skinBusy ? "APPLYING…" : "APPLY"}
+    </button>
+    <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
+      >↻</button>
+    {#if skinNote}<span class="ok">{skinNote}</span>{/if}
+    {#if skinError}<span class="err">{skinError}</span>{/if}
+  </section>
 
   <section class="dev">
     <button class="devtoggle" class:on={devOpen} onclick={() => (devOpen = !devOpen)}>
@@ -291,6 +362,57 @@
     gap: 0.5rem;
     padding-top: 0.75rem;
     border-top: 1px solid #222;
+  }
+
+  .skinbar {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #222;
+    font-size: 0.8rem;
+    color: #808080;
+  }
+
+  .skinbar select {
+    background: #1a1a1a;
+    color: #c8c8c8;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.8rem;
+    max-width: 240px;
+  }
+
+  .skinbar button {
+    background: #1a1a1a;
+    color: #c8c8c8;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.25rem 0.7rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .skinbar button:hover:not(:disabled) {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+  }
+
+  .skinbar button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .skinbar .ok {
+    color: #3ccb4e;
+  }
+
+  .skinbar .err {
+    color: #d8604c;
   }
 
   .devtoggle {

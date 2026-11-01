@@ -25,7 +25,7 @@
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import { queue, isAudioPath } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
-  import { loadDefaultSkin } from "../lib/skin/load";
+  import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
   import { formatWarning } from "../lib/skin/wasabi";
@@ -163,38 +163,41 @@
     return it ? (it.artist ? `${it.artist} - ${it.title}` : it.title) : "";
   });
 
-  // ── skin loading: first installed .wal, else the built-in mock ──────────
+  // ── skin loading: persisted choice, else first installed, else the mock ──
 
   let skin = $state<SkinPayload | null>(null);
   let skinError = $state<string | null>(null);
   let scale = $state(1); // Alt+S toggles 1×/2× (no room for UI buttons here)
+  let skinSeq = 0;
 
-  async function loadInitialSkin(): Promise<SkinPayload> {
+  async function reloadSkin(): Promise<void> {
+    const seq = ++skinSeq;
+    let payload: SkinPayload;
     try {
-      return await loadDefaultSkin();
+      payload = await loadDefaultSkin();
     } catch (e) {
       console.warn(`[navinamp] skin load failed (${e}; using mock)`);
-      return mockSkinPayload();
+      payload = mockSkinPayload();
     }
+    if (seq !== skinSeq) return; // a newer switch superseded this load
+    skin = payload;
+    skinError = null;
+    // Share the skin's playlist colors (pledit.txt) with the other windows;
+    // they theme the playlist editor from it.
+    publishSkinTheme(payload.skin.params);
+    const n = payload.warnings.length;
+    if (n > 0) console.warn(`[navinamp] skin parsed with ${n} warning(s)`);
   }
 
+  // Initial load + live switching from the library's skin selector.
   $effect(() => {
-    let cancelled = false;
-    loadInitialSkin()
-      .then((payload) => {
-        if (cancelled) return;
-        skin = payload;
-        // Share the skin's playlist colors (pledit.txt) with the other
-        // windows; they theme the playlist editor from it.
-        publishSkinTheme(payload.skin.params);
-        const n = payload.warnings.length;
-        if (n > 0) console.warn(`[navinamp] skin parsed with ${n} warning(s)`);
-      })
-      .catch((e) => {
-        if (!cancelled) skinError = String(e);
-      });
+    void reloadSkin();
+  });
+
+  $effect(() => {
+    const unlisten = onSkinChanged(() => void reloadSkin());
     return () => {
-      cancelled = true;
+      void unlisten.then((f) => f());
     };
   });
 

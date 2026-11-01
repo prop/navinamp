@@ -32,7 +32,7 @@
   } from "../lib/audio/eq";
   import EqPanel from "../components/EqPanel.svelte";
   import SkinSurface from "../components/skin/SkinSurface.svelte";
-  import { loadDefaultSkin } from "../lib/skin/load";
+  import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
   import { dragRects } from "../lib/skin/titlebar";
@@ -41,23 +41,32 @@
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
 
-  // ── skin loading: same pick as the player (first installed, else mock) ──
+  // ── skin loading: same persisted pick as the player; reload on switch ───
 
   let skin = $state<SkinPayload | null>(null);
   let scale = $state(1); // Alt+S toggles 1×/2× (same as the player window)
+  let skinSeq = 0;
+
+  async function reloadSkin(): Promise<void> {
+    const seq = ++skinSeq;
+    let payload: SkinPayload;
+    try {
+      payload = await loadDefaultSkin();
+    } catch (e) {
+      console.warn(`[navinamp] skin load failed (${e}; using mock)`);
+      payload = mockSkinPayload();
+    }
+    if (seq === skinSeq) skin = payload;
+  }
 
   $effect(() => {
-    let cancelled = false;
-    loadDefaultSkin()
-      .then((payload) => {
-        if (!cancelled) skin = payload;
-      })
-      .catch((e) => {
-        console.warn(`[navinamp] skin load failed (${e}; using mock)`);
-        if (!cancelled) skin = mockSkinPayload();
-      });
+    void reloadSkin();
+  });
+
+  $effect(() => {
+    const unlisten = onSkinChanged(() => void reloadSkin());
     return () => {
-      cancelled = true;
+      void unlisten.then((f) => f());
     };
   });
 

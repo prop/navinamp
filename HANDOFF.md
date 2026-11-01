@@ -37,11 +37,19 @@
 - Navidrome first-connect UX: a settings change auto-starts the library
   sync when no remote rows exist, and the REMOTE TRACKS empty state offers
   SYNC LIBRARY NOW / RETRY with live progress and the last sync error
+- In-app skin switcher in the library window: lists the built-in fallback +
+  installed `.wal`/`.wsz` files, validates before applying, persists the
+  choice in localStorage, broadcasts `skin-changed`, and the player + EQ
+  windows reload live (playlist colors follow via `skin-theme`)
 
-## Next up (priority order)
+## Next up
 
-1. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
-   restart; the loader picks alphabetically).
+The roadmap is clear. Candidate follow-ups, roughly by value:
+
+1. Persist Navidrome favorite (`starred`) state — the parser now accepts
+   timestamps; the UI's star set is still session-local.
+2. EQ: preset saving + a real AUTO mode; live curve in the classic window.
+3. Release-build devtools, chunked virtualization, svelte-check/TS7 cleanup.
 
 ## Known follow-ups / deferred
 
