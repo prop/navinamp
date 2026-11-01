@@ -23,13 +23,15 @@
 - Ratings UI: 0–5★ in the library table — local DB write for every row,
   plus a Navidrome `setRating` push for remote rows; a sync imports server
   ratings into unrated rows without clobbering local ratings
+- Navidrome playlists: browse/play server playlists in the NAVIDROME tree
+  (live, never imported into the DB) and PUBLISH a smart view from its
+  editor — first publish creates `[NaVinaMP] <name>`, later publishes
+  update it in place (mapping in `smart_view_playlists`)
 
 ## Next up (priority order)
 
-1. **Navidrome playlist sync** — browse/import server playlists; publish
-   smart views as server playlists (subsonic client methods exist).
-2. **Persisted volume + EQ** across restarts (localStorage or config file).
-3. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
+1. **Persisted volume + EQ** across restarts (localStorage or config file).
+2. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
    restart; the loader picks alphabetically).
 
 ## Known follow-ups / deferred
@@ -40,6 +42,9 @@
 - Metadata bitrate is average source bytes ÷ duration; streams whose
   container declares no duration (some transcodes) leave the kbps digits
   blank by design
+- Publishing a smart view only includes `source=navidrome` rows (local
+  files have no Subsonic song id); playlist creation uses the
+  `[NaVinaMP] ` name prefix, and republishing keeps the server-side name
 - Navidrome favorite stars are still session-local (no `starred` column in
   `tracks`); rating stars are the persisted path
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`

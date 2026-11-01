@@ -677,7 +677,7 @@ fn metadata_reports_source_rate_channels_and_bitrate() {
     engine
         .send(Command::Play(TrackSource::File(wav)))
         .expect("play");
-    wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+    start_and_get_playing(&engine, &sink, &rx);
 
     let meta = engine.metadata().expect("metadata while playing");
     assert_eq!(meta.sample_rate_hz, RATE);
@@ -698,7 +698,7 @@ fn metadata_reports_source_rate_channels_and_bitrate() {
     engine
         .send(Command::Play(TrackSource::File(path)))
         .expect("play mono");
-    wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+    start_and_get_playing(&engine, &sink, &rx);
 
     let meta = engine.metadata().expect("mono metadata");
     assert_eq!(meta.sample_rate_hz, 48_000);

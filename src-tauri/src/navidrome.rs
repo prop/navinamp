@@ -498,6 +498,97 @@ fn playlist_rows(songs: &[SongSummary]) -> Vec<Track> {
         .collect()
 }
 
+/// Prefix on playlists this app creates: visible provenance on the server and
+/// no accidental collision with a user playlist that shares the name.
+const SMART_PLAYLIST_PREFIX: &str = "[NaVinaMP] ";
+
+/// Result of publishing one smart view as a Navidrome playlist.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishReport {
+    pub playlist_id: String,
+    pub name: String,
+    pub track_count: u64,
+    /// True when the server playlist was created; false when the remembered
+    /// one was updated in place.
+    pub created: bool,
+}
+
+/// Publish a smart view as a Navidrome playlist: create on the first publish,
+/// update the mapped playlist in place afterwards (its id and play history
+/// survive). Only `source=navidrome` rows are publishable — their `remote_id`
+/// becomes the server's `songId`. The view's own limit/sort apply.
+#[tauri::command]
+pub async fn navidrome_publish_smart_view(
+    app: AppHandle,
+    state: State<'_, NavidromeState>,
+    id: i64,
+) -> Result<PublishReport, String> {
+    let client = ensure_client(&state).await?;
+    let library = Library::open(db_file(&app)?).map_err(|e| format!("cannot open library: {e}"))?;
+    let view = library
+        .smart_views_list()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|v| v.id == id)
+        .ok_or_else(|| format!("smart view {id} not found"))?;
+    let tracks = library.smart_view_run(id).map_err(|e| e.to_string())?;
+    let song_ids: Vec<String> = tracks
+        .iter()
+        .filter(|t| t.source == SOURCE)
+        .filter_map(|t| t.remote_id.clone())
+        .collect();
+    if song_ids.is_empty() {
+        return Err("this smart view has no Navidrome tracks to publish".into());
+    }
+
+    let name = format!("{SMART_PLAYLIST_PREFIX}{}", view.def.name);
+    let mapped = library
+        .smart_view_playlist_id(id)
+        .map_err(|e| e.to_string())?;
+    let (playlist_id, created) = match mapped {
+        Some(pid) => {
+            let exists = client
+                .get_playlists()
+                .await
+                .map_err(|e| scrub_urls(&e.to_string()))?
+                .iter()
+                .any(|p| p.id == pid);
+            if exists {
+                client
+                    .update_playlist(&pid, &song_ids)
+                    .await
+                    .map_err(|e| scrub_urls(&e.to_string()))?;
+                (pid, false)
+            } else {
+                // Deleted on the server since the last publish: recreate it.
+                let created = client
+                    .create_playlist(&name, &song_ids)
+                    .await
+                    .map_err(|e| scrub_urls(&e.to_string()))?;
+                (created.id, true)
+            }
+        }
+        None => {
+            let created = client
+                .create_playlist(&name, &song_ids)
+                .await
+                .map_err(|e| scrub_urls(&e.to_string()))?;
+            (created.id, true)
+        }
+    };
+    library
+        .set_smart_view_playlist_id(id, &playlist_id)
+        .map_err(|e| e.to_string())?;
+
+    Ok(PublishReport {
+        playlist_id,
+        name,
+        track_count: song_ids.len() as u64,
+        created,
+    })
+}
+
 /// Set the streaming format/bitrate used by [`navidrome_stream_url`].
 /// `original` forces the bitrate off (the file is served as stored).
 #[tauri::command]

@@ -20,6 +20,7 @@
 //! | [`SubsonicClient::search3`] | `search3` |
 //! | [`SubsonicClient::get_playlists`] | `getPlaylists` |
 //! | [`SubsonicClient::get_playlist`] | `getPlaylist` |
+//! | [`SubsonicClient::create_playlist`] / [`SubsonicClient::update_playlist`] | `createPlaylist` / `updatePlaylist` (POST) |
 //! | [`SubsonicClient::stream_url`] | `stream` (URL only) |
 //! | [`SubsonicClient::cover_art_url`] | `getCoverArt` (URL only) |
 //! | [`SubsonicClient::scrobble`] | `scrobble` |

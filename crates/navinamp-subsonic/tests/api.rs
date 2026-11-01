@@ -50,7 +50,17 @@ fn failed_response(code: i64, message: &str) -> String {
 
 /// Mounts a canned JSON 200 response for one endpoint.
 async fn mock_endpoint(server: &MockServer, endpoint: &str, body: String) {
-    Mock::given(method("GET"))
+    mock_endpoint_method(server, "GET", endpoint, body).await;
+}
+
+/// Mounts a canned JSON 200 response for one endpoint and HTTP method.
+async fn mock_endpoint_method(
+    server: &MockServer,
+    http_method: &str,
+    endpoint: &str,
+    body: String,
+) {
+    Mock::given(method(http_method))
         .and(path(format!("/rest/{endpoint}.view")))
         .respond_with(ResponseTemplate::new(200).set_body_string(body))
         .mount(server)
@@ -81,6 +91,13 @@ fn query(request: &Request) -> HashMap<String, String> {
             let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
             (key.to_owned(), value.to_owned())
         })
+        .collect()
+}
+
+/// Decoded pairs of a captured form body, in order (duplicates preserved).
+fn form(request: &Request) -> Vec<(String, String)> {
+    url::form_urlencoded::parse(&request.body)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect()
 }
 
@@ -426,6 +443,70 @@ async fn playlists_listed_and_entries_round_trip() {
         query(&requests[0]).get("id").map(String::as_str),
         Some("pl-2")
     );
+}
+
+#[tokio::test]
+async fn create_and_update_playlist_post_repeated_song_ids() {
+    let server = MockServer::start().await;
+    let client = connected_client(&server).await;
+    mock_endpoint_method(
+        &server,
+        "POST",
+        "createPlaylist",
+        ok_response(json!({
+            "playlist": {
+                "id": "pl-9", "name": "[NaVinaMP] Mix",
+                "songCount": 2, "duration": 600
+            }
+        })),
+    )
+    .await;
+    mock_endpoint_method(&server, "POST", "updatePlaylist", ok_response(json!({}))).await;
+
+    let ids = vec!["mf-1".to_owned(), "mf-2".to_owned()];
+    let created = client
+        .create_playlist("[NaVinaMP] Mix", &ids)
+        .await
+        .expect("create");
+    assert_eq!(created.id, "pl-9");
+    assert_eq!(created.name, "[NaVinaMP] Mix");
+    assert_eq!(created.song_count, 2);
+
+    client
+        .update_playlist("pl-9", &["mf-3".to_owned()])
+        .await
+        .expect("update");
+
+    // POST form body (not a query string): repeated songId keeps the order,
+    // and the auth params travel with it.
+    let creates = requests_to(&server, "createPlaylist").await;
+    assert_eq!(creates.len(), 1);
+    let body = form(&creates[0]);
+    assert!(
+        body.contains(&("name".to_owned(), "[NaVinaMP] Mix".to_owned())),
+        "{body:?}"
+    );
+    assert!(body.iter().any(|(key, _)| key == "t"), "token: {body:?}");
+    let created_ids: Vec<&str> = body
+        .iter()
+        .filter(|(key, _)| key == "songId")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(created_ids, vec!["mf-1", "mf-2"]);
+
+    let updates = requests_to(&server, "updatePlaylist").await;
+    assert_eq!(updates.len(), 1);
+    let body = form(&updates[0]);
+    assert!(
+        body.contains(&("playlistId".to_owned(), "pl-9".to_owned())),
+        "{body:?}"
+    );
+    let updated_ids: Vec<&str> = body
+        .iter()
+        .filter(|(key, _)| key == "songId")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(updated_ids, vec!["mf-3"]);
 }
 
 #[tokio::test]

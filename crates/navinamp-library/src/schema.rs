@@ -93,5 +93,13 @@ CREATE TABLE IF NOT EXISTS smart_views (
     position INTEGER NOT NULL DEFAULT 0,
     def      TEXT NOT NULL
 );
+
+-- Smart views published to Navidrome: the server playlist id remembered so
+-- republishing updates the existing playlist instead of creating duplicates.
+-- Deleting the view drops the mapping (foreign keys are enabled in open()).
+CREATE TABLE IF NOT EXISTS smart_view_playlists (
+    smart_view_id      INTEGER PRIMARY KEY REFERENCES smart_views(id) ON DELETE CASCADE,
+    remote_playlist_id TEXT NOT NULL
+);
 COMMIT;
 ";

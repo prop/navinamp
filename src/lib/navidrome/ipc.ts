@@ -124,6 +124,24 @@ export function navidromePlaylistTracks(playlistId: string): Promise<Track[]> {
   return invoke<Track[]>("navidrome_playlist_tracks", { playlistId });
 }
 
+/** Result of publishing one smart view as a server playlist. */
+export interface NavidromePublishReport {
+  playlistId: string;
+  name: string;
+  trackCount: number;
+  /** True on first publish, false when the mapped playlist was updated. */
+  created: boolean;
+}
+
+/**
+ * Publish a smart view as a Navidrome playlist (`createPlaylist` on the
+ * first publish, `updatePlaylist` afterwards). Only the view's remote rows
+ * are included; its limit/sort apply.
+ */
+export function navidromePublishSmartView(id: number): Promise<NavidromePublishReport> {
+  return invoke<NavidromePublishReport>("navidrome_publish_smart_view", { id });
+}
+
 /** Persist streaming prefs; `bitrateKbps` is only meaningful for transcodes. */
 export function navidromeSetStreaming(
   format: StreamFormat,

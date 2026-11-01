@@ -1350,6 +1350,37 @@ fn save_update_delete_and_list_preserve_defs_exactly() {
     assert_eq!(c.library.smart_views_list().unwrap().len(), 2);
 }
 
+#[test]
+fn published_playlist_mapping_round_trips_and_cascades() {
+    let c = rule_fixture("publish-mapping");
+    let def = view(
+        "Mix",
+        group(
+            MatchMode::All,
+            vec![rule(Field::Artist, Op::Is, s("Björk"))],
+        ),
+    );
+    let id = c.library.smart_view_save(None, &def).unwrap();
+    assert_eq!(c.library.smart_view_playlist_id(id).unwrap(), None);
+
+    c.library.set_smart_view_playlist_id(id, "pl-1").unwrap();
+    assert_eq!(
+        c.library.smart_view_playlist_id(id).unwrap().as_deref(),
+        Some("pl-1")
+    );
+
+    // Re-publishing replaces the remembered id (upsert, not a second row).
+    c.library.set_smart_view_playlist_id(id, "pl-2").unwrap();
+    assert_eq!(
+        c.library.smart_view_playlist_id(id).unwrap().as_deref(),
+        Some("pl-2")
+    );
+
+    // Deleting the view drops the mapping with it.
+    c.library.smart_view_delete(id).unwrap();
+    assert_eq!(c.library.smart_view_playlist_id(id).unwrap(), None);
+}
+
 // ---------------------------------------------------------------------------
 // Scanner coexistence
 // ---------------------------------------------------------------------------

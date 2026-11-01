@@ -661,9 +661,36 @@ pub(super) fn save_view(conn: &Connection, id: Option<i64>, def: &SmartViewDef) 
 }
 
 /// Deletes a view. Deleting an unknown id is a no-op (the UI deletes from
-/// a list it just fetched; a race shouldn't turn into an error toast).
+/// a list it just fetched; a race shouldn't turn into an error toast). The
+/// published-playlist mapping cascades away with the row.
 pub(super) fn delete_view(conn: &Connection, id: i64) -> Result<()> {
     conn.execute("DELETE FROM smart_views WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// The Navidrome playlist this view was last published to, if any.
+pub(super) fn remote_playlist_id(conn: &Connection, id: i64) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT remote_playlist_id FROM smart_view_playlists WHERE smart_view_id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Remembers the server playlist a view was published to (upsert).
+pub(super) fn set_remote_playlist_id(
+    conn: &Connection,
+    id: i64,
+    remote_playlist_id: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO smart_view_playlists (smart_view_id, remote_playlist_id)
+         VALUES (?1, ?2)
+         ON CONFLICT(smart_view_id) DO UPDATE SET remote_playlist_id = excluded.remote_playlist_id",
+        rusqlite::params![id, remote_playlist_id],
+    )?;
     Ok(())
 }
 

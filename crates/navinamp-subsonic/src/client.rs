@@ -211,6 +211,35 @@ impl SubsonicClient {
         Ok(resp.playlist.entry)
     }
 
+    /// Creates a playlist with `song_ids` in order. Returns its summary
+    /// (the server assigns the id). Sent as POST: `songId` repeats once per
+    /// track, so large lists would overflow a GET URL.
+    pub async fn create_playlist(
+        &self,
+        name: &str,
+        song_ids: &[String],
+    ) -> Result<PlaylistSummary, SubsonicError> {
+        let mut params: Vec<(&str, String)> = vec![("name", name.to_owned())];
+        params.extend(song_ids.iter().map(|id| ("songId", id.clone())));
+        let inner = self.post_request("createPlaylist.view", &params).await?;
+        let resp: CreatePlaylistResponse = payload(inner)?;
+        Ok(resp.playlist)
+    }
+
+    /// Replaces a playlist's tracks with `song_ids` (name/visibility stay).
+    /// Republishing a smart view updates in place, so the server keeps the
+    /// playlist's id and play history.
+    pub async fn update_playlist(
+        &self,
+        id: &str,
+        song_ids: &[String],
+    ) -> Result<(), SubsonicError> {
+        let mut params: Vec<(&str, String)> = vec![("playlistId", id.to_owned())];
+        params.extend(song_ids.iter().map(|song_id| ("songId", song_id.clone())));
+        self.post_request("updatePlaylist.view", &params).await?;
+        Ok(())
+    }
+
     /// Builds the streaming URL for a song. Pure builder — no request.
     ///
     /// [`StreamFormat::Original`] omits `format`/`maxBitRate` entirely so the
@@ -352,8 +381,52 @@ impl SubsonicClient {
                 query.append_pair(key, value);
             }
         }
+        self.finish(self.http.get(url).send().await?).await
+    }
 
-        let response = self.http.get(url).send().await?;
+    /// POST `endpoint` with the params as a form body. Mutation endpoints
+    /// (`createPlaylist`/`updatePlaylist`) use POST because `songId` repeats
+    /// once per track — large playlists would overflow a GET URL.
+    async fn post_request(
+        &self,
+        endpoint: &str,
+        params: &[(&str, String)],
+    ) -> Result<serde_json::Value, SubsonicError> {
+        let url = self.endpoint_url(endpoint);
+        let mut form: Vec<(String, String)> = self
+            .auth_params()
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect();
+        form.extend(
+            params
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone())),
+        );
+        // reqwest is built without its `form` feature; the `url` crate's
+        // serializer is already a dependency and produces the same body.
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(&form)
+            .finish();
+        self.finish(
+            self.http
+                .post(url)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(body)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    /// Shared status + envelope handling for GET and POST.
+    async fn finish(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<serde_json::Value, SubsonicError> {
         let status = response.status();
         if !status.is_success() {
             return Err(SubsonicError::UnexpectedStatus(status.as_u16()));

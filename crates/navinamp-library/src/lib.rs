@@ -268,9 +268,21 @@ impl Library {
         smart::save_view(&self.conn, id, def)
     }
 
-    /// Deletes a saved view; an unknown id is a no-op.
+    /// Deletes a saved view; an unknown id is a no-op. Any remembered
+    /// Navidrome publication mapping goes with it.
     pub fn smart_view_delete(&self, id: i64) -> Result<()> {
         smart::delete_view(&self.conn, id)
+    }
+
+    /// The Navidrome playlist a smart view was last published to, if any.
+    pub fn smart_view_playlist_id(&self, id: i64) -> Result<Option<String>> {
+        smart::remote_playlist_id(&self.conn, id)
+    }
+
+    /// Remembers the Navidrome playlist a smart view was published to (so
+    /// republishing updates it instead of creating duplicates).
+    pub fn set_smart_view_playlist_id(&self, id: i64, remote_playlist_id: &str) -> Result<()> {
+        smart::set_remote_playlist_id(&self.conn, id, remote_playlist_id)
     }
 
     /// Runs a saved view by id. Fails with [`Error::SmartViewNotFound`]

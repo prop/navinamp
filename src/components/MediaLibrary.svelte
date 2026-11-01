@@ -63,6 +63,7 @@
     isSyncReport,
     navidromePlaylistTracks,
     navidromePlaylists,
+    navidromePublishSmartView,
     navidromeRate,
     navidromeStar,
     navidromeStatus,
@@ -387,6 +388,20 @@
     onlog(`media library: smart view #${id} deleted`);
     if (selection.kind === "smart" && selection.value === id) selection = { kind: "all" };
     await refreshViews();
+  }
+
+  /** Publish a saved smart view as a Navidrome playlist (editor button). */
+  async function onEditorPublish(id: number): Promise<string> {
+    const report = await navidromePublishSmartView(id);
+    onlog(
+      `navidrome: ${report.created ? "created" : "updated"} playlist ` +
+        `"${report.name}" (${report.trackCount} track${report.trackCount === 1 ? "" : "s"})`,
+    );
+    // The server playlist list (NAVIDROME → PLAYLISTS) may have a new entry.
+    void refreshPlaylists();
+    void refreshViews(); // publishing saves the edited name/rules
+    return `${report.created ? "Published" : "Updated"} “${report.name}” — ` +
+      `${report.trackCount} track${report.trackCount === 1 ? "" : "s"} on the server`;
   }
 
   // ── loading ────────────────────────────────────────────────────────────────
@@ -1199,6 +1214,7 @@
       initial={editing.def}
       onsave={(id) => void onEditorSave(id)}
       ondelete={(id) => void onEditorDelete(id)}
+      onpublish={onEditorPublish}
       oncancel={() => (editing = null)} />
   {/if}
 

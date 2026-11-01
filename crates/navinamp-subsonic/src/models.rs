@@ -243,6 +243,11 @@ pub(crate) struct GetPlaylistsResponse {
     pub playlists: Playlists,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreatePlaylistResponse {
+    pub playlist: PlaylistSummary,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct Playlists {
     #[serde(default)]

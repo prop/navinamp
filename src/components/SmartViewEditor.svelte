@@ -42,10 +42,16 @@
     initial: SmartViewDef;
     onsave: (id: number) => void;
     ondelete: (id: number) => void;
+    /**
+     * Publish the saved view as a Navidrome playlist; resolves with a
+     * user-facing success line (the editor shows it inline). Rejects with
+     * the backend error when publishing fails.
+     */
+    onpublish: (id: number) => Promise<string>;
     oncancel: () => void;
   }
 
-  let { id, initial, onsave, ondelete, oncancel }: Props = $props();
+  let { id, initial, onsave, ondelete, onpublish, oncancel }: Props = $props();
 
   // The editing session snapshots the incoming def once (the parent passes a
   // fresh clone per open); all edits below happen on our own copy.
@@ -84,6 +90,8 @@
 
   let saving = $state(false);
   let deleting = $state(false);
+  let publishing = $state(false);
+  let publishNote = $state<string | null>(null);
 
   let previewSeq = 0;
 
@@ -315,6 +323,33 @@
     }
   }
 
+  /**
+   * Publish the on-screen definition (persisted first, so the server
+   * playlist always matches the visible rules) as a Navidrome playlist.
+   * The component stays open and shows the outcome inline.
+   */
+  async function publish(): Promise<void> {
+    if (publishing || saving || deleting || id == null) return;
+    const built = buildDef(true);
+    if (!built.ok) {
+      rowErrors = built.rowErrors;
+      formError = built.message;
+      return;
+    }
+    rowErrors = {};
+    formError = null;
+    publishNote = null;
+    publishing = true;
+    try {
+      await smartViewSave(id, built.def);
+      publishNote = await onpublish(id);
+    } catch (e) {
+      applyBackendError(friendlyIpcError("publish smart view", e));
+    } finally {
+      publishing = false;
+    }
+  }
+
   function baseName(path: string): string {
     return path.split(/[\\/]/).pop() ?? path;
   }
@@ -474,18 +509,27 @@
       {#if formError}
         <div class="banner">{formError}</div>
       {/if}
+      {#if publishNote}
+        <div class="banner ok">{publishNote}</div>
+      {/if}
     </div>
 
     <footer class="pbar">
-      <button class="primary" onclick={save} disabled={saving || deleting}>
+      <button class="primary" onclick={save} disabled={saving || deleting || publishing}>
         {saving ? "SAVING…" : "SAVE"}
       </button>
       {#if id != null}
-        <button class="danger" onclick={remove} disabled={deleting || saving}>
+        <button
+          onclick={publish}
+          disabled={publishing || saving || deleting}
+          title="create/update a Navidrome playlist from this view's remote tracks">
+          {publishing ? "PUBLISHING…" : "PUBLISH"}
+        </button>
+        <button class="danger" onclick={remove} disabled={deleting || saving || publishing}>
           {deleting ? "DELETING…" : "DELETE"}
         </button>
       {/if}
-      <button onclick={oncancel} disabled={saving || deleting}>CANCEL</button>
+      <button onclick={oncancel} disabled={saving || deleting || publishing}>CANCEL</button>
     </footer>
   </div>
 </div>
@@ -767,6 +811,12 @@
     color: #d8604c;
     border: 1px solid #5a2a22;
     background: #180d0b;
+  }
+
+  .banner.ok {
+    color: #3ccb4e;
+    border-color: #2f4f33;
+    background: #0d1a10;
   }
 
   .pbar {
