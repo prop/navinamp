@@ -31,11 +31,13 @@
   toggles (⌘⇧L / ⌘⇧E / ⌘⇧P), checkmarks kept in sync with actual
   visibility; plus the fallback player's LIBRARY toggle and Alt+L in the
   player for every skin (classic `.wsz` skins have no library button)
+- Persisted volume + EQ in `<app_config_dir>/audio.json`: loaded before
+  the engine boots, replayed on first playback, and written with a
+  debounced coalescing thread (slider drags → one write per quiet window)
 
 ## Next up (priority order)
 
-1. **Persisted volume + EQ** across restarts (localStorage or config file).
-2. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
+1. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
    restart; the loader picks alphabetically).
 
 ## Known follow-ups / deferred

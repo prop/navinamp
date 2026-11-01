@@ -10,24 +10,182 @@
 //! Navidrome stream URL); URLs play through the engine's remote-stream
 //! transport with gapless/seek parity.
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::time::Duration;
 
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use navinamp_audio::{
-    Command, EngineHandle, EqPreset, EqState, Event, PlaybackStatus, Spectrum, TrackSource,
-    eq_presets as eq_preset_table,
+    Command, EQ_BAND_COUNT, EQ_RANGE_DB, EngineHandle, EqPreset, EqState, Event, PlaybackStatus,
+    Spectrum, TrackSource, eq_presets as eq_preset_table,
 };
 
 /// Name of the Tauri event engine events are forwarded to.
 const EVENT_NAME: &str = "audio-event";
+/// Volume + EQ preferences file inside the app config dir.
+const PREFS_FILE: &str = "audio.json";
 
-/// Lazily-initialized engine, shared by all commands. The second slot caches
-/// EQ params set before the engine booted (the engine starts flat; the cache
-/// is replayed on start so the EQ panel works without playback running).
-#[derive(Default)]
-pub struct Audio(Mutex<Option<EngineHandle>>, Mutex<EqState>);
+/// Lazily-initialized engine, shared by all commands. The caches hold the
+/// volume/EQ params configured before the engine booted (the engine starts
+/// flat; they are replayed on start so the panels work without playback
+/// running) and are the values persisted across restarts.
+pub struct Audio {
+    engine: Mutex<Option<EngineHandle>>,
+    eq: Mutex<EqState>,
+    volume: Mutex<f32>,
+    /// Debounced writer channel; `None` before [`init`] (and in tests).
+    prefs_tx: Mutex<Option<Sender<StoredPrefs>>>,
+}
+
+impl Default for Audio {
+    fn default() -> Self {
+        Self {
+            engine: Mutex::new(None),
+            eq: Mutex::new(EqState::default()),
+            volume: Mutex::new(1.0),
+            prefs_tx: Mutex::new(None),
+        }
+    }
+}
+
+/// On-disk shape of `audio.json` (tolerant: missing fields default).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct StoredPrefs {
+    volume: f32,
+    eq: StoredEq,
+}
+
+impl Default for StoredPrefs {
+    fn default() -> Self {
+        Self {
+            volume: 1.0,
+            eq: StoredEq::default(),
+        }
+    }
+}
+
+/// EQ portion of the prefs file. Bands are a Vec so a short/long array in a
+/// hand-edited file cannot fail the parse; [`Self::sanitized`] pads/clamps.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct StoredEq {
+    enabled: bool,
+    preamp_db: f32,
+    bands_db: Vec<f32>,
+}
+
+impl From<EqState> for StoredEq {
+    fn from(state: EqState) -> Self {
+        Self {
+            enabled: state.enabled,
+            preamp_db: state.preamp_db,
+            bands_db: state.bands_db.to_vec(),
+        }
+    }
+}
+
+impl StoredPrefs {
+    /// Clamp everything into the engine's accepted ranges.
+    fn sanitized(self) -> (f32, EqState) {
+        let volume = if self.volume.is_finite() {
+            self.volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let db = |value: f32| {
+            if value.is_finite() {
+                value.clamp(-EQ_RANGE_DB, EQ_RANGE_DB)
+            } else {
+                0.0
+            }
+        };
+        let mut bands = [0.0; EQ_BAND_COUNT];
+        for (slot, value) in bands.iter_mut().zip(self.eq.bands_db.iter()) {
+            *slot = db(*value);
+        }
+        (
+            volume,
+            EqState {
+                enabled: self.eq.enabled,
+                preamp_db: db(self.eq.preamp_db),
+                bands_db: bands,
+            },
+        )
+    }
+}
+
+/// Load persisted volume/EQ and start the debounced writer. Called from the
+/// app setup hook, before any window can issue audio commands.
+pub fn init(app: &AppHandle) {
+    let Ok(dir) = app.path().app_config_dir() else {
+        return; // no config dir: run with defaults, nothing to persist
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(PREFS_FILE);
+    if let Ok(text) = std::fs::read_to_string(&path)
+        && let Ok(stored) = serde_json::from_str::<StoredPrefs>(&text)
+    {
+        let state = app.state::<Audio>();
+        let (volume, eq) = stored.sanitized();
+        *state.volume.lock().unwrap() = volume;
+        *state.eq.lock().unwrap() = eq;
+    }
+
+    let (tx, rx) = channel();
+    *app.state::<Audio>().prefs_tx.lock().unwrap() = Some(tx);
+    spawn_prefs_writer(path, rx);
+}
+
+/// Coalesce rapid changes (slider drags) into at most one write per quiet
+/// window; a final write happens when the channel disconnects at app exit.
+fn spawn_prefs_writer(path: PathBuf, rx: Receiver<StoredPrefs>) {
+    let _ = std::thread::Builder::new()
+        .name("navinamp-audio-prefs".into())
+        .spawn(move || {
+            let mut pending: Option<StoredPrefs> = None;
+            loop {
+                match rx.recv_timeout(Duration::from_millis(400)) {
+                    Ok(prefs) => pending = Some(prefs),
+                    Err(RecvTimeoutError::Timeout) => {
+                        if let Some(prefs) = pending.take() {
+                            write_prefs(&path, &prefs);
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        if let Some(prefs) = pending.take() {
+                            write_prefs(&path, &prefs);
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+}
+
+fn write_prefs(path: &Path, prefs: &StoredPrefs) {
+    let Ok(text) = serde_json::to_string_pretty(prefs) else {
+        return;
+    };
+    if let Err(e) = std::fs::write(path, text) {
+        eprintln!("navinamp audio: cannot write `{}`: {e}", path.display());
+    }
+}
+
+/// Queue the current volume/EQ state for persistence (debounced by the
+/// writer thread). A no-op before [`init`].
+fn persist(state: &Audio) {
+    let prefs = StoredPrefs {
+        volume: *state.volume.lock().unwrap(),
+        eq: StoredEq::from(*state.eq.lock().unwrap()),
+    };
+    if let Some(tx) = state.prefs_tx.lock().unwrap().as_ref() {
+        let _ = tx.send(prefs);
+    }
+}
 
 /// Snapshot returned by [`audio_state`] (polled by the UI at ~10 Hz).
 #[derive(Serialize)]
@@ -57,12 +215,14 @@ fn status_name(s: PlaybackStatus) -> &'static str {
 /// Start the engine if it is not running yet. Errors surface to the UI
 /// (e.g. no output device).
 fn ensure_engine(app: &AppHandle, state: &Audio) -> Result<(), String> {
-    let mut guard = state.0.lock().unwrap();
+    let mut guard = state.engine.lock().unwrap();
     if guard.is_none() {
         let engine = EngineHandle::start().map_err(|e| e.to_string())?;
         spawn_event_forwarder(app.clone(), &engine);
-        // Replay any EQ params configured before the engine existed.
-        let cached = *state.1.lock().unwrap();
+        // Replay the volume/EQ configured before the engine existed.
+        let cached_volume = *state.volume.lock().unwrap();
+        let _ = engine.send(Command::SetVolume(cached_volume));
+        let cached = *state.eq.lock().unwrap();
         engine.eq_set_enabled(cached.enabled);
         engine.eq_set_preamp(cached.preamp_db);
         for (index, db) in cached.bands_db.iter().enumerate() {
@@ -110,7 +270,7 @@ fn spawn_event_forwarder(app: AppHandle, engine: &EngineHandle) {
 /// Run a command against a running engine, or `Ok(())` when none exists yet
 /// (pause/seek on a never-started engine are harmless no-ops).
 fn send_if_running(state: &Audio, make: impl FnOnce() -> Command) -> Result<(), String> {
-    let guard = state.0.lock().unwrap();
+    let guard = state.engine.lock().unwrap();
     match guard.as_ref() {
         Some(engine) => engine.send(make()).map_err(|e| e.to_string()),
         None => Ok(()),
@@ -121,7 +281,7 @@ fn send_if_running(state: &Audio, make: impl FnOnce() -> Command) -> Result<(), 
 /// playback command starts the engine — the device is deliberately not
 /// opened just for EQ twiddling; settings live for the engine's lifetime).
 fn eq_mutate(state: &Audio, f: impl FnOnce(&EngineHandle)) -> Result<(), String> {
-    let guard = state.0.lock().unwrap();
+    let guard = state.engine.lock().unwrap();
     if let Some(engine) = guard.as_ref() {
         f(engine);
     }
@@ -172,12 +332,16 @@ pub fn audio_seek(state: State<'_, Audio>, secs: f64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn audio_set_volume(state: State<'_, Audio>, volume: f32) -> Result<(), String> {
-    send_if_running(&state, || Command::SetVolume(volume.clamp(0.0, 1.0)))
+    let volume = volume.clamp(0.0, 1.0);
+    *state.volume.lock().unwrap() = volume;
+    let result = send_if_running(&state, || Command::SetVolume(volume));
+    persist(&state);
+    result
 }
 
 #[tauri::command]
 pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
-    let guard = state.0.lock().unwrap();
+    let guard = state.engine.lock().unwrap();
     match guard.as_ref() {
         Some(engine) => {
             let meta = engine.metadata();
@@ -196,7 +360,8 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
             status: status_name(PlaybackStatus::Stopped).into(),
             position_secs: 0.0,
             duration_secs: None,
-            volume: 1.0,
+            // The cached target before the engine boots (persisted value).
+            volume: *state.volume.lock().unwrap(),
             underrun_frames: 0,
             bitrate_kbps: None,
             sample_rate_hz: None,
@@ -214,42 +379,52 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
 /// panel reflects and remembers pre-playback configuration).
 #[tauri::command]
 pub fn eq_state(state: State<'_, Audio>) -> EqState {
-    let guard = state.0.lock().unwrap();
+    let guard = state.engine.lock().unwrap();
     match guard.as_ref() {
         Some(engine) => engine.eq_state(),
-        None => *state.1.lock().unwrap(),
+        None => *state.eq.lock().unwrap(),
     }
 }
 
 #[tauri::command]
 pub fn eq_set_enabled(state: State<'_, Audio>, enabled: bool) -> Result<(), String> {
-    state.1.lock().unwrap().enabled = enabled;
-    eq_mutate(&state, |engine| engine.eq_set_enabled(enabled))
+    state.eq.lock().unwrap().enabled = enabled;
+    let result = eq_mutate(&state, |engine| engine.eq_set_enabled(enabled));
+    persist(&state);
+    result
 }
 
 /// Preamp in dB; clamped server-side to −12..=12.
 #[tauri::command]
 pub fn eq_set_preamp(state: State<'_, Audio>, db: f32) -> Result<(), String> {
-    state.1.lock().unwrap().preamp_db = db.clamp(-12.0, 12.0);
-    eq_mutate(&state, |engine| engine.eq_set_preamp(db))
+    let db = db.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
+    state.eq.lock().unwrap().preamp_db = db;
+    let result = eq_mutate(&state, |engine| engine.eq_set_preamp(db));
+    persist(&state);
+    result
 }
 
 /// One band's gain in dB; `index` 0..=9 (else `Err`), value clamped to
 /// −12..=12.
 #[tauri::command]
 pub fn eq_set_band(state: State<'_, Audio>, index: u32, db: f32) -> Result<(), String> {
+    let db = db.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
     {
-        let mut cache = state.1.lock().unwrap();
+        let mut cache = state.eq.lock().unwrap();
         let Some(slot) = cache.bands_db.get_mut(index as usize) else {
             return Err("eq band index must be 0..=9".into());
         };
-        *slot = db.clamp(-12.0, 12.0);
+        *slot = db;
     }
-    let guard = state.0.lock().unwrap();
-    match guard.as_ref() {
-        Some(engine) => engine.eq_set_band(index, db).map_err(|e| e.to_string()),
-        None => Ok(()), // cached; replayed when the engine boots
-    }
+    let result = {
+        let guard = state.engine.lock().unwrap();
+        match guard.as_ref() {
+            Some(engine) => engine.eq_set_band(index, db).map_err(|e| e.to_string()),
+            None => Ok(()), // cached; replayed when the engine boots
+        }
+    };
+    persist(&state);
+    result
 }
 
 /// The classic Winamp preset curves (static; no engine needed).
@@ -266,7 +441,7 @@ pub fn eq_presets() -> Vec<EqPreset> {
 /// One spectrum/waveform snapshot (`active` is false unless playing).
 #[tauri::command]
 pub fn audio_spectrum(state: State<'_, Audio>) -> Spectrum {
-    let guard = state.0.lock().unwrap();
+    let guard = state.engine.lock().unwrap();
     match guard.as_ref() {
         Some(engine) => engine.spectrum(),
         None => Spectrum::default(),
@@ -311,5 +486,44 @@ mod tests {
         assert!(v["bitrateKbps"].is_null());
         assert!(v["sampleRateHz"].is_null());
         assert!(v["channels"].is_null());
+    }
+
+    #[test]
+    fn stored_prefs_sanitize_into_engine_ranges() {
+        let stored: StoredPrefs = serde_json::from_str(
+            r#"{ "volume": 1.7, "eq": { "enabled": true, "preampDb": -30,
+                "bandsDb": [1, -99] } }"#,
+        )
+        .expect("tolerant parse");
+        let (volume, eq) = stored.sanitized();
+        assert_eq!(volume, 1.0, "volume clamps to 0..=1");
+        assert!(eq.enabled);
+        assert_eq!(eq.preamp_db, -EQ_RANGE_DB);
+        assert_eq!(eq.bands_db[0], 1.0);
+        assert_eq!(eq.bands_db[1], -EQ_RANGE_DB);
+        // A short array pads with flat bands.
+        assert_eq!(&eq.bands_db[2..], &[0.0; EQ_BAND_COUNT - 2]);
+    }
+
+    #[test]
+    fn stored_prefs_defaults_and_round_trips_camel_case() {
+        let stored: StoredPrefs = serde_json::from_str("{}").expect("empty object");
+        let (volume, eq) = stored.sanitized();
+        assert_eq!(volume, 1.0, "default volume is unity");
+        assert_eq!(eq, EqState::default());
+
+        let value = serde_json::to_value(StoredPrefs {
+            volume: 0.5,
+            eq: StoredEq::from(EqState {
+                enabled: true,
+                preamp_db: 1.5,
+                bands_db: [2.0; EQ_BAND_COUNT],
+            }),
+        })
+        .expect("serialize");
+        assert_eq!(value["volume"], 0.5);
+        assert_eq!(value["eq"]["enabled"], true);
+        assert_eq!(value["eq"]["preampDb"], 1.5);
+        assert_eq!(value["eq"]["bandsDb"][0], 2.0);
     }
 }

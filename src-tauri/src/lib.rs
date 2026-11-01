@@ -25,6 +25,7 @@ pub fn run() {
         .manage(windows::WindowManager::default())
         .manage(media::MediaHub::default())
         .setup(|app| {
+            audio::init(app.handle());
             library::init(app.handle());
             navidrome::init(app.handle());
             // Creates the playlist/library windows, restores persisted
