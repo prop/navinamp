@@ -42,6 +42,7 @@
     libraryRoots,
     libraryScan,
     librarySearch,
+    librarySetRating,
     libraryStats,
     libraryTracks,
     localArtUrl,
@@ -60,6 +61,7 @@
   import { emptySmartViewDef } from "../lib/library/smartView";
   import {
     isSyncReport,
+    navidromeRate,
     navidromeStar,
     navidromeStatus,
     navidromeSync,
@@ -581,6 +583,49 @@
     }
   }
 
+  // ── ratings (0–5 stars) ───────────────────────────────────────────────────
+  // Track rows are raw (replaced wholesale on refresh, never mutated in
+  // place), so an edit lands in this id-keyed override map first and the DB
+  // follows. One composite button per row (not five buttons) keeps the
+  // 100k-row DOM budget in check; the click x maps onto a star cell.
+
+  let ratingOverrides = $state.raw<Map<number, number>>(new Map());
+
+  function ratingOf(t: Track): number {
+    return ratingOverrides.get(t.id) ?? t.rating;
+  }
+
+  async function rateTrack(t: Track, rating: number): Promise<void> {
+    const previous = ratingOf(t);
+    const next = new Map(ratingOverrides);
+    next.set(t.id, rating);
+    ratingOverrides = next;
+
+    try {
+      await librarySetRating(t.path, rating);
+    } catch (e) {
+      const revert = new Map(ratingOverrides);
+      if (previous === t.rating) revert.delete(t.id);
+      else revert.set(t.id, previous);
+      ratingOverrides = revert;
+      onlog(`media library: rating failed: ${e}`);
+      return;
+    }
+
+    const label = t.title !== "" ? t.title : baseName(t.path);
+    onlog(`media library: ${rating === 0 ? "cleared rating" : `${rating}★`} — ${label}`);
+
+    // Remote rows also live on the server; a failed push keeps the local
+    // rating (and logs it) — the next sync never overwrites a rated row.
+    if (t.source === REMOTE_SOURCE && t.remoteId != null && navStatus?.configured === true) {
+      try {
+        await navidromeRate(t.remoteId, rating);
+      } catch (e) {
+        onlog(`navidrome: rating push failed (kept locally): ${e}`);
+      }
+    }
+  }
+
   $effect(() => {
     void refreshNavStatus();
     const up = onNavidromeProgress((p) => {
@@ -599,6 +644,7 @@
         );
         void refreshNavStatus();
         void refreshAll();
+        ratingOverrides = new Map(); // pick up server-seeded ratings
         dataVersion++; // re-run the current node's query (synced rows landed)
       } else {
         navSyncError = `sync failed: ${payload.error}`;
@@ -1001,7 +1047,9 @@
         <div class="thead">
           <span class="c-num">#</span><span class="c-title">TITLE</span
           ><span class="c-artist">ARTIST</span><span class="c-album">ALBUM</span
-          ><span class="c-time">TIME</span><span class="c-star" title="star (navidrome)">★</span>
+          ><span class="c-time">TIME</span
+          ><span class="c-rating" title="rating (click a star; the same star clears)">RATING</span
+          ><span class="c-star" title="star (navidrome)">★</span>
         </div>
         <div class="rows" role="listbox" aria-label="track list">
           {#if viewError}
@@ -1026,6 +1074,35 @@
                 <span class="c-artist">{t.artist}</span>
                 <span class="c-album">{t.album}</span>
                 <span class="c-time">{fmt(t.durationSecs)}</span>
+                <span class="c-rating">
+                  <button
+                    class="rstars"
+                    aria-label="rating {ratingOf(t)} of 5 stars"
+                    title="rating {ratingOf(t)}/5 — click a star to set, click the same star to clear"
+                    onpointerdown={(e) => e.stopPropagation()}
+                    ondblclick={(e) => e.stopPropagation()}
+                    onclick={(e) => {
+                      if (e.detail > 1) return; // ignore the 2nd click of a dblclick
+                      // Pointer: the x position picks a star cell (clicking
+                      // the current rating clears it). Keyboard activation
+                      // has no x → cycle 1..5→0.
+                      let rating: number;
+                      if (e.detail === 0) {
+                        rating = ratingOf(t) >= 5 ? 0 : ratingOf(t) + 1;
+                      } else {
+                        const r = e.currentTarget.getBoundingClientRect();
+                        const star = Math.min(
+                          5,
+                          Math.max(1, Math.ceil(((e.clientX - r.left) / r.width) * 5)),
+                        );
+                        rating = ratingOf(t) === star ? 0 : star;
+                      }
+                      void rateTrack(t, rating);
+                    }}>
+                    <span class="ron">{"★".repeat(ratingOf(t))}</span
+                    ><span class="roff">{"☆".repeat(5 - ratingOf(t))}</span>
+                  </button>
+                </span>
                 <span class="c-star">
                   {#if t.source === REMOTE_SOURCE && t.remoteId != null}
                     <button
@@ -1421,7 +1498,7 @@
   .thead,
   .trow {
     display: grid;
-    grid-template-columns: 4ch minmax(8ch, 1.6fr) minmax(6ch, 1fr) minmax(6ch, 1fr) 6ch 14px;
+    grid-template-columns: 4ch minmax(8ch, 1.6fr) minmax(6ch, 1fr) minmax(6ch, 1fr) 6ch 58px 14px;
     gap: 6px;
     align-items: center;
     padding: 0 6px;
@@ -1510,9 +1587,43 @@
     text-align: center;
   }
 
-  .thead .c-star {
+  .c-rating {
+    text-align: center;
+  }
+
+  .thead .c-star,
+  .thead .c-rating {
     color: #4f4f4f;
     font-size: 10px;
+  }
+
+  /* One composite button per row: click x picks the star cell (1..5).
+     Five glyphs inside keeps the DOM budget for 100k-row lists. */
+  .trow .rstars {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .trow .rstars .ron {
+    color: #d8a63c;
+  }
+
+  .trow .rstars .roff {
+    color: #3a5a3f;
+  }
+
+  .trow .rstars:hover .ron {
+    color: #ffd76a;
+  }
+
+  .trow .rstars:hover .roff {
+    color: #3ccb4e;
   }
 
   .rmark {

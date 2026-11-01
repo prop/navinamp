@@ -260,7 +260,8 @@ async fn get_album_maps_songs_with_optional_fields_absent() {
                         "genre": "Electronic", "coverArt": "mf-1",
                         "size": 31615915, "contentType": "audio/flac", "suffix": "flac",
                         "duration": 293, "bitRate": 906, "disc": 1,
-                        "playCount": 7, "albumId": "al-1", "artistId": "ar-2",
+                        "playCount": 7, "userRating": 4,
+                        "albumId": "al-1", "artistId": "ar-2",
                         "path": "aphex/saw/01 Xtal.flac", "type": "music",
                         "created": "2001-02-03T04:05:06.000Z"
                     },
@@ -305,6 +306,7 @@ async fn get_album_maps_songs_with_optional_fields_absent() {
     assert_eq!(xtal.content_type, "audio/flac");
     assert_eq!(xtal.cover_art_id.as_deref(), Some("mf-1"));
     assert_eq!(xtal.play_count, 7);
+    assert_eq!(xtal.user_rating, 4);
     assert!(!xtal.starred);
 
     // Sparse song: OpenSubsonic "discNumber" spelling, optionals absent.
@@ -314,6 +316,7 @@ async fn get_album_maps_songs_with_optional_fields_absent() {
     assert_eq!(tha.genre, None);
     assert_eq!(tha.year, 0);
     assert_eq!(tha.play_count, 0);
+    assert_eq!(tha.user_rating, 0, "absent userRating defaults to unrated");
     assert!(!tha.starred);
 
     let requests = requests_to(&server, "getAlbum").await;

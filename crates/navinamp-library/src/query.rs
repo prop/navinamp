@@ -259,6 +259,19 @@ pub(super) fn mark_played(conn: &Connection, path: &str) -> rusqlite::Result<()>
     Ok(())
 }
 
+/// Sets the 0–5 star rating for the track at `path` (local or navidrome
+/// row; the value is clamped server-side). An unknown path is a silent
+/// no-op (0 affected rows is not an error). Ratings live in the local DB
+/// for both sources; the bridge pushes remote rows to the Subsonic server
+/// separately when a connection exists.
+pub(super) fn set_rating(conn: &Connection, path: &str, rating: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tracks SET rating = ?2 WHERE path = ?1",
+        rusqlite::params![path, rating.clamp(0, 5)],
+    )?;
+    Ok(())
+}
+
 /// The stored art id of the track at `path`, if any (local content hash
 /// or Navidrome `coverArt` id — the caller disambiguates via the row's
 /// `source`). Unknown paths answer `None`; this is a point lookup on the

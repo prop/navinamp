@@ -238,6 +238,13 @@ impl Library {
         Ok(query::mark_played(&self.conn, path)?)
     }
 
+    /// Sets the 0–5 star rating of the track at `path` (both sources;
+    /// values outside the range are clamped). An unknown path is a silent
+    /// no-op.
+    pub fn set_rating(&self, path: &str, rating: i64) -> Result<()> {
+        Ok(query::set_rating(&self.conn, path, rating)?)
+    }
+
     /// The stored art id for the track at `path`, if any — a local
     /// content hash (servable from the art cache) or, for `navidrome`
     /// rows, the server's `coverArt` id. Unknown paths answer `None`; the

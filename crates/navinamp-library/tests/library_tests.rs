@@ -603,6 +603,42 @@ fn mark_played_ignores_unknown_paths_silently() {
 }
 
 #[test]
+fn set_rating_updates_clamps_and_scopes_by_path() {
+    let (_scratch, library) = scanned_library("set-rating");
+    let tracks = library.tracks_filtered(&TrackFilter::default()).unwrap();
+    let path = tracks[0].path.clone();
+    let rating_of = |p: &str| -> i64 {
+        library
+            .tracks_filtered(&TrackFilter::default())
+            .unwrap()
+            .into_iter()
+            .find(|t| t.path == p)
+            .unwrap()
+            .rating
+    };
+
+    assert_eq!(rating_of(&path), 0);
+    library.set_rating(&path, 4).unwrap();
+    assert_eq!(rating_of(&path), 4);
+
+    // Out-of-range values clamp to the 0–5 scale.
+    library.set_rating(&path, 99).unwrap();
+    assert_eq!(rating_of(&path), 5);
+    library.set_rating(&path, -3).unwrap();
+    assert_eq!(rating_of(&path), 0);
+
+    // Unknown paths are a silent no-op, and other rows are untouched.
+    library.set_rating("/no/such/file.mp3", 5).unwrap();
+    let others: Vec<_> = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.path != path)
+        .collect();
+    assert!(others.iter().all(|t| t.rating == 0));
+}
+
+#[test]
 fn mark_played_never_touches_remote_rows() {
     let (_scratch, library) = scanned_library("mark-remote");
     library
@@ -621,6 +657,7 @@ fn mark_played_never_touches_remote_rows() {
             samplerate: Some(44_100),
             channels: Some(2),
             codec: "mp3".into(),
+            rating: 0,
             art_id: None,
             size: Some(1_000_000),
         }])

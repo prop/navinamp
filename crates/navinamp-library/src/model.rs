@@ -173,6 +173,9 @@ pub struct RemoteTrack {
     pub channels: Option<i64>,
     /// Container/codec id from the suffix (`mp3`, `flac`, …).
     pub codec: String,
+    /// The server's user rating (0 = unrated, 1–5 stars). Imported into
+    /// unrated local rows; a rating set in NaVinaMP is never overwritten.
+    pub rating: i64,
     /// Subsonic `coverArt` id, if the server exposes one.
     pub art_id: Option<String>,
     /// File size in bytes when the server reports it.

@@ -123,6 +123,10 @@ pub struct SongSummary {
     pub cover_art_id: Option<String>,
     #[serde(default)]
     pub play_count: u64,
+    /// The user's 0–5 star rating (`userRating`); 0 when unrated or the
+    /// server does not report ratings.
+    #[serde(default, rename = "userRating")]
+    pub user_rating: u8,
     /// Present-and-true only when starred on the server.
     #[serde(default)]
     pub starred: bool,

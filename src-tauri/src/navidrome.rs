@@ -414,6 +414,23 @@ pub async fn navidrome_star(
     result.map_err(|e| scrub_urls(&e.to_string()))
 }
 
+/// Set the user rating (0 = clear, 1–5 stars) for a track on the server.
+#[tauri::command]
+pub async fn navidrome_rate(
+    state: State<'_, NavidromeState>,
+    remote_id: String,
+    rating: u8,
+) -> Result<(), String> {
+    if rating > 5 {
+        return Err(format!("rating {rating} out of range (0..=5)"));
+    }
+    let client = ensure_client(&state).await?;
+    client
+        .rate(&remote_id, rating)
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))
+}
+
 /// Set the streaming format/bitrate used by [`navidrome_stream_url`].
 /// `original` forces the bitrate off (the file is served as stored).
 #[tauri::command]
@@ -621,6 +638,7 @@ fn map_song(album: &AlbumDetail, song: &SongSummary) -> RemoteTrack {
         samplerate: song.sampling_rate.map(i64::from),
         channels: song.channel_count.map(i64::from),
         codec: song.suffix.clone(),
+        rating: i64::from(song.user_rating.min(5)),
         art_id: song
             .cover_art_id
             .clone()

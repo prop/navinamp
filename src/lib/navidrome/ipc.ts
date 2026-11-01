@@ -95,6 +95,11 @@ export function navidromeStar(remoteId: string, starred: boolean): Promise<void>
   return invoke<void>("navidrome_star", { remoteId, starred });
 }
 
+/** Set the server-side rating (0 = clear, 1–5 stars) for a remote track. */
+export function navidromeRate(remoteId: string, rating: number): Promise<void> {
+  return invoke<void>("navidrome_rate", { remoteId, rating });
+}
+
 /** Persist streaming prefs; `bitrateKbps` is only meaningful for transcodes. */
 export function navidromeSetStreaming(
   format: StreamFormat,

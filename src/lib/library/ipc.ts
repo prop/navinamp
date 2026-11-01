@@ -222,6 +222,15 @@ export function libraryMarkPlayed(path: string): Promise<void> {
   return invoke<void>("library_mark_played", { path });
 }
 
+/**
+ * Set a track's 0–5 star rating in the local library (local and navidrome
+ * rows; the backend clamps the value). Remote rows are additionally pushed
+ * to the Subsonic server by the caller via `navidromeRate`.
+ */
+export function librarySetRating(path: string, rating: number): Promise<void> {
+  return invoke<void>("library_set_rating", { path, rating });
+}
+
 /** The persisted scan roots, as configured by the last `library_scan`. */
 export function libraryRoots(): Promise<string[]> {
   return invoke<string[]>("library_roots");

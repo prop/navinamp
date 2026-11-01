@@ -20,15 +20,16 @@
 - Semantic releases (release-please) + Mac mini CI runner
 - Engine metadata in `audio_state` (bitrate, source sample rate, channels):
   classic kbps/kHz digits and mono/stereo indicators are live
+- Ratings UI: 0–5★ in the library table — local DB write for every row,
+  plus a Navidrome `setRating` push for remote rows; a sync imports server
+  ratings into unrated rows without clobbering local ratings
 
 ## Next up (priority order)
 
-1. **Ratings UI** — smart views can filter rating; nothing sets it.
-   Local write + Navidrome star/rating sync.
-2. **Navidrome playlist sync** — browse/import server playlists; publish
+1. **Navidrome playlist sync** — browse/import server playlists; publish
    smart views as server playlists (subsonic client methods exist).
-3. **Persisted volume + EQ** across restarts (localStorage or config file).
-4. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
+2. **Persisted volume + EQ** across restarts (localStorage or config file).
+3. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
    restart; the loader picks alphabetically).
 
 ## Known follow-ups / deferred
@@ -39,6 +40,8 @@
 - Metadata bitrate is average source bytes ÷ duration; streams whose
   container declares no duration (some transcodes) leave the kbps digits
   blank by design
+- Navidrome favorite stars are still session-local (no `starred` column in
+  `tracks`); rating stars are the persisted path
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
 - Devtools in release builds (needs the tauri `devtools` feature)

@@ -324,6 +324,21 @@ pub fn library_mark_played(
     })
 }
 
+/// Sets the 0–5 star rating of the track at `path` (local or navidrome;
+/// clamped). Unknown paths are a silent no-op. Remote rows are additionally
+/// pushed to the Subsonic server by the caller (`navidrome_rate`).
+#[tauri::command]
+pub fn library_set_rating(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    path: String,
+    rating: i64,
+) -> Result<(), String> {
+    with_library(&app, &state, |library| {
+        library.set_rating(&path, rating).map_err(|e| e.to_string())
+    })
+}
+
 /// The stored art id for one track path — a local content hash (build a
 /// `navinamp-art:` URL from it) or, for `navidrome://` paths, the server's
 /// `coverArt` id (feed to `navidrome_art_url`). `null` when the track has

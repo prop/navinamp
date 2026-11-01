@@ -5,8 +5,10 @@
 //! behave identically downstream:
 //! - rows are keyed by `path` (`navidrome://<remote_id>`, unique, and never
 //!   a filesystem path — the namespaces cannot collide);
-//! - an upsert refreshes only sync-owned columns; user data (`rating`,
-//!   `play_count`, `last_played_at`) and provenance (`date_added`) survive;
+//! - an upsert refreshes only sync-owned columns; user data (`play_count`,
+//!   `last_played_at`) and provenance (`date_added`) survive. Server ratings
+//!   seed rows still unrated locally (0), but a rating set in the app always
+//!   wins over the server's copy;
 //! - removal is scoped to `source = 'navidrome'` — **local rows are never
 //!   touched**, not even read for deletion candidates by path;
 //! - the whole batch lands in one transaction: a sync is atomic.
@@ -78,6 +80,7 @@ pub(super) fn sync_remote(
                 t.samplerate,
                 t.channels,
                 t.codec,
+                t.rating.clamp(0, 5),
                 now_secs,
                 t.remote_id,
                 t.art_id,
@@ -122,17 +125,19 @@ pub(super) fn sync_remote(
 
 /// Insert-or-refresh. On conflict, everything the sync owns is refreshed
 /// (including `art_id` — cover art ids change when the server re-indexes);
-/// user data (`rating`, `play_count`, `last_played_at`) and provenance
-/// (`source` — fixed at `navidrome` for fresh rows — and `date_added`)
-/// survive untouched. `mtime` is pinned to 0: remote rows have no
-/// filesystem stamp and the local scanner never examines them.
+/// local `play_count` / `last_played_at` and provenance (`source` — fixed at
+/// `navidrome` for fresh rows — and `date_added`) survive untouched. Ratings
+/// are imported only into rows that are still unrated locally (0), so a
+/// rating set in the app is never clobbered by a sync. `mtime` is pinned to
+/// 0: remote rows have no filesystem stamp and the local scanner never
+/// examines them.
 const REMOTE_UPSERT_SQL: &str = "\
 INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
-    channels, codec, date_added, source, remote_id, art_id
+    channels, codec, rating, date_added, source, remote_id, art_id
 ) VALUES (
-    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, 'navidrome', ?18, ?19
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 'navidrome', ?19, ?20
 )
 ON CONFLICT(path) DO UPDATE SET
     size         = excluded.size,
@@ -150,5 +155,6 @@ ON CONFLICT(path) DO UPDATE SET
     samplerate      = excluded.samplerate,
     channels        = excluded.channels,
     codec           = excluded.codec,
+    rating          = CASE WHEN tracks.rating = 0 THEN excluded.rating ELSE tracks.rating END,
     remote_id       = excluded.remote_id,
     art_id          = excluded.art_id";
