@@ -67,6 +67,8 @@ pub fn run() {
             library::library_scan,
             library::library_search,
             library::library_albums,
+            library::library_artists,
+            library::library_genres,
             library::library_album_tracks,
             library::library_tracks,
             library::library_stats,

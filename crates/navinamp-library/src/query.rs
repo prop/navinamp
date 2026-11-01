@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Row};
 
-use crate::model::{Album, LibraryStats, Track, TrackFilter};
+use crate::model::{Album, LibraryStats, SourceStats, Track, TrackFilter};
 
 /// Column list for every `SELECT` on `tracks`; positionally mapped by
 /// [`track_from_row`]. With a prefix (`tracks.`) for joins where bare names
@@ -130,7 +130,7 @@ pub(super) fn search(conn: &Connection, q: &str, limit: u32) -> rusqlite::Result
 /// art — the first non-null `art_id` in disc/track order — paired with the
 /// `source` of the very track that carries it, so callers know whether the
 /// id is a local content hash or a Navidrome `coverArt` id.
-pub(super) fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
+pub(super) fn albums(conn: &Connection, source: Option<&str>) -> rusqlite::Result<Vec<Album>> {
     let mut stmt = conn.prepare_cached(
         "SELECT
              t.album_key,
@@ -146,11 +146,12 @@ pub(super) fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
                WHERE t2.album_key = t.album_key AND t2.art_id IS NOT NULL
                ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1)
          FROM tracks t
+         WHERE ?1 IS NULL OR t.source = ?1
          GROUP BY t.album_key
          ORDER BY artist, year, name",
     )?;
     let albums = stmt
-        .query_map([], |row| {
+        .query_map([source], |row| {
             Ok(Album {
                 album_key: row.get(0)?,
                 name: row.get(1)?,
@@ -164,6 +165,29 @@ pub(super) fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
         })?
         .collect::<Result<_, _>>()?;
     Ok(albums)
+}
+
+/// Distinct track artists, optionally scoped to one source, sorted
+/// case-insensitively (SQLite's ASCII fold, matching the smart-view rules).
+pub(super) fn artists(conn: &Connection, source: Option<&str>) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT artist FROM tracks
+         WHERE artist != '' AND (?1 IS NULL OR source = ?1)
+         ORDER BY artist COLLATE NOCASE, artist",
+    )?;
+    let rows = stmt.query_map([source], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// Distinct non-empty genres, optionally scoped to one source.
+pub(super) fn genres(conn: &Connection, source: Option<&str>) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT genre FROM tracks
+         WHERE genre != '' AND (?1 IS NULL OR source = ?1)
+         ORDER BY genre COLLATE NOCASE, genre",
+    )?;
+    let rows = stmt.query_map([source], |row| row.get(0))?;
+    rows.collect()
 }
 
 /// One album's tracks in disc/track order (`path` as the final tie-breaker,
@@ -319,6 +343,7 @@ pub(super) fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
              COUNT(*),
              COUNT(DISTINCT album_key),
              COUNT(DISTINCT COALESCE(NULLIF(album_artist, ''), artist)),
+             COUNT(DISTINCT CASE WHEN genre != '' THEN genre END),
              COALESCE(SUM(duration_secs), 0.0)
          FROM tracks",
         [],
@@ -327,11 +352,47 @@ pub(super) fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
                 tracks: row.get::<_, i64>(0)?.max(0) as u64,
                 albums: row.get::<_, i64>(1)?.max(0) as u64,
                 artists: row.get::<_, i64>(2)?.max(0) as u64,
-                total_secs: row.get(3)?,
+                genres: row.get::<_, i64>(3)?.max(0) as u64,
+                total_secs: row.get(4)?,
                 last_scan: None,
+                local: SourceStats::default(),
+                navidrome: SourceStats::default(),
             })
         },
     )?;
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT
+                 source,
+                 COUNT(*),
+                 COUNT(DISTINCT album_key),
+                 COUNT(DISTINCT COALESCE(NULLIF(album_artist, ''), artist)),
+                 COUNT(DISTINCT CASE WHEN genre != '' THEN genre END),
+                 COALESCE(SUM(duration_secs), 0.0)
+             FROM tracks
+             GROUP BY source",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                SourceStats {
+                    tracks: row.get::<_, i64>(1)?.max(0) as u64,
+                    albums: row.get::<_, i64>(2)?.max(0) as u64,
+                    artists: row.get::<_, i64>(3)?.max(0) as u64,
+                    genres: row.get::<_, i64>(4)?.max(0) as u64,
+                    total_secs: row.get(5)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (source, values) = row?;
+            match source.as_str() {
+                "local" => stats.local = values,
+                "navidrome" => stats.navidrome = values,
+                _ => {} // unknown future source: totals still include it
+            }
+        }
+    }
     stats.last_scan = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'last_scan_at'",

@@ -241,9 +241,36 @@ pub fn library_search(
 pub fn library_albums(
     app: AppHandle,
     state: State<'_, LibraryState>,
+    source: Option<String>,
 ) -> Result<Vec<navinamp_library::Album>, String> {
     with_library(&app, &state, |library| {
-        library.albums().map_err(|e| e.to_string())
+        library.albums(source.as_deref()).map_err(|e| e.to_string())
+    })
+}
+
+/// Distinct track artists (optionally scoped to one source), for the tree.
+#[tauri::command]
+pub fn library_artists(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    source: Option<String>,
+) -> Result<Vec<String>, String> {
+    with_library(&app, &state, |library| {
+        library
+            .artists(source.as_deref())
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Distinct non-empty genres (optionally scoped to one source).
+#[tauri::command]
+pub fn library_genres(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    source: Option<String>,
+) -> Result<Vec<String>, String> {
+    with_library(&app, &state, |library| {
+        library.genres(source.as_deref()).map_err(|e| e.to_string())
     })
 }
 

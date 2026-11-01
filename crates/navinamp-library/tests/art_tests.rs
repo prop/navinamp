@@ -236,7 +236,7 @@ fn albums_expose_first_track_art_and_its_source() {
         .sync_remote(vec![remote("mf-1", "Homogenic", Some("al-42"))])
         .unwrap();
 
-    let albums = library.albums().unwrap();
+    let albums = library.albums(None).unwrap();
     let find = |name: &str| {
         albums
             .iter()

@@ -65,7 +65,7 @@ mod smart;
 
 pub use model::{
     Album, LibraryStats, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress, ScanReport,
-    Track, TrackFilter,
+    SourceStats, Track, TrackFilter,
 };
 pub use remote::{remote_id_from_path, remote_path};
 pub use scanner::{AUDIO_EXTENSIONS, album_key};
@@ -198,8 +198,19 @@ impl Library {
     }
 
     /// All albums grouped by `album_key`, ordered artist → year → title.
-    pub fn albums(&self) -> Result<Vec<Album>> {
-        Ok(query::albums(&self.conn)?)
+    pub fn albums(&self, source: Option<&str>) -> Result<Vec<Album>> {
+        Ok(query::albums(&self.conn, source)?)
+    }
+
+    /// Distinct track artists, optionally scoped to one source, sorted
+    /// case-insensitively.
+    pub fn artists(&self, source: Option<&str>) -> Result<Vec<String>> {
+        Ok(query::artists(&self.conn, source)?)
+    }
+
+    /// Distinct non-empty genres, optionally scoped to one source.
+    pub fn genres(&self, source: Option<&str>) -> Result<Vec<String>> {
+        Ok(query::genres(&self.conn, source)?)
     }
 
     /// One album's tracks, in disc/track order.
@@ -340,7 +351,7 @@ mod tests {
         let library = Library::open(":memory:").expect("open");
         let stats = library.stats().expect("stats");
         assert_eq!(stats, LibraryStats::default());
-        assert!(library.albums().expect("albums").is_empty());
+        assert!(library.albums(None).expect("albums").is_empty());
         assert!(library.search("anything", 10).expect("search").is_empty());
     }
 }

@@ -40,6 +40,8 @@
     friendlyIpcError,
     libraryAlbumTracks,
     libraryAlbums,
+    libraryArtists,
+    libraryGenres,
     libraryRoots,
     libraryScan,
     librarySearch,
@@ -57,6 +59,7 @@
     type LibraryStats,
     type SavedSmartView,
     type ScanProgressPayload,
+    type SourceStats,
     type Track,
   } from "../lib/library/ipc";
   import { emptySmartViewDef } from "../lib/library/smartView";
@@ -110,14 +113,17 @@
     return "value" in s ? `${s.kind}:${s.value}` : s.kind;
   }
 
-  // ── master data (raw: replaced wholesale, never mutated in place) ─────────
+  // ── small master data / lazily fetched tree lists ────────────────────────
+  // The library no longer holds a 20k-row master snapshot. Stats are counts;
+  // the table pages the current view; tree lists load when a group expands.
 
   let stats = $state.raw<LibraryStats | null>(null);
   let roots = $state.raw<string[]>([]);
-  let albums = $state.raw<Album[]>([]);
-  let allTracks = $state.raw<Track[]>([]);
   let views = $state.raw<SavedSmartView[]>([]);
-  let tracksError = $state<string | null>(null);
+  let albums = $state.raw<Album[]>([]);
+  let artistNames = $state.raw<string[]>([]);
+  let genreNames = $state.raw<string[]>([]);
+  let treeError = $state<string | null>(null);
   let viewsError = $state<string | null>(null);
   let statsError = $state<string | null>(null);
 
@@ -166,7 +172,8 @@
     nodeQueryKey = key;
     let cancelled = false;
     if (sel.kind === "all" || sel.kind === "server" || sel.kind === "remote") {
-      // Master-derived views (ALL / REMOTE) track `allTracks`; only the
+      // ALL / REMOTE are paged views (their own effect); only filtered node
+      // queries fetch their rows here.
       // filtered node queries fetch their own rows.
       nodeTracks = null;
       nodeError = null;
@@ -292,50 +299,179 @@
     selectedIds = new Set(displayed.map((t) => t.id));
   }
 
-  // ── derived tree lists ─────────────────────────────────────────────────────
+  // ── paged table (ALL TRACKS / REMOTE TRACKS) ─────────────────────────────
+  // Rows are loaded lazily: a first page on view entry and one page at a
+  // time as the user scrolls. The scrollbar length comes from the stats
+  // counts, so it stays honest before every row is fetched.
 
-  /** The master list narrowed by the source chip (chip applies to the
-   *  ARTISTS/ALBUMS/GENRES groups; ALL TRACKS ignores it). */
-  const chipTracks = $derived.by(() => {
-    if (sourceFilter === "all") return allTracks;
-    return allTracks.filter((t) => t.source === sourceFilter);
+  const PAGE_SIZE = 500;
+
+  let pagedRows = $state.raw<Track[]>([]);
+  let pageOffset = 0;
+  let pageLoading = $state(false);
+  let pageError = $state<string | null>(null);
+  let pageSeq = 0;
+  let rowsEl = $state<HTMLElement | null>(null);
+
+  const pagedView = $derived(selection.kind === "all" || selection.kind === "remote");
+
+  const displayedTotal = $derived.by(() => {
+    if (searchResults != null) return searchResults.length;
+    if (selection.kind === "server") return 0;
+    if (selection.kind === "all") return stats?.tracks ?? 0;
+    if (selection.kind === "remote") return stats?.navidrome.tracks ?? 0;
+    return nodeTracks?.length ?? 0;
   });
 
-  const artistNames = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of chipTracks) if (t.artist !== "") set.add(t.artist);
-    return [...set].sort((a, b) => a.localeCompare(b));
+  async function loadPaged(reset: boolean): Promise<void> {
+    if (!pagedView) return;
+    if (!reset && (pageLoading || pagedRows.length >= displayedTotal)) return;
+    const seq = ++pageSeq;
+    if (reset) {
+      pageOffset = 0;
+      pagedRows = [];
+      pageError = null;
+      if (rowsEl) rowsEl.scrollTop = 0;
+    }
+    pageLoading = true;
+    try {
+      const rows = await libraryTracks({
+        source: selection.kind === "remote" ? REMOTE_SOURCE : undefined,
+        limit: PAGE_SIZE,
+        offset: pageOffset,
+      });
+      if (seq !== pageSeq) return;
+      pagedRows = reset ? rows : [...pagedRows, ...rows];
+      pageOffset += PAGE_SIZE;
+      pageError = null;
+    } catch (e) {
+      if (seq !== pageSeq) return;
+      pageError = friendlyIpcError("library tracks", e);
+      onlog(`media library: page error: ${e}`);
+    } finally {
+      if (seq === pageSeq) pageLoading = false;
+    }
+  }
+
+  // New view or a data refresh (scan/sync completion): restart at page 1.
+  $effect(() => {
+    const sel = selection;
+    void dataVersion;
+    if (sel.kind !== "all" && sel.kind !== "remote") return;
+    void loadPaged(true);
+    return () => {
+      pageSeq++; // cancel an in-flight page when the view changes
+    };
   });
 
-  const genreNames = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of chipTracks) if (t.genre !== "") set.add(t.genre);
-    return [...set].sort((a, b) => a.localeCompare(b));
+  /** Infinite scroll: fetch the next page near the bottom of the list. */
+  function onRowsScroll(e: Event & { currentTarget: HTMLElement }): void {
+    if (!pagedView) return;
+    const el = e.currentTarget;
+    if (searchResults != null) return; // search results are client-side
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) {
+      void loadPaged(false);
+    }
+  }
+
+  // ── tree lists (lazy: fetched when a group expands / the chip changes) ───
+
+  let artistsSeq = 0;
+  let genresSeq = 0;
+  let albumsSeq = 0;
+
+  function chipSource(): string | undefined {
+    return sourceFilter === "all" ? undefined : sourceFilter;
+  }
+
+  async function loadArtists(): Promise<void> {
+    const seq = ++artistsSeq;
+    try {
+      const names = await libraryArtists(chipSource());
+      if (seq !== artistsSeq) return;
+      artistNames = names;
+      treeError = null;
+    } catch (e) {
+      if (seq !== artistsSeq) return;
+      artistNames = [];
+      treeError = friendlyIpcError("artists", e);
+    }
+  }
+
+  async function loadGenres(): Promise<void> {
+    const seq = ++genresSeq;
+    try {
+      const names = await libraryGenres(chipSource());
+      if (seq !== genresSeq) return;
+      genreNames = names;
+      treeError = null;
+    } catch (e) {
+      if (seq !== genresSeq) return;
+      genreNames = [];
+      treeError = friendlyIpcError("genres", e);
+    }
+  }
+
+  async function loadAlbums(): Promise<void> {
+    const seq = ++albumsSeq;
+    try {
+      const list = await libraryAlbums(chipSource());
+      if (seq !== albumsSeq) return;
+      albums = list;
+      treeError = null;
+    } catch (e) {
+      if (seq !== albumsSeq) return;
+      albums = [];
+      treeError = friendlyIpcError("albums", e);
+    }
+  }
+
+  $effect(() => {
+    if (!openGroups.artists) return;
+    void sourceFilter;
+    void dataVersion;
+    void loadArtists();
   });
 
-  /** Album keys that survive the chip — cross-referenced from the full
-   *  track list because `library_albums` has no source filter. */
-  const chipAlbumKeys = $derived.by(() => {
-    const set = new Set<string>();
-    for (const t of chipTracks) set.add(t.albumKey);
-    return set;
+  $effect(() => {
+    if (!openGroups.genres) return;
+    void sourceFilter;
+    void dataVersion;
+    void loadGenres();
   });
 
-  const albumsShown = $derived(
-    sourceFilter === "all" ? albums : albums.filter((a) => chipAlbumKeys.has(a.albumKey)),
-  );
+  $effect(() => {
+    if (!openGroups.albums) return;
+    void sourceFilter;
+    void dataVersion;
+    void loadAlbums();
+  });
+
+  /** Tree counts come from the cheap stats query, not from loaded lists. */
+  const chipStats = $derived.by((): SourceStats | null => {
+    if (!stats) return null;
+    if (sourceFilter === "all") return stats;
+    return sourceFilter === "local" ? stats.local : stats.navidrome;
+  });
+
+  /** Albums are fetched pre-filtered by the source chip. */
+  const albumsShown = $derived(albums);
+
+  // ── current table view ─────────────────────────────────────────────────────
 
   const displayed = $derived.by(() => {
     if (searchResults != null) return searchResults;
     if (selection.kind === "server") return []; // the pane is the status card
-    if (selection.kind === "all") return allTracks;
-    // REMOTE TRACKS is a filter of the master snapshot — querying the whole
-    // remote library separately duplicated the 20k-row load on every sync.
-    if (selection.kind === "remote") {
-      return allTracks.filter((t) => t.source === REMOTE_SOURCE);
-    }
+    if (pagedView) return pagedRows;
     return nodeTracks ?? [];
   });
+
+  const tableLoading = $derived(
+    searchResults == null &&
+      (pagedView
+        ? pageLoading && pagedRows.length === 0
+        : nodeLoading && nodeTracks == null && selection.kind !== "server"),
+  );
 
   const selectedMetas = $derived.by(() => {
     if (selectedIds.size === 0) return [];
@@ -344,9 +480,8 @@
 
   // A blocking message replaces the table only when the current view failed.
   const viewError = $derived.by(() => {
-    if (searchResults != null) return null;
-    if (selection.kind === "server") return null; // the card owns its errors
-    if (selection.kind === "all") return tracksError;
+    if (searchResults != null || selection.kind === "server") return null;
+    if (pagedView) return pageError;
     return nodeError;
   });
 
@@ -365,9 +500,17 @@
   });
 
   const footerText = $derived.by(() => {
-    const n = displayed.length;
+    const paged = pagedView;
+    const n = paged ? displayedTotal : displayed.length;
     let secs = 0;
-    for (const t of displayed) secs += t.durationSecs;
+    if (paged) {
+      secs =
+        selection.kind === "remote"
+          ? (stats?.navidrome.totalSecs ?? 0)
+          : (stats?.totalSecs ?? 0);
+    } else {
+      for (const t of displayed) secs += t.durationSecs;
+    }
     const scan = scanning
       ? ` · scanning ${progress != null ? `${progress.scanned.toLocaleString()}/${progress.total.toLocaleString()}` : "…"}`
       : "";
@@ -423,8 +566,8 @@
     const live = <T,>(set: (v: T) => void, err?: (msg: string) => void) => (v: T) => {
       if (seq === loadSeq) set(v);
     };
-    // Each facet degrades independently — a failed smart-views list must not
-    // take the track table down with it.
+    // Startup only loads cheap counts/metadata. The table pages itself and
+    // tree lists load when a group expands — no 20k-row master snapshot.
     void libraryStats().then(
       live((s) => {
         stats = s;
@@ -436,19 +579,6 @@
       },
     );
     void libraryRoots().then(live((r) => (roots = r)), () => undefined);
-    void libraryAlbums().then(live((a) => (albums = a)), () => undefined);
-    void libraryTracks().then(
-      live((t) => {
-        allTracks = t;
-        tracksError = null;
-      }),
-      (e) => {
-        if (seq !== loadSeq) return;
-        allTracks = [];
-        tracksError = friendlyIpcError("library tracks", e);
-        onlog(`media library: tracks error: ${e}`);
-      },
-    );
     await refreshViews(seq);
   }
 
@@ -466,17 +596,17 @@
     }
   }
 
-  // ── sync-time aggregate refreshes ─────────────────────────────────────────
-  // The pane query streams rows already, but the header stats and the
-  // ALL TRACKS / ARTISTS / ALBUMS / GENRES stores are snapshots. Refresh them
-  // during the walk (stats every second, the heavier lists every ~10s) so
-  // already-synced items appear before the sync completes.
+  // ── sync-time refresh ─────────────────────────────────────────────────────
+  // Counts update continuously; the table pages and tree lists are small
+  // lazy queries, so there is no 20k-row aggregate reload anymore.
 
-  let aggregatesBusy = false;
+  let statsSeq = 0;
 
   function refreshStats(): void {
+    const seq = ++statsSeq;
     void libraryStats().then(
       (s) => {
+        if (seq !== statsSeq) return;
         stats = s;
         statsError = null;
       },
@@ -484,25 +614,11 @@
     );
   }
 
-  async function refreshAggregates(): Promise<void> {
-    if (aggregatesBusy) return;
-    aggregatesBusy = true;
-    try {
-      const [s, tracks, albumsNow] = await Promise.all([
-        libraryStats(),
-        libraryTracks(),
-        libraryAlbums(),
-      ]);
-      stats = s;
-      statsError = null;
-      allTracks = tracks;
-      tracksError = null;
-      albums = albumsNow;
-    } catch {
-      // Keep the previous snapshot; a failed partial refresh is harmless.
-    } finally {
-      aggregatesBusy = false;
-    }
+  /** Re-fetch only the tree lists the user currently has open. */
+  function refreshTreeLists(): void {
+    if (openGroups.artists) void loadArtists();
+    if (openGroups.genres) void loadGenres();
+    if (openGroups.albums) void loadAlbums();
   }
 
   $effect(() => {
@@ -583,14 +699,9 @@
 
   let navStatus = $state.raw<NavidromeStatus | null>(null);
 
-  /** Synced remote rows, for the REMOTE TRACKS count in the tree. While
-   *  connected this reads the backend's live count, which advances during a
-   *  sync as batches land. */
-  const remoteTrackCount = $derived(
-    navStatus?.configured === true
-      ? navStatus.trackCount
-      : allTracks.reduce((n, t) => (t.source === REMOTE_SOURCE ? n + 1 : n), 0),
-  );
+  /** Synced remote rows, for the REMOTE TRACKS count in the tree (cheap
+   *  stats query; advances during a sync as batches land). */
+  const remoteTrackCount = $derived(stats?.navidrome.tracks ?? 0);
   let navError = $state<string | null>(null);
   let navSyncing = $state(false);
   let navProgress = $state.raw<NavidromeProgressPayload | null>(null);
@@ -805,7 +916,7 @@
 
   let lastProgressRefresh = 0;
   let lastStatsRefresh = 0;
-  let lastAggregateRefresh = 0;
+  let lastTreeRefresh = 0;
   $effect(() => {
     void refreshNavStatus();
     const up = onNavidromeProgress((p) => {
@@ -822,9 +933,9 @@
         void refreshNavStatus();
       }
 
-      // ALL / REMOTE are master-derived views: they refresh with the
-      // aggregate snapshot below. Filtered panes (artist/album/…) requery
-      // at most every 5s and never while the previous query is in flight.
+      // Filtered panes (artist/album/…) requery at most every 5s and never
+      // while the previous query is in flight. ALL/REMOTE are paged: their
+      // counts follow stats; the page refreshes on view entry/completion.
       const masterView =
         selection.kind === "all" || selection.kind === "remote" || selection.kind === "server";
       if (!masterView && !nodeLoading && now - lastProgressRefresh >= 5000) {
@@ -832,11 +943,10 @@
         dataVersion++;
       }
 
-      // The heavy snapshot (21k rows + album groups) on a slow cadence;
-      // refreshAggregates refuses to overlap itself.
-      if (now - lastAggregateRefresh >= 15_000) {
-        lastAggregateRefresh = now;
-        void refreshAggregates();
+      // Only the currently expanded tree groups refresh, on a slow cadence.
+      if (now - lastTreeRefresh >= 15_000) {
+        lastTreeRefresh = now;
+        refreshTreeLists();
       }
     });
     const us = onNavidromeSynced((payload) => {
@@ -962,16 +1072,49 @@
     return list.map(toMeta);
   }
 
-  function enqueueAll(): void {
-    if (displayed.length > 0) onenqueue(toMetas(displayed));
+  let actionBusy = $state(false);
+
+  /** Load every row of the current paged view for an ENQUEUE/PLAY ALL. */
+  async function allRowsForAction(): Promise<Track[]> {
+    if (!pagedView) return displayed;
+    const total = displayedTotal;
+    if (pagedRows.length >= total) return pagedRows;
+    actionBusy = true;
+    try {
+      const rows: Track[] = [];
+      let offset = 0;
+      const CHUNK = 2000;
+      while (offset < total) {
+        const page = await libraryTracks({
+          source: selection.kind === "remote" ? REMOTE_SOURCE : undefined,
+          limit: CHUNK,
+          offset,
+        });
+        rows.push(...page);
+        offset += page.length;
+        if (page.length === 0) break;
+      }
+      return rows;
+    } catch (e) {
+      onlog(`media library: bulk load failed: ${e}`);
+      return pagedRows;
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function enqueueAll(): Promise<void> {
+    const rows = await allRowsForAction();
+    if (rows.length > 0) onenqueue(toMetas(rows));
   }
 
   function enqueueSelected(): void {
     if (selectedMetas.length > 0) onenqueue(selectedMetas.map(toMeta));
   }
 
-  function playAll(): void {
-    if (displayed.length > 0) onplaynow(toMetas(displayed));
+  async function playAll(): Promise<void> {
+    const rows = await allRowsForAction();
+    if (rows.length > 0) onplaynow(toMetas(rows));
   }
 
   function baseName(path: string): string {
@@ -1036,12 +1179,12 @@
       oninput={onSearchInput}
       aria-label="search library" />
     <div class="actions">
-      <button onclick={enqueueAll} disabled={displayed.length === 0} title="append every track in view">ENQUEUE ALL</button>
+      <button onclick={() => void enqueueAll()} disabled={displayedTotal === 0 || actionBusy} title="append every track in view">ENQUEUE ALL</button>
       <button
         onclick={enqueueSelected}
         disabled={selectedMetas.length === 0}
         title="append the selected tracks">ENQUEUE SEL</button>
-      <button onclick={playAll} disabled={displayed.length === 0} title="append and start playing">PLAY ALL</button>
+      <button onclick={() => void playAll()} disabled={displayedTotal === 0 || actionBusy} title="append and start playing">PLAY ALL</button>
     </div>
     <span class="statline" title={roots.join("\n")}>{statsLine}</span>
   </div>
@@ -1071,10 +1214,10 @@
         onclick={() => (openGroups.artists = !openGroups.artists)}
         aria-expanded={openGroups.artists}>
         <span class="tw">{openGroups.artists ? "▾" : "▸"}</span>ARTISTS
-        <span class="cnt">({artistNames.length})</span>
+        <span class="cnt">({(chipStats?.artists ?? 0).toLocaleString()})</span>
       </button>
       {#if openGroups.artists}
-        {#if artistNames.length === 0 && tracksError == null}
+        {#if artistNames.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no artists"}</div>
         {/if}
         {#each artistNames as name (name)}
@@ -1090,10 +1233,10 @@
         onclick={() => (openGroups.albums = !openGroups.albums)}
         aria-expanded={openGroups.albums}>
         <span class="tw">{openGroups.albums ? "▾" : "▸"}</span>ALBUMS
-        <span class="cnt">({albumsShown.length})</span>
+        <span class="cnt">({(chipStats?.albums ?? 0).toLocaleString()})</span>
       </button>
       {#if openGroups.albums}
-        {#if albumsShown.length === 0 && tracksError == null}
+        {#if albumsShown.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no albums"}</div>
         {/if}
         {#each albumsShown as a (a.albumKey)}
@@ -1123,10 +1266,10 @@
         onclick={() => (openGroups.genres = !openGroups.genres)}
         aria-expanded={openGroups.genres}>
         <span class="tw">{openGroups.genres ? "▾" : "▸"}</span>GENRES
-        <span class="cnt">({genreNames.length})</span>
+        <span class="cnt">({(chipStats?.genres ?? 0).toLocaleString()})</span>
       </button>
       {#if openGroups.genres}
-        {#if genreNames.length === 0 && tracksError == null}
+        {#if genreNames.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no genres"}</div>
         {/if}
         {#each genreNames as name (name)}
@@ -1286,10 +1429,15 @@
           ><span class="c-rating" title="rating (click a star; the same star clears)">RATING</span
           ><span class="c-star" title="star (navidrome)">★</span>
         </div>
-        <div class="rows" role="listbox" aria-label="track list">
+        <div
+          class="rows"
+          role="listbox"
+          aria-label="track list"
+          bind:this={rowsEl}
+          onscroll={onRowsScroll}>
           {#if viewError}
             <div class="msg err">{viewError}</div>
-          {:else if nodeLoading && nodeTracks == null && searchResults == null && selection.kind !== "all"}
+          {:else if tableLoading}
             <div class="msg">loading…</div>
           {:else if displayed.length === 0}
             {#if selection.kind === "remote" && searchResults == null}
@@ -1400,7 +1548,8 @@
     {#if displayed.length > 0 && selectedIds.size > 0}
       <span class="selnote">{selectedIds.size.toLocaleString()} selected</span>
     {/if}
-    <button class="selall" onclick={selectAllView} disabled={displayed.length === 0}>SELECT ALL</button>
+    <button class="selall" onclick={selectAllView} disabled={displayed.length === 0}
+      title="select the loaded rows">SELECT ALL</button>
   </footer>
 
   {#if editing}

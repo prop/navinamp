@@ -82,14 +82,28 @@ export interface Album {
   artSource: string | null;
 }
 
+/** Per-source library counters (the source chips / tree). */
+export interface SourceStats {
+  tracks: number;
+  albums: number;
+  artists: number;
+  genres: number;
+  totalSecs: number;
+}
+
 /** Whole-library counters for the status bar / empty-state UI. */
 export interface LibraryStats {
   tracks: number;
   albums: number;
   artists: number;
+  genres: number;
   totalSecs: number;
   /** Unix **milliseconds** of the last completed scan, if any. */
   lastScan: number | null;
+  /** Rows whose `source = 'local'`. */
+  local: SourceStats;
+  /** Rows whose `source = 'navidrome'`. */
+  navidrome: SourceStats;
 }
 
 /** Why a single file could not be indexed (never fatal). */
@@ -195,9 +209,19 @@ export function librarySearch(q: string, limit?: number): Promise<Track[]> {
   return invoke<Track[]>("library_search", { q, limit });
 }
 
-/** All albums grouped by album key, ordered artist → year → title. */
-export function libraryAlbums(): Promise<Album[]> {
-  return invoke<Album[]>("library_albums");
+/** All albums grouped by album key, optionally scoped to one source. */
+export function libraryAlbums(source?: string): Promise<Album[]> {
+  return invoke<Album[]>("library_albums", { source });
+}
+
+/** Distinct track artists, optionally scoped to one source. */
+export function libraryArtists(source?: string): Promise<string[]> {
+  return invoke<string[]>("library_artists", { source });
+}
+
+/** Distinct non-empty genres, optionally scoped to one source. */
+export function libraryGenres(source?: string): Promise<string[]> {
+  return invoke<string[]>("library_genres", { source });
 }
 
 /** One album's tracks in disc/track order. */

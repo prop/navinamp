@@ -77,6 +77,17 @@ pub struct Album {
     pub art_source: Option<String>,
 }
 
+/// Per-source counters (the library's source chips and tree counts).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceStats {
+    pub tracks: u64,
+    pub albums: u64,
+    pub artists: u64,
+    pub genres: u64,
+    pub total_secs: f64,
+}
+
 /// Whole-library counters for the status bar / empty-state UI.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,9 +95,14 @@ pub struct LibraryStats {
     pub tracks: u64,
     pub albums: u64,
     pub artists: u64,
+    pub genres: u64,
     pub total_secs: f64,
     /// Unix **milliseconds** of the last completed scan, if any.
     pub last_scan: Option<i64>,
+    /// Rows whose `source = 'local'`.
+    pub local: SourceStats,
+    /// Rows whose `source = 'navidrome'`.
+    pub navidrome: SourceStats,
 }
 
 /// Optional constraints for [`crate::Library::tracks_filtered`]. All fields

@@ -19,7 +19,7 @@ let report = library.scan_roots(&[PathBuf::from("/Users/me/Music")], |p| {
 
 // Query (FTS5-ranked, prefix-friendly, case/diacritic-insensitive)
 for track in library.search("bjö", 25)? { /* ... */ }
-for album in library.albums()? { /* ... */ }
+for album in library.albums(None)? { /* ... */ }
 let stats = library.stats()?; // tracks / albums / artists / total_secs / last_scan
 ```
 

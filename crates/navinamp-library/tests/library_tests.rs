@@ -300,7 +300,7 @@ fn albums_group_by_album_key_with_artist_fallback() {
     let library = Library::open(scratch.db()).unwrap();
     library.scan_roots(&[music], |_| {}).unwrap();
 
-    let albums = library.albums().unwrap();
+    let albums = library.albums(None).unwrap();
     assert_eq!(albums.len(), 2, "{albums:?}");
 
     let london = albums
@@ -723,4 +723,27 @@ fn track_by_path_returns_the_row_or_none() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn artists_genres_and_source_stats_match_the_rows() {
+    let (_scratch, library) = scanned_library("stats-lists");
+
+    let artists = library.artists(None).unwrap();
+    assert!(artists.contains(&"Björk".to_string()));
+    assert!(artists.iter().all(|a| !a.is_empty()));
+
+    let genres = library.genres(None).unwrap();
+    assert!(genres.contains(&"Electronic".to_string()));
+    assert!(genres.iter().all(|g| !g.is_empty()));
+
+    let stats = library.stats().unwrap();
+    assert_eq!(stats.genres, genres.len() as u64);
+    assert_eq!(stats.local.tracks, stats.tracks);
+    assert_eq!(stats.local.genres, stats.genres);
+    assert_eq!(stats.navidrome.tracks, 0);
+
+    // Source filters are applied in SQL.
+    assert_eq!(library.artists(Some("local")).unwrap(), artists);
+    assert!(library.albums(Some("navidrome")).unwrap().is_empty());
 }

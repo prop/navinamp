@@ -49,13 +49,19 @@
   now draws the live response curve
 - Context menus (playlist + library rows): Play/Remove/Enqueue, star,
   rating, Copy path; the stock webview menu is replaced on those rows
-- Navidrome sync renders incrementally: rows are upserted to the library in
-  album batches during the walk; the REMOTE/ALL views and tree come from one
-  master snapshot (refreshed at most every 15s, never overlapping), header
-  stats every 2s, filtered panes at most every 5s; pruning only runs after a
-  complete walk
-- Track list containment: the 320px table now clips/scolls its rows instead
+- Library loads lazily: startup fetches only stats/roots/views; the table
+  pages 500 rows on entry and appends on scroll; artist/genre/album tree
+  lists load when a group expands; counts come from per-source stats. No
+  20k-row master snapshot and no sync-time aggregate reload.
+- Navidrome sync still writes rows in album batches; the UI now refreshes
+  only counts (2s) and the tree groups that are actually open (15s);
+  pruning only runs after a complete walk.
+- Track list containment: the 320px table now clips/scrolls its rows instead
   of painting over the footer and EQ panel (overscroll contained)
+- Paged views: SELECT ALL selects the loaded rows only; shift-range
+  selection is limited to loaded rows (a select-all-by-filter command is a
+  future addition). Row virtualization is still pending for very deep
+  scrolls / the 100k target.
 
 ## Next up
 

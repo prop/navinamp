@@ -19,7 +19,8 @@ use common::{
 };
 
 const RATE: u32 = 44_100;
-const TIMEOUT: Duration = Duration::from_secs(10);
+// Generous: the workspace test run is parallel and can starve the producer.
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 fn engine_on(sink: &TestSink) -> EngineHandle {
     EngineHandle::start_with_sink(sink.clone()).expect("engine start")

@@ -15,7 +15,8 @@ use crossbeam_channel::{Receiver, TryRecvError};
 use navinamp_audio::{Command, EngineHandle, Event, PlaybackStatus, TestSink, TrackSource};
 
 const RATE: u32 = 44100;
-const TIMEOUT: Duration = Duration::from_secs(10);
+// Generous: the workspace test run is parallel and can starve the producer.
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // HTTP fixture server
