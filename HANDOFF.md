@@ -34,6 +34,9 @@
 - Persisted volume + EQ in `<app_config_dir>/audio.json`: loaded before
   the engine boots, replayed on first playback, and written with a
   debounced coalescing thread (slider drags → one write per quiet window)
+- Navidrome first-connect UX: a settings change auto-starts the library
+  sync when no remote rows exist, and the REMOTE TRACKS empty state offers
+  SYNC LIBRARY NOW / RETRY with live progress and the last sync error
 
 ## Next up (priority order)
 

@@ -344,7 +344,7 @@
     if (searchResults != null) return `no matches for “${searchQ.trim()}”`;
     if (selection.kind === "all") return "library is empty — use “Scan folder…” above";
     if (selection.kind === "smart") return "this smart view returned no tracks";
-    if (selection.kind === "remote") return "no navidrome tracks — connect & sync in SERVER STATUS";
+    if (selection.kind === "remote") return "no navidrome tracks — sync from SERVER STATUS";
     if (selection.kind === "playlist") return "this server playlist is empty";
     return "no tracks in this category";
   });
@@ -608,6 +608,19 @@
         navSyncError = friendlyIpcError("navidrome sync", e);
         onlog(`navidrome: sync error: ${msg}`);
       }
+    }
+  }
+
+  /**
+   * Settings changed (connect/disconnect/streaming prefs): refresh status,
+   * and pull the library automatically when a *new* connection has no
+   * remote rows yet — otherwise connecting appears to do nothing.
+   */
+  async function onNavChanged(): Promise<void> {
+    await refreshNavStatus();
+    if (navStatus?.configured === true && navStatus.trackCount === 0 && !navSyncing) {
+      onlog("navidrome: connected — starting the first library sync");
+      void syncNow();
     }
   }
 
@@ -1133,7 +1146,34 @@
           {:else if nodeLoading && searchResults == null && selection.kind !== "all"}
             <div class="msg">loading…</div>
           {:else if displayed.length === 0}
-            <div class="msg">{emptyMessage}</div>
+            {#if selection.kind === "remote" && searchResults == null}
+              <div class="msg remote-empty">
+                {#if navSyncing}
+                  <p>
+                    syncing the Navidrome library…
+                    {navProgress
+                      ? `${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
+                      : ""}
+                  </p>
+                {:else}
+                  <p>
+                    {navSyncError
+                      ? `last sync failed: ${navSyncError}`
+                      : navStatus?.configured === true
+                        ? "the server library is not synced into this app yet"
+                        : "no server connection — open SERVER STATUS to connect"}
+                  </p>
+                  <button
+                    class="cta"
+                    disabled={navStatus?.configured !== true || navSyncing}
+                    onclick={() => void syncNow()}>
+                    {navSyncError ? "RETRY SYNC" : "SYNC LIBRARY NOW"}
+                  </button>
+                {/if}
+              </div>
+            {:else}
+              <div class="msg">{emptyMessage}</div>
+            {/if}
           {:else}
             {#each displayed as t, i (t.id)}
               <div
@@ -1221,7 +1261,7 @@
   {#if showSettings}
     <NavidromeSettings
       onclose={() => (showSettings = false)}
-      onchanged={() => void refreshNavStatus()}
+      onchanged={() => void onNavChanged()}
       onlog={onlog} />
   {/if}
 </div>
@@ -1766,6 +1806,37 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 11px;
     color: #2f4f33;
+  }
+
+  /* REMOTE TRACKS empty state: the pane owns the sync call-to-action. */
+  .remote-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .remote-empty p {
+    margin: 0;
+    color: #4a7a52;
+  }
+
+  .remote-empty .cta {
+    background: #12301b;
+    color: #8dff9e;
+    border: 1px solid #2f4f33;
+    border-radius: 2px;
+    padding: 3px 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+  }
+
+  .remote-empty .cta:hover:not(:disabled) {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
   }
 
   /* ── navidrome server status card ── */
