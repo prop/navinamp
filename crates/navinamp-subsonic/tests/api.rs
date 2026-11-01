@@ -278,6 +278,7 @@ async fn get_album_maps_songs_with_optional_fields_absent() {
                         "size": 31615915, "contentType": "audio/flac", "suffix": "flac",
                         "duration": 293, "bitRate": 906, "disc": 1,
                         "playCount": 7, "userRating": 4,
+                        "starred": "2024-05-01T10:00:00.000Z",
                         "albumId": "al-1", "artistId": "ar-2",
                         "path": "aphex/saw/01 Xtal.flac", "type": "music",
                         "created": "2001-02-03T04:05:06.000Z"
@@ -324,7 +325,7 @@ async fn get_album_maps_songs_with_optional_fields_absent() {
     assert_eq!(xtal.cover_art_id.as_deref(), Some("mf-1"));
     assert_eq!(xtal.play_count, 7);
     assert_eq!(xtal.user_rating, 4);
-    assert!(!xtal.starred);
+    assert!(xtal.starred, "OpenSubsonic starred timestamp means starred");
 
     // Sparse song: OpenSubsonic "discNumber" spelling, optionals absent.
     let tha = &album.songs[1];

@@ -127,9 +127,52 @@ pub struct SongSummary {
     /// server does not report ratings.
     #[serde(default, rename = "userRating")]
     pub user_rating: u8,
-    /// Present-and-true only when starred on the server.
-    #[serde(default)]
+    /// Starred on the server. Classic Subsonic sends a boolean; OpenSubsonic
+    /// (Navidrome) sends the starred **timestamp** — both are accepted.
+    #[serde(default, deserialize_with = "deserialize_starred")]
     pub starred: bool,
+}
+
+/// `starred` is a boolean in classic Subsonic but an ISO-8601 timestamp in
+/// OpenSubsonic; presence (a non-empty string) means starred. Missing/null
+/// means not starred.
+fn deserialize_starred<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+
+    struct StarredVisitor;
+
+    impl<'de> Visitor<'de> for StarredVisitor {
+        type Value = bool;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a boolean or an ISO-8601 timestamp string")
+        }
+
+        fn visit_bool<E: de::Error>(self, value: bool) -> Result<bool, E> {
+            Ok(value)
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<bool, E> {
+            Ok(!value.is_empty())
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<bool, E> {
+            Ok(false) // explicit null
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<bool, E> {
+            Ok(false)
+        }
+
+        fn visit_some<D2: serde::Deserializer<'de>>(self, d: D2) -> Result<bool, D2::Error> {
+            serde::Deserialize::deserialize(d)
+        }
+    }
+
+    deserializer.deserialize_any(StarredVisitor)
 }
 
 /// Result of `search3` (the parts NaVinaMP displays; artists come from
@@ -264,4 +307,26 @@ pub(crate) struct GetPlaylistResponse {
 pub(crate) struct PlaylistEntries {
     #[serde(default)]
     pub entry: Vec<SongSummary>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SongSummary;
+
+    fn song(json: &str) -> SongSummary {
+        serde_json::from_str(json).expect("song parses")
+    }
+
+    #[test]
+    fn starred_accepts_boolean_and_open_subsonic_timestamp() {
+        assert!(song(r#"{"id":"a","title":"A","starred":true}"#).starred);
+        assert!(!song(r#"{"id":"a","title":"A","starred":false}"#).starred);
+        // OpenSubsonic/Navidrome: the starred *date* means starred.
+        assert!(
+            song(r#"{"id":"a","title":"A","starred":"2026-08-22T09:28:48.766065843Z"}"#).starred
+        );
+        assert!(!song(r#"{"id":"a","title":"A","starred":""}"#).starred);
+        assert!(!song(r#"{"id":"a","title":"A","starred":null}"#).starred);
+        assert!(!song(r#"{"id":"a","title":"A"}"#).starred);
+    }
 }
