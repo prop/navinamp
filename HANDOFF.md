@@ -1,0 +1,57 @@
+# NaVinaMP — current status & next steps
+
+> Handoff note for the next development session. Last updated: 2026-11-01,
+> after the v0.5.0 release.
+
+## State
+
+- All six roadmap milestones shipped. Latest release: **v0.5.0**
+  (dmg on the Releases page; CI builds it automatically on `v*` tags).
+- Test suites: 25+ green across five crates + frontend. Clippy/fmt clean.
+- Four windows: player (skinned), playlist editor, media library, EQ.
+
+## Just shipped (v0.5.0 + master since)
+
+- M4A/AAC playback (decoder priming for undeclared channel layouts)
+- Classic Winamp 2 `.wsz` skin support (base-2.91 renders)
+- Bitmap-glyph fonts (text.bmp/numbers.bmp), pledit.txt colors in the PE
+- Queue persistence, recursive folder adds, always-on-top toggles
+- Runaway-window guard, native cursor/no-selection
+- Semantic releases (release-please) + Mac mini CI runner
+
+## Next up (priority order)
+
+1. **Engine metadata in `audio_state`** — bitrate, sample rate, channels.
+   Lights up the classic skin's bitrate/kHz digits and mono/stereo
+   indicators (currently blank/dim by design).
+2. **Ratings UI** — smart views can filter rating; nothing sets it.
+   Local write + Navidrome star/rating sync.
+3. **Navidrome playlist sync** — browse/import server playlists; publish
+   smart views as server playlists (subsonic client methods exist).
+4. **Persisted volume + EQ** across restarts (localStorage or config file).
+5. **In-app skin switcher** (currently: drop `.wal` in the skins folder +
+   restart; the loader picks alphabetically).
+
+## Known follow-ups / deferred
+
+- EQ: AUTO button (visual only), preset saving, live curve rendering,
+  EQ window close button (decorative), duplicate HTML EqPanel in the
+  library DEV section
+- `Warning::ClassicMissingOptional` missing from the frontend `Warning`
+  union in `src/lib/skin/types.ts`
+- Devtools in release builds (needs the tauri `devtools` feature)
+- Chunked virtualization for 100k-row lists; svelte-check/TS7 baseline
+- Signing ($99/yr) for prompt-free installs; auto-updater after that
+- Deferred by decision: multi-platform CI releases, MAKI runtime,
+  video window, Shoutcast
+
+## Gotchas
+
+- `GITHUB_TOKEN`-created tags don't fire CI. After merging a release PR,
+  push the tag from a local checkout:
+  `git push origin :refs/tags/vX.Y.Z 2>/dev/null; git push origin vX.Y.Z`
+- Empty-string GitHub secrets reach the Tauri CLI and break signing —
+  the release job filters them (see ci.yml "Prepare signing environment").
+- Session resumption: OpenCode sessions live on this machine
+  (`~/.local/share/opencode`); resume with `opencode --resume` from
+  `/Users/prop/develop/navamp` (symlink to `navinamp`).
