@@ -8,7 +8,8 @@
 //! - an upsert refreshes only sync-owned columns; user data (`play_count`,
 //!   `last_played_at`) and provenance (`date_added`) survive. Server ratings
 //!   seed rows still unrated locally (0), but a rating set in the app always
-//!   wins over the server's copy;
+//!   wins over the server's copy. `starred` is server-owned and refreshed on
+//!   every sync (the star action mirrors back into the local row);
 //! - removal is scoped to `source = 'navidrome'` — **local rows are never
 //!   touched**, not even read for deletion candidates by path;
 //! - the whole batch lands in one transaction: a sync is atomic.
@@ -81,6 +82,7 @@ pub(super) fn sync_remote(
                 t.channels,
                 t.codec,
                 t.rating.clamp(0, 5),
+                t.starred,
                 now_secs,
                 t.remote_id,
                 t.art_id,
@@ -135,9 +137,9 @@ const REMOTE_UPSERT_SQL: &str = "\
 INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
-    channels, codec, rating, date_added, source, remote_id, art_id
+    channels, codec, rating, starred, date_added, source, remote_id, art_id
 ) VALUES (
-    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 'navidrome', ?19, ?20
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21
 )
 ON CONFLICT(path) DO UPDATE SET
     size         = excluded.size,
@@ -156,5 +158,6 @@ ON CONFLICT(path) DO UPDATE SET
     channels        = excluded.channels,
     codec           = excluded.codec,
     rating          = CASE WHEN tracks.rating = 0 THEN excluded.rating ELSE tracks.rating END,
+    starred         = excluded.starred,
     remote_id       = excluded.remote_id,
     art_id          = excluded.art_id";

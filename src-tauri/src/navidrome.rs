@@ -398,9 +398,11 @@ pub async fn navidrome_scrobble(
         .map_err(|e| scrub_urls(&e.to_string()))
 }
 
-/// Star or unstar a track on the server.
+/// Star or unstar a track on the server, then mirror the flag into the
+/// local row so it survives restarts and shows in every view.
 #[tauri::command]
 pub async fn navidrome_star(
+    app: AppHandle,
     state: State<'_, NavidromeState>,
     remote_id: String,
     starred: bool,
@@ -411,7 +413,21 @@ pub async fn navidrome_star(
     } else {
         client.unstar(&remote_id).await
     };
-    result.map_err(|e| scrub_urls(&e.to_string()))
+    result.map_err(|e| scrub_urls(&e.to_string()))?;
+
+    // The server already changed; a local mirror failure must not turn the
+    // action into an error (the UI would revert a successful star).
+    if let Ok(path) = db_file(&app) {
+        match Library::open(path) {
+            Ok(library) => {
+                if let Err(e) = library.set_starred(&remote_id, starred) {
+                    eprintln!("navinamp navidrome: cannot mirror star locally: {e}");
+                }
+            }
+            Err(e) => eprintln!("navinamp navidrome: cannot open library to mirror star: {e}"),
+        }
+    }
+    Ok(())
 }
 
 /// Set the user rating (0 = clear, 1–5 stars) for a track on the server.
@@ -488,6 +504,7 @@ fn playlist_rows(songs: &[SongSummary]) -> Vec<Track> {
             channels: song.channel_count.map(i64::from),
             codec: song.suffix.clone(),
             rating: i64::from(song.user_rating.min(5)),
+            starred: song.starred,
             play_count: i64::try_from(song.play_count).unwrap_or(i64::MAX),
             last_played_at: None,
             date_added: 0,
@@ -797,6 +814,7 @@ fn map_song(album: &AlbumDetail, song: &SongSummary) -> RemoteTrack {
         channels: song.channel_count.map(i64::from),
         codec: song.suffix.clone(),
         rating: i64::from(song.user_rating.min(5)),
+        starred: song.starred,
         art_id: song
             .cover_art_id
             .clone()

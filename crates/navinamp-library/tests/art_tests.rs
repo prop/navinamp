@@ -64,6 +64,7 @@ fn remote(remote_id: &str, album: &str, art_id: Option<&str>) -> RemoteTrack {
         channels: Some(2),
         codec: "mp3".into(),
         rating: 0,
+        starred: false,
         art_id: art_id.map(str::to_owned),
         size: Some(1_000),
     }

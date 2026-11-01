@@ -31,6 +31,7 @@ const TRACK_COLUMN_NAMES: &[&str] = &[
     "channels",
     "codec",
     "rating",
+    "starred",
     "play_count",
     "last_played_at",
     "date_added",
@@ -73,12 +74,13 @@ pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
         channels: row.get(16)?,
         codec: row.get(17)?,
         rating: row.get(18)?,
-        play_count: row.get(19)?,
-        last_played_at: row.get(20)?,
-        date_added: row.get(21)?,
-        source: row.get(22)?,
-        remote_id: row.get(23)?,
-        art_id: row.get(24)?,
+        starred: row.get(19)?,
+        play_count: row.get(20)?,
+        last_played_at: row.get(21)?,
+        date_added: row.get(22)?,
+        source: row.get(23)?,
+        remote_id: row.get(24)?,
+        art_id: row.get(25)?,
     })
 }
 
@@ -268,6 +270,20 @@ pub(super) fn set_rating(conn: &Connection, path: &str, rating: i64) -> rusqlite
     conn.execute(
         "UPDATE tracks SET rating = ?2 WHERE path = ?1",
         rusqlite::params![path, rating.clamp(0, 5)],
+    )?;
+    Ok(())
+}
+
+/// Mirrors the server's starred flag onto a navidrome row. Local rows and
+/// unknown ids are a silent no-op (0 affected rows is not an error).
+pub(super) fn set_starred(
+    conn: &Connection,
+    remote_id: &str,
+    starred: bool,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE tracks SET starred = ?2 WHERE source = 'navidrome' AND remote_id = ?1",
+        rusqlite::params![remote_id, starred],
     )?;
     Ok(())
 }

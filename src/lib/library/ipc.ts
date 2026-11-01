@@ -40,6 +40,8 @@ export interface Track {
   /** Short container/codec id: `mp3`, `flac`, `ogg`, `opus`, `m4a`, … */
   codec: string;
   rating: number;
+  /** Favorited on the server (`starred`); always false for local rows. */
+  starred: boolean;
   playCount: number;
   /** Unix seconds; `null` = never played. */
   lastPlayedAt: number | null;

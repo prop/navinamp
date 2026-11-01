@@ -41,15 +41,15 @@
   installed `.wal`/`.wsz` files, validates before applying, persists the
   choice in localStorage, broadcasts `skin-changed`, and the player + EQ
   windows reload live (playlist colors follow via `skin-theme`)
+- Navidrome favorites persist: `tracks.starred` (schema migration for old
+  DBs) imports the server's `starred` flag on every sync, is mirrored
+  locally after each star click, and shows in every view/playlist
 
 ## Next up
 
-The roadmap is clear. Candidate follow-ups, roughly by value:
-
-1. Persist Navidrome favorite (`starred`) state — the parser now accepts
-   timestamps; the UI's star set is still session-local.
-2. EQ: preset saving + a real AUTO mode; live curve in the classic window.
-3. Release-build devtools, chunked virtualization, svelte-check/TS7 cleanup.
+1. **EQ polish** — preset saving, a real AUTO mode, live curve rendering
+   in the classic EQ window.
+2. Release-build devtools, chunked virtualization, svelte-check/TS7 cleanup.
 
 ## Known follow-ups / deferred
 
@@ -62,8 +62,6 @@ The roadmap is clear. Candidate follow-ups, roughly by value:
 - Publishing a smart view only includes `source=navidrome` rows (local
   files have no Subsonic song id); playlist creation uses the
   `[NaVinaMP] ` name prefix, and republishing keeps the server-side name
-- Navidrome favorite stars are still session-local (no `starred` column in
-  `tracks`); rating stars are the persisted path
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
 - Devtools in release builds (needs the tauri `devtools` feature)

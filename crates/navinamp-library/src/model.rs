@@ -37,6 +37,8 @@ pub struct Track {
     /// Short container/codec id: `mp3`, `flac`, `ogg`, `opus`, `m4a`, …
     pub codec: String,
     pub rating: i64,
+    /// Favorited on the server (`starred`); always false for local rows.
+    pub starred: bool,
     pub play_count: i64,
     /// Unix seconds; `None` = never played.
     pub last_played_at: Option<i64>,
@@ -176,6 +178,9 @@ pub struct RemoteTrack {
     /// The server's user rating (0 = unrated, 1–5 stars). Imported into
     /// unrated local rows; a rating set in NaVinaMP is never overwritten.
     pub rating: i64,
+    /// Favorited on the server (`starred`). Server-owned: every sync
+    /// refreshes it.
+    pub starred: bool,
     /// Subsonic `coverArt` id, if the server exposes one.
     pub art_id: Option<String>,
     /// File size in bytes when the server reports it.

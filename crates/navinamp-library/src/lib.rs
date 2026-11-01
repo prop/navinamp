@@ -245,6 +245,12 @@ impl Library {
         Ok(query::set_rating(&self.conn, path, rating)?)
     }
 
+    /// Mirrors the server's starred flag onto a navidrome row (called after
+    /// a successful `star`/`unstar`). Local rows and unknown ids are no-ops.
+    pub fn set_starred(&self, remote_id: &str, starred: bool) -> Result<()> {
+        Ok(query::set_starred(&self.conn, remote_id, starred)?)
+    }
+
     /// The stored art id for the track at `path`, if any — a local
     /// content hash (servable from the art cache) or, for `navidrome`
     /// rows, the server's `coverArt` id. Unknown paths answer `None`; the

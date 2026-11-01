@@ -22,6 +22,7 @@ fn rt(remote_id: &str, title: &str) -> RemoteTrack {
         channels: Some(2),
         codec: "mp3".into(),
         rating: 0,
+        starred: false,
         art_id: Some("al-1".into()),
         size: Some(10_000_000),
     }
@@ -121,6 +122,35 @@ fn resync_updates_metadata_preserves_user_data_and_dates() {
     assert_eq!(t.play_count, 7);
     assert_eq!(t.last_played_at, Some(1_750_000_000));
     assert_eq!(t.date_added, 1000, "date_added survives a resync");
+}
+
+#[test]
+fn sync_refreshes_server_starred_state() {
+    let (_scratch, library) = db("remote-starred");
+    let starred_of = |remote_id: &str| -> bool {
+        library
+            .tracks_filtered(&TrackFilter::default())
+            .unwrap()
+            .into_iter()
+            .find(|t| t.remote_id.as_deref() == Some(remote_id))
+            .unwrap()
+            .starred
+    };
+
+    library
+        .sync_remote(vec![rt("t1", "Human Behaviour")])
+        .unwrap();
+    assert!(!starred_of("t1"), "fresh rows start unstarred");
+
+    let mut starred = rt("t1", "Human Behaviour");
+    starred.starred = true;
+    library.sync_remote(vec![starred]).unwrap();
+    assert!(starred_of("t1"), "a sync refreshes the server-owned star");
+
+    // The star command mirrors the server result into the local row.
+    library.set_starred("t1", false).unwrap();
+    assert!(!starred_of("t1"));
+    library.set_starred("missing-id", true).unwrap(); // silent no-op
 }
 
 #[test]

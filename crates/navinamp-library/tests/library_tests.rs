@@ -658,6 +658,7 @@ fn mark_played_never_touches_remote_rows() {
             channels: Some(2),
             codec: "mp3".into(),
             rating: 0,
+            starred: false,
             art_id: None,
             size: Some(1_000_000),
         }])
@@ -684,4 +685,24 @@ fn mark_played_never_touches_remote_rows() {
         .unwrap();
     assert_eq!(remote.play_count, 0);
     assert_eq!(remote.last_played_at, None);
+}
+
+#[test]
+fn open_migrates_a_tracks_table_created_before_starred() {
+    let scratch = common::Scratch::new("starred-migration");
+    {
+        // A database from a build that predates the starred column.
+        let library = Library::open(scratch.db()).unwrap();
+        drop(library);
+        let raw = rusqlite::Connection::open(scratch.db()).unwrap();
+        raw.execute("ALTER TABLE tracks DROP COLUMN starred", [])
+            .unwrap();
+        drop(raw);
+    }
+
+    let library = Library::open(scratch.db()).unwrap();
+    // The column list now selects `starred`; this fails without the ALTER.
+    let tracks = library.tracks_filtered(&TrackFilter::default()).unwrap();
+    assert!(tracks.iter().all(|t| !t.starred));
+    library.set_starred("anything", true).unwrap();
 }

@@ -541,14 +541,17 @@
   let showSettings = $state(false);
 
   /**
-   * Starred remote ids — session-local. LIMITATION: no M5 IPC exposes the
-   * server's starred state (and Track rows carry no starred flag), so this
-   * set starts empty and only grows from clicks here; a later `starred`
-   * column / status field should become the source of truth. Rebuilt
-   * references (dataVersion bumps after sync) re-read Track rows, which
-   * cannot change this set — clicks persist server-side only.
+   * Optimistic star overrides for remote tracks, keyed by remote id. Rows
+   * carry the persisted `starred` flag (synced from the server, mirrored on
+   * every star click); overrides only cover the window between the click and
+   * the next sync/refresh.
    */
-  let starredRemoteIds = $state.raw<Set<string>>(new Set());
+  let starOverrides = $state.raw<Map<string, boolean>>(new Map());
+
+  function isStarred(t: Track): boolean {
+    if (t.remoteId == null) return false;
+    return starOverrides.get(t.remoteId) ?? t.starred;
+  }
 
   let navSeq = 0;
 
@@ -627,19 +630,19 @@
   async function toggleStar(t: Track): Promise<void> {
     if (t.source !== REMOTE_SOURCE || t.remoteId == null) return;
     const id = t.remoteId;
-    const starred = !starredRemoteIds.has(id);
-    const next = new Set(starredRemoteIds); // optimistic
-    if (starred) next.add(id);
-    else next.delete(id);
-    starredRemoteIds = next;
+    const previous = isStarred(t);
+    const starred = !previous;
+    const next = new Map(starOverrides); // optimistic
+    next.set(id, starred);
+    starOverrides = next;
     try {
       await navidromeStar(id, starred);
       onlog(`navidrome: ${starred ? "★" : "☆"} ${t.title !== "" ? t.title : id}`);
     } catch (e) {
-      const revert = new Set(starredRemoteIds);
-      if (starred) revert.delete(id);
-      else revert.add(id);
-      starredRemoteIds = revert;
+      const revert = new Map(starOverrides);
+      if (previous === t.starred) revert.delete(id);
+      else revert.set(id, previous);
+      starOverrides = revert;
       onlog(`media library: star failed: ${e}`);
     }
   }
@@ -706,6 +709,7 @@
         void refreshNavStatus();
         void refreshAll();
         ratingOverrides = new Map(); // pick up server-seeded ratings
+        starOverrides = new Map(); // ...and server-owned stars
         dataVersion++; // re-run the current node's query (synced rows landed)
       } else {
         navSyncError = `sync failed: ${payload.error}`;
@@ -1223,12 +1227,12 @@
                   {#if t.source === REMOTE_SOURCE && t.remoteId != null}
                     <button
                       class="star"
-                      class:on={starredRemoteIds.has(t.remoteId)}
-                      title={starredRemoteIds.has(t.remoteId) ? "unstar on server" : "star on server"}
+                      class:on={isStarred(t)}
+                      title={isStarred(t) ? "unstar on server" : "star on server"}
                       onpointerdown={(e) => e.stopPropagation()}
                       ondblclick={(e) => e.stopPropagation()}
                       onclick={() => void toggleStar(t)}>
-                      {starredRemoteIds.has(t.remoteId) ? "★" : "☆"}
+                      {isStarred(t) ? "★" : "☆"}
                     </button>
                   {/if}
                 </span>

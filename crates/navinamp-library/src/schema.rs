@@ -14,9 +14,31 @@
 //! - `smart_views` stores Smart View definitions as JSON blobs (see
 //!   `smart.rs`); the scanner never touches it.
 
-/// Applies the full schema, idempotently.
+/// Applies the full schema, idempotently. Adds columns introduced after the
+/// first release to databases created by older builds (`CREATE TABLE IF NOT
+/// EXISTS` never alters an existing table).
 pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(SCHEMA)
+    conn.execute_batch(SCHEMA)?;
+    if !has_column(conn, "tracks", "starred")? {
+        conn.execute(
+            "ALTER TABLE tracks ADD COLUMN starred INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether `table` already has a column named `column`.
+fn has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 const SCHEMA: &str = "\
@@ -41,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     channels        INTEGER,
     codec           TEXT NOT NULL DEFAULT '',
     rating          INTEGER NOT NULL DEFAULT 0,
+    starred         INTEGER NOT NULL DEFAULT 0,  -- favorited (navidrome rows)
     play_count      INTEGER NOT NULL DEFAULT 0,
     last_played_at  INTEGER,                   -- unix seconds
     date_added      INTEGER NOT NULL,          -- unix seconds
