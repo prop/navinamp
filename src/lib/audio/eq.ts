@@ -12,6 +12,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit, listen } from "@tauri-apps/api/event";
 
 /** Fixed band count of the classic Winamp EQ. */
 export const EQ_BAND_COUNT = 10;
@@ -50,10 +51,12 @@ export interface EqLive {
   auto: boolean;
 }
 
-/** One classic Winamp EQ preset, as returned by `eq_presets`. */
+/** One EQ preset: a classic built-in curve or a user save. */
 export interface EqPreset {
   name: string;
   bandsDb: number[];
+  /** True for presets saved in the app (deletable). */
+  user?: boolean;
 }
 
 /** Current EQ state (10 bands; bootstrap source for the panel). */
@@ -76,7 +79,31 @@ export function eqSetBand(index: number, db: number): Promise<void> {
   return invoke<void>("eq_set_band", { index, db });
 }
 
-/** Classic Winamp presets ("Rock", "Pop", …). Preamp is deliberately not part of a preset. */
+/** Classic Winamp presets plus the user's saved curves. Preamp is not part of a preset. */
 export function eqPresets(): Promise<EqPreset[]> {
   return invoke<EqPreset[]>("eq_presets");
+}
+
+/**
+ * Save the current band curve under `name` (upsert). Returns the refreshed
+ * preset list; built-in names are rejected by the backend.
+ */
+export function eqSavePreset(name: string, bandsDb: number[]): Promise<EqPreset[]> {
+  return invoke<EqPreset[]>("eq_save_preset", { name, bandsDb });
+}
+
+/** Delete a user preset by name; returns the refreshed preset list. */
+export function eqDeletePreset(name: string): Promise<EqPreset[]> {
+  return invoke<EqPreset[]>("eq_delete_preset", { name });
+}
+
+/** Broadcast: the user preset list changed (another window saved/deleted). */
+export const EQ_PRESETS_EVENT = "eq-presets-changed";
+
+export async function notifyPresetsChanged(): Promise<void> {
+  await emit(EQ_PRESETS_EVENT, {});
+}
+
+export async function onPresetsChanged(handler: () => void): Promise<() => void> {
+  return listen(EQ_PRESETS_EVENT, () => handler());
 }

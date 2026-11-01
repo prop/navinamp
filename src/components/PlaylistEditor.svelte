@@ -133,6 +133,7 @@
     const list: ContextMenuItem[] = [
       { id: "play", label: "Play" },
       { id: "remove", label: "Remove from queue", danger: true },
+      { id: "copy", label: "Copy path" },
     ];
     if (item.remoteId != null) {
       list.push({ id: "sep", label: "", separator: true });
@@ -217,6 +218,10 @@
       onplay(m.index);
     } else if (id === "remove") {
       onremove(m.index);
+    } else if (id === "copy") {
+      void navigator.clipboard.writeText(item.path).catch((e) => {
+        console.warn(`[navinamp] copy path failed: ${e}`);
+      });
     } else if (id === "star") {
       void mirrorStar(item, !(menuInfo?.starred ?? false));
     } else if (id.startsWith("rate:")) {

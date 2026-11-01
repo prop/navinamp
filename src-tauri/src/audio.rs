@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use navinamp_audio::{
-    Command, EQ_BAND_COUNT, EQ_RANGE_DB, EngineHandle, EqPreset, EqState, Event, PlaybackStatus,
-    Spectrum, TrackSource, eq_presets as eq_preset_table,
+    Command, EQ_BAND_COUNT, EQ_RANGE_DB, EngineHandle, EqState, Event, PlaybackStatus, Spectrum,
+    TrackSource, eq_presets as eq_preset_table,
 };
 
 /// Name of the Tauri event engine events are forwarded to.
@@ -36,6 +36,8 @@ pub struct Audio {
     engine: Mutex<Option<EngineHandle>>,
     eq: Mutex<EqState>,
     volume: Mutex<f32>,
+    /// User-saved EQ curves (name + bands), persisted in `audio.json`.
+    presets: Mutex<Vec<StoredPreset>>,
     /// Debounced writer channel; `None` before [`init`] (and in tests).
     prefs_tx: Mutex<Option<Sender<StoredPrefs>>>,
 }
@@ -46,6 +48,7 @@ impl Default for Audio {
             engine: Mutex::new(None),
             eq: Mutex::new(EqState::default()),
             volume: Mutex::new(1.0),
+            presets: Mutex::new(Vec::new()),
             prefs_tx: Mutex::new(None),
         }
     }
@@ -57,6 +60,8 @@ impl Default for Audio {
 struct StoredPrefs {
     volume: f32,
     eq: StoredEq,
+    /// User-saved presets (built-in Winamp curves stay in the audio crate).
+    eq_presets: Vec<StoredPreset>,
 }
 
 impl Default for StoredPrefs {
@@ -64,8 +69,17 @@ impl Default for StoredPrefs {
         Self {
             volume: 1.0,
             eq: StoredEq::default(),
+            eq_presets: Vec::new(),
         }
     }
+}
+
+/// One user-saved EQ curve.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct StoredPreset {
+    name: String,
+    bands_db: Vec<f32>,
 }
 
 /// EQ portion of the prefs file. Bands are a Vec so a short/long array in a
@@ -88,33 +102,64 @@ impl From<EqState> for StoredEq {
     }
 }
 
+/// Clamp a bands array into the engine range, padding/truncating to 10.
+fn normalize_bands(values: &[f32]) -> [f32; EQ_BAND_COUNT] {
+    let db = |value: f32| {
+        if value.is_finite() {
+            value.clamp(-EQ_RANGE_DB, EQ_RANGE_DB)
+        } else {
+            0.0
+        }
+    };
+    let mut bands = [0.0; EQ_BAND_COUNT];
+    for (slot, value) in bands.iter_mut().zip(values.iter()) {
+        *slot = db(*value);
+    }
+    bands
+}
+
 impl StoredPrefs {
     /// Clamp everything into the engine's accepted ranges.
-    fn sanitized(self) -> (f32, EqState) {
+    fn sanitized(self) -> (f32, EqState, Vec<StoredPreset>) {
         let volume = if self.volume.is_finite() {
             self.volume.clamp(0.0, 1.0)
         } else {
             1.0
         };
-        let db = |value: f32| {
-            if value.is_finite() {
-                value.clamp(-EQ_RANGE_DB, EQ_RANGE_DB)
-            } else {
-                0.0
-            }
+        let eq = EqState {
+            enabled: self.eq.enabled,
+            preamp_db: normalize_bands(&[self.eq.preamp_db])[0],
+            bands_db: normalize_bands(&self.eq.bands_db),
         };
-        let mut bands = [0.0; EQ_BAND_COUNT];
-        for (slot, value) in bands.iter_mut().zip(self.eq.bands_db.iter()) {
-            *slot = db(*value);
+
+        // Names are trimmed/deduped case-insensitively; built-in names are
+        // reserved. Malformed entries are dropped rather than failing open.
+        let mut presets: Vec<StoredPreset> = Vec::new();
+        for preset in self.eq_presets {
+            let name = preset.name.trim().to_owned();
+            if name.is_empty() || name.chars().count() > 40 {
+                continue;
+            }
+            if eq_preset_table()
+                .iter()
+                .any(|p| p.name.eq_ignore_ascii_case(&name))
+            {
+                continue;
+            }
+            let entry = StoredPreset {
+                name,
+                bands_db: normalize_bands(&preset.bands_db).to_vec(),
+            };
+            match presets
+                .iter_mut()
+                .find(|p| p.name.eq_ignore_ascii_case(&entry.name))
+            {
+                Some(existing) => *existing = entry,
+                None => presets.push(entry),
+            }
         }
-        (
-            volume,
-            EqState {
-                enabled: self.eq.enabled,
-                preamp_db: db(self.eq.preamp_db),
-                bands_db: bands,
-            },
-        )
+        presets.sort_by_key(|p| p.name.to_lowercase());
+        (volume, eq, presets)
     }
 }
 
@@ -130,9 +175,10 @@ pub fn init(app: &AppHandle) {
         && let Ok(stored) = serde_json::from_str::<StoredPrefs>(&text)
     {
         let state = app.state::<Audio>();
-        let (volume, eq) = stored.sanitized();
+        let (volume, eq, presets) = stored.sanitized();
         *state.volume.lock().unwrap() = volume;
         *state.eq.lock().unwrap() = eq;
+        *state.presets.lock().unwrap() = presets;
     }
 
     let (tx, rx) = channel();
@@ -181,6 +227,7 @@ fn persist(state: &Audio) {
     let prefs = StoredPrefs {
         volume: *state.volume.lock().unwrap(),
         eq: StoredEq::from(*state.eq.lock().unwrap()),
+        eq_presets: state.presets.lock().unwrap().clone(),
     };
     if let Some(tx) = state.prefs_tx.lock().unwrap().as_ref() {
         let _ = tx.send(prefs);
@@ -427,10 +474,96 @@ pub fn eq_set_band(state: State<'_, Audio>, index: u32, db: f32) -> Result<(), S
     result
 }
 
-/// The classic Winamp preset curves (static; no engine needed).
+/// One entry in the preset dropdown: a built-in classic curve or a user save.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EqPresetEntry {
+    pub name: String,
+    pub bands_db: [f32; EQ_BAND_COUNT],
+    /// True for presets saved by the user (deletable, editable by re-saving).
+    pub user: bool,
+}
+
+fn preset_entries(state: &Audio) -> Vec<EqPresetEntry> {
+    let mut out: Vec<EqPresetEntry> = eq_preset_table()
+        .iter()
+        .map(|p| EqPresetEntry {
+            name: p.name.to_owned(),
+            bands_db: p.bands_db,
+            user: false,
+        })
+        .collect();
+    out.extend(state.presets.lock().unwrap().iter().map(|p| EqPresetEntry {
+        name: p.name.clone(),
+        bands_db: normalize_bands(&p.bands_db),
+        user: true,
+    }));
+    out
+}
+
+/// The built-in classic Winamp curves plus the user's saved presets.
 #[tauri::command]
-pub fn eq_presets() -> Vec<EqPreset> {
-    eq_preset_table().to_vec()
+pub fn eq_presets(state: State<'_, Audio>) -> Vec<EqPresetEntry> {
+    preset_entries(&state)
+}
+
+/// Save the given band curve under `name` (upsert by case-insensitive name).
+/// Built-in names are reserved; the name is trimmed and capped at 40 chars.
+#[tauri::command]
+pub fn eq_save_preset(
+    state: State<'_, Audio>,
+    name: String,
+    bands_db: Vec<f32>,
+) -> Result<Vec<EqPresetEntry>, String> {
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return Err("preset name must not be empty".into());
+    }
+    if name.chars().count() > 40 {
+        return Err("preset name is too long (max 40 characters)".into());
+    }
+    if eq_preset_table()
+        .iter()
+        .any(|p| p.name.eq_ignore_ascii_case(&name))
+    {
+        return Err(format!("`{name}` is a built-in preset"));
+    }
+    let entry = StoredPreset {
+        name: name.clone(),
+        bands_db: normalize_bands(&bands_db).to_vec(),
+    };
+    {
+        let mut presets = state.presets.lock().unwrap();
+        match presets
+            .iter_mut()
+            .find(|p| p.name.eq_ignore_ascii_case(&name))
+        {
+            Some(existing) => *existing = entry,
+            None => presets.push(entry),
+        }
+        presets.sort_by_key(|p| p.name.to_lowercase());
+    }
+    persist(&state);
+    Ok(preset_entries(&state))
+}
+
+/// Delete a user preset by name. Built-in curves cannot be deleted.
+#[tauri::command]
+pub fn eq_delete_preset(
+    state: State<'_, Audio>,
+    name: String,
+) -> Result<Vec<EqPresetEntry>, String> {
+    let name = name.trim();
+    {
+        let mut presets = state.presets.lock().unwrap();
+        let before = presets.len();
+        presets.retain(|p| !p.name.eq_ignore_ascii_case(name));
+        if presets.len() == before {
+            return Err(format!("no saved preset named `{name}`"));
+        }
+    }
+    persist(&state);
+    Ok(preset_entries(&state))
 }
 
 // ---------------------------------------------------------------------------
@@ -492,10 +625,16 @@ mod tests {
     fn stored_prefs_sanitize_into_engine_ranges() {
         let stored: StoredPrefs = serde_json::from_str(
             r#"{ "volume": 1.7, "eq": { "enabled": true, "preampDb": -30,
-                "bandsDb": [1, -99] } }"#,
+                "bandsDb": [1, -99] },
+                "eqPresets": [
+                    { "name": "  My curve  ", "bandsDb": [3, 99] },
+                    { "name": "my CURVE", "bandsDb": [4] },
+                    { "name": "Rock", "bandsDb": [1] },
+                    { "name": "   ", "bandsDb": [1] }
+                ] }"#,
         )
         .expect("tolerant parse");
-        let (volume, eq) = stored.sanitized();
+        let (volume, eq, presets) = stored.sanitized();
         assert_eq!(volume, 1.0, "volume clamps to 0..=1");
         assert!(eq.enabled);
         assert_eq!(eq.preamp_db, -EQ_RANGE_DB);
@@ -503,14 +642,22 @@ mod tests {
         assert_eq!(eq.bands_db[1], -EQ_RANGE_DB);
         // A short array pads with flat bands.
         assert_eq!(&eq.bands_db[2..], &[0.0; EQ_BAND_COUNT - 2]);
+
+        // Case-insensitive dedupe keeps the last copy; built-in names and
+        // blank names are dropped.
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].name, "my CURVE");
+        assert_eq!(presets[0].bands_db[0], 4.0);
+        assert_eq!(presets[0].bands_db[1], 0.0);
     }
 
     #[test]
     fn stored_prefs_defaults_and_round_trips_camel_case() {
         let stored: StoredPrefs = serde_json::from_str("{}").expect("empty object");
-        let (volume, eq) = stored.sanitized();
+        let (volume, eq, presets) = stored.sanitized();
         assert_eq!(volume, 1.0, "default volume is unity");
         assert_eq!(eq, EqState::default());
+        assert!(presets.is_empty());
 
         let value = serde_json::to_value(StoredPrefs {
             volume: 0.5,
@@ -519,11 +666,16 @@ mod tests {
                 preamp_db: 1.5,
                 bands_db: [2.0; EQ_BAND_COUNT],
             }),
+            eq_presets: vec![StoredPreset {
+                name: "Mine".into(),
+                bands_db: vec![1.0; EQ_BAND_COUNT],
+            }],
         })
         .expect("serialize");
         assert_eq!(value["volume"], 0.5);
         assert_eq!(value["eq"]["enabled"], true);
         assert_eq!(value["eq"]["preampDb"], 1.5);
         assert_eq!(value["eq"]["bandsDb"][0], 2.0);
+        assert_eq!(value["eqPresets"][0]["name"], "Mine");
     }
 }

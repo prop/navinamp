@@ -59,6 +59,8 @@ pub fn run() {
             audio::eq_set_preamp,
             audio::eq_set_band,
             audio::eq_presets,
+            audio::eq_save_preset,
+            audio::eq_delete_preset,
             audio::audio_spectrum,
             skin::skin_list,
             skin::skin_load,

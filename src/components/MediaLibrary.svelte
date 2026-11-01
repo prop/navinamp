@@ -707,6 +707,7 @@
     const list: ContextMenuItem[] = [
       { id: "play", label: "Play now" },
       { id: "enqueue", label: "Enqueue" },
+      { id: "copy", label: "Copy path" },
       { id: "sep", label: "", separator: true },
     ];
     if (t.source === REMOTE_SOURCE && t.remoteId != null) {
@@ -733,6 +734,10 @@
       onplaynow([toMeta(t)]);
     } else if (id === "enqueue") {
       onenqueue([toMeta(t)]);
+    } else if (id === "copy") {
+      void navigator.clipboard.writeText(t.path).catch((e) => {
+        onlog(`copy path failed: ${e}`);
+      });
     } else if (id === "star") {
       void toggleStar(t);
     } else if (id.startsWith("rate:")) {

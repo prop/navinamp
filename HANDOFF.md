@@ -44,16 +44,21 @@
 - Navidrome favorites persist: `tracks.starred` (schema migration for old
   DBs) imports the server's `starred` flag on every sync, is mirrored
   locally after each star click, and shows in every view/playlist
+- EQ polish: user presets save/delete in the library panel, persisted in
+  `audio.json`, shared with the skinned PRESETS cycle; the classic EQ graph
+  now draws the live response curve
+- Context menus (playlist + library rows): Play/Remove/Enqueue, star,
+  rating, Copy path; the stock webview menu is replaced on those rows
 
 ## Next up
 
-1. **EQ polish** — preset saving, a real AUTO mode, live curve rendering
-   in the classic EQ window.
+1. **EQ AUTO mode** — needs a product definition (per-track auto-load);
+   the toggle is still visual-only.
 2. Release-build devtools, chunked virtualization, svelte-check/TS7 cleanup.
 
 ## Known follow-ups / deferred
 
-- EQ: AUTO button (visual only), preset saving, live curve rendering,
+- EQ: AUTO button (visual only — no per-track auto-load concept yet),
   EQ window close button (decorative), duplicate HTML EqPanel in the
   library DEV section
 - Metadata bitrate is average source bytes ÷ duration; streams whose

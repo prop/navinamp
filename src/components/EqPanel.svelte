@@ -15,11 +15,14 @@
    */
   import {
     EQ_BAND_COUNT,
+    eqDeletePreset,
     eqPresets,
+    eqSavePreset,
     eqSetBand,
     eqSetEnabled,
     eqSetPreamp,
     eqState,
+    notifyPresetsChanged,
     type EqPreset,
   } from "../lib/audio/eq";
   import { friendlyIpcError } from "../lib/library/ipc";
@@ -36,8 +39,13 @@
   let bandsDb = $state<number[]>(Array<number>(EQ_BAND_COUNT).fill(0));
   let presets = $state<EqPreset[]>([]);
   let presetName = $state("");
+  let newPresetName = $state("");
+  let presetNote = $state<string | null>(null);
+  let presetBusy = $state(false);
   let available = $state(false);
   let error = $state<string | null>(null);
+
+  const selectedIsUser = $derived(presets.find((p) => p.name === presetName)?.user === true);
 
   // Which groove the pointer owns: "pre" or a band index (null = none).
   let dragging: "pre" | number | null = null;
@@ -87,11 +95,52 @@
 
   function applyPreset(name: string): void {
     presetName = name;
+    presetNote = null;
     const preset = presets.find((p) => p.name === name);
     if (!preset) return;
     const bands = normalize(preset.bandsDb);
     bandsDb = bands; // preamp deliberately untouched by presets
     bands.forEach((db, i) => eqSetBand(i, db).catch(note));
+    // Applying a preset implies wanting to HEAR it (the EQ ships bypassed).
+    if (!enabled) {
+      enabled = true;
+      eqSetEnabled(true).catch(note);
+    }
+  }
+
+  async function savePreset(): Promise<void> {
+    const name = newPresetName.trim();
+    if (name === "" || !available || presetBusy) return;
+    presetBusy = true;
+    try {
+      presets = await eqSavePreset(name, bandsDb);
+      presetName = name;
+      newPresetName = "";
+      presetNote = `saved “${name}”`;
+      error = null;
+      void notifyPresetsChanged();
+    } catch (e) {
+      note(e);
+    } finally {
+      presetBusy = false;
+    }
+  }
+
+  async function deletePreset(): Promise<void> {
+    if (!selectedIsUser || presetBusy) return;
+    const name = presetName;
+    presetBusy = true;
+    try {
+      presets = await eqDeletePreset(name);
+      presetNote = `deleted “${name}”`;
+      presetName = "";
+      error = null;
+      void notifyPresetsChanged();
+    } catch (e) {
+      note(e);
+    } finally {
+      presetBusy = false;
+    }
   }
 
   function setBand(i: number, db: number): void {
@@ -231,10 +280,30 @@
       >
         <option value=""></option>
         {#each presets as p (p.name)}
-          <option value={p.name}>{p.name}</option>
+          <option value={p.name}>{p.name}{p.user ? " *" : ""}</option>
         {/each}
       </select>
     </label>
+  </div>
+
+  <div class="row savebar">
+    <input
+      class="pname"
+      type="text"
+      bind:value={newPresetName}
+      placeholder="save current as…"
+      maxlength="40"
+      aria-label="new preset name"
+      onkeydown={(e) => {
+        if (e.key === "Enter") void savePreset();
+      }} />
+    <button
+      onclick={() => void savePreset()}
+      disabled={!available || presetBusy || newPresetName.trim() === ""}>save</button>
+    {#if selectedIsUser}
+      <button class="del" onclick={() => void deletePreset()} disabled={presetBusy}>delete</button>
+    {/if}
+    {#if presetNote}<span class="note">{presetNote}</span>{/if}
   </div>
 
   <div class="bands" class:bypassed={!enabled}>
@@ -331,6 +400,35 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
+  }
+
+  .savebar {
+    gap: 0.5rem;
+  }
+
+  .pname {
+    width: 15ch;
+    background: #1a1a1a;
+    color: #c8c8c8;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.8rem;
+  }
+
+  .savebar button {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .savebar .del {
+    border-color: #5a2a22;
+    color: #d8604c;
+  }
+
+  .note {
+    font-size: 0.75rem;
+    color: #3ccb4e;
   }
 
   button {

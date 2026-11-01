@@ -21,6 +21,7 @@
   import { eqSliderIndex, sliderActionKind, type PlaybackStatus } from "../../lib/skin/wasabi";
   import { dbToFraction, fractionToDb, type EqLive } from "../../lib/audio/eq";
   import SkinButton from "./SkinButton.svelte";
+  import SkinEqCurve from "./SkinEqCurve.svelte";
   import SkinLayer from "./SkinLayer.svelte";
   import SkinPlaceholder from "./SkinPlaceholder.svelte";
   import SkinSlider from "./SkinSlider.svelte";
@@ -187,6 +188,10 @@
         <!-- skipped -->
       {:else if obj.object.kind === "layer" || obj.object.kind === "animatedlayer"}
         <SkinLayer {obj} images={layout.images} {status} />
+        {#if obj.object.kind === "layer" && obj.object.id === "eq.graph"}
+          <!-- Live curve over the skin's EQ graph well. -->
+          <SkinEqCurve {obj} {eq} />
+        {/if}
       {:else if obj.object.kind === "button" || obj.object.kind === "togglebutton"}
         <SkinButton {obj} images={layout.images} {onaction} toggled={toggleState(obj.object)} />
       {:else if obj.object.kind === "slider"}
