@@ -51,8 +51,9 @@
   rating, Copy path; the stock webview menu is replaced on those rows
 - Library loads lazily: startup fetches only stats/roots/views; the table
   pages 500 rows on entry and appends on scroll; artist/genre/album tree
-  lists load when a group expands; counts come from per-source stats. No
-  20k-row master snapshot and no sync-time aggregate reload.
+  lists load when a group expands and render a 200-row slice that extends as
+  the tree scrolls; counts come from per-source stats. No 20k-row master
+  snapshot and no sync-time aggregate reload.
 - Navidrome sync still writes rows in album batches; the UI now refreshes
   only counts (2s) and the tree groups that are actually open (15s);
   pruning only runs after a complete walk.

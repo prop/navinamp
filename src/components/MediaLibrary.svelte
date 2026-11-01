@@ -454,8 +454,34 @@
     return sourceFilter === "local" ? stats.local : stats.navidrome;
   });
 
+  /** Tree lists are large too (5k albums, 3k artists): render a slice and
+   *  extend it as the tree scrolls. Counts still come from stats. */
+  const TREE_CHUNK = 200;
+  let artistLimit = $state(TREE_CHUNK);
+  let albumLimit = $state(TREE_CHUNK);
+
+  const artistsShown = $derived(artistNames.slice(0, artistLimit));
+
   /** Albums are fetched pre-filtered by the source chip. */
-  const albumsShown = $derived(albums);
+  const albumsShown = $derived(albums.slice(0, albumLimit));
+
+  // A chip change reloads the lists; start from the first chunk again.
+  $effect(() => {
+    void sourceFilter;
+    artistLimit = TREE_CHUNK;
+    albumLimit = TREE_CHUNK;
+  });
+
+  function onTreeScroll(e: Event & { currentTarget: HTMLElement }): void {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
+    if (openGroups.artists && artistLimit < artistNames.length) {
+      artistLimit = Math.min(artistNames.length, artistLimit + TREE_CHUNK);
+    }
+    if (openGroups.albums && albumLimit < albums.length) {
+      albumLimit = Math.min(albums.length, albumLimit + TREE_CHUNK);
+    }
+  }
 
   // ── current table view ─────────────────────────────────────────────────────
 
@@ -1193,7 +1219,7 @@
   {/if}
 
   <div class="body">
-    <nav class="tree" aria-label="library categories">
+    <nav class="tree" aria-label="library categories" onscroll={onTreeScroll}>
       <button class="node" class:on={selection.kind === "all"} onclick={() => select({ kind: "all" })}>
         ALL TRACKS
       </button>
@@ -1220,7 +1246,7 @@
         {#if artistNames.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no artists"}</div>
         {/if}
-        {#each artistNames as name (name)}
+        {#each artistsShown as name (name)}
           <button
             class="leaf"
             class:on={selKey(selection) === `artist:${name}`}
@@ -1731,7 +1757,9 @@
 
   /* ── left tree ── */
   .tree {
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
     background: #0d0d0d;
     border-right: 1px solid #2a2a2a;
     padding: 4px;
