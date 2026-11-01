@@ -229,9 +229,16 @@
 
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === "s" || e.key === "S")) {
+      if (!e.altKey) return;
+      if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         scale = scale === 1 ? 2 : 1;
+      } else if (e.key === "l" || e.key === "L") {
+        // Universal library opener: classic .wsz skins have no LIBRARY
+        // button (Winamp 2 predates the media library), so the shortcut is
+        // the fallback for every skin.
+        e.preventDefault();
+        windowSetVisible("library", !windowIsVisible("library")).catch(warnIpc);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -272,20 +279,12 @@
       case "TOGGLE_PLAYLIST":
         windowSetVisible("playlist", !windowIsVisible("playlist")).catch(warnIpc);
         break;
-      case "TOGGLE_EQ": {
-        const before = windowIsVisible("eq");
-        console.warn(`[navinamp] TOGGLE_EQ click — visible before: ${before}`);
-        windowSetVisible("eq", !before)
-          .then(() => {
-            console.warn(
-              `[navinamp] TOGGLE_EQ ipc ok — visible now: ${windowIsVisible("eq")}`,
-            );
-          })
-          .catch((e) => {
-            console.warn(`[navinamp] TOGGLE_EQ ipc FAILED: ${e}`);
-          });
+      case "TOGGLE_LIBRARY":
+        windowSetVisible("library", !windowIsVisible("library")).catch(warnIpc);
         break;
-      }
+      case "TOGGLE_EQ":
+        windowSetVisible("eq", !windowIsVisible("eq")).catch(warnIpc);
+        break;
       case "TOGGLE_SHADE":
         windowToggleLayout("main").catch(warnIpc);
         break;
@@ -364,6 +363,7 @@
       volume={state.volume}
       {ticker}
       playlistVisible={windowIsVisible("playlist")}
+      libraryVisible={windowIsVisible("library")}
       eqVisible={windowIsVisible("eq")}
       shadeActive={layoutMode === "shade"}
       bitrateKbps={state.bitrateKbps}

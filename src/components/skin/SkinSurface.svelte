@@ -10,6 +10,7 @@
    * caller's 10 Hz audio_state poll; `ticker` is the songticker content
    * (queue.currentItem). Togglebutton on-states flow down as
    * `playlistVisible` (the playlist window's WinInfo.visible) /
+   * `libraryVisible` (the library window's visibility) /
    * `shadeActive` (the player window's layout === "shade") / `eqVisible`
    * (the EQ window's visibility) / `eq` (the EQ window's live state —
    * enabled, preamp, bands, auto); the callbacks wire the skinned controls
@@ -43,6 +44,8 @@
     ticker?: string;
     /** TOGGLE_PLAYLIST on-state (the playlist window's visibility). */
     playlistVisible?: boolean;
+    /** TOGGLE_LIBRARY on-state (the library window's visibility). */
+    libraryVisible?: boolean;
     /** TOGGLE_SHADE on-state (the player window's shade layout is active). */
     shadeActive?: boolean;
     /** TOGGLE_EQ on-state (the EQ window's visibility — player skin button). */
@@ -75,6 +78,7 @@
     channels = null,
     ticker = "",
     playlistVisible = false,
+    libraryVisible = false,
     shadeActive = false,
     eqVisible = false,
     eq = null,
@@ -155,6 +159,8 @@
     switch (object.action?.trim().toUpperCase()) {
       case "TOGGLE_PLAYLIST":
         return playlistVisible;
+      case "TOGGLE_LIBRARY":
+        return libraryVisible;
       case "TOGGLE_SHADE":
         return shadeActive;
       case "TOGGLE_EQ":

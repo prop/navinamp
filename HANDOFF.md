@@ -27,6 +27,9 @@
   (live, never imported into the DB) and PUBLISH a smart view from its
   editor — first publish creates `[NaVinaMP] <name>`, later publishes
   update it in place (mapping in `smart_view_playlists`)
+- Library window opener: LIBRARY toggle on the fallback player (bottom
+  strip) plus Alt+L in the player window for every skin (classic `.wsz`
+  skins have no library button)
 
 ## Next up (priority order)
 

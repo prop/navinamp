@@ -678,9 +678,10 @@ function generate() {
     });
   });
 
-  // Bottom-strip toggles (playlist / shade / eq): 3 x 3 states, 54x18 cells.
-  addPng("player/toggles.png", 162, 54, (im) => {
-    const labels = ["PLAYLIST", "SHADE", "EQ"];
+  // Bottom-strip toggles (playlist / shade / eq / library): 4 x 3 states,
+  // 54x18 cells.
+  addPng("player/toggles.png", 216, 54, (im) => {
+    const labels = ["PLAYLIST", "SHADE", "EQ", "LIBRARY"];
     labels.forEach((label, i) => {
       STATES.forEach((state, s) => {
         const x = i * 54;
@@ -690,7 +691,7 @@ function generate() {
       });
     });
   });
-  ["playlist", "shade", "eq"].forEach((name, i) => {
+  ["playlist", "shade", "eq", "library"].forEach((name, i) => {
     STATES.forEach((state, s) => {
       bitmap(`player.toggle.${name}.${state}`, "player/toggles.png", {
         x: i * 54,
@@ -1041,6 +1042,7 @@ ${winButtons("eq")}
       <togglebutton id="player.playlist.toggle" action="TOGGLE_PLAYLIST" image="player.toggle.playlist.normal" hoverimage="player.toggle.playlist.hover" downimage="player.toggle.playlist.down" x="10" y="243" w="54" h="18" tooltip="Playlist editor"/>
       <togglebutton id="player.shade.toggle" action="TOGGLE_SHADE" image="player.toggle.shade.normal" hoverimage="player.toggle.shade.hover" downimage="player.toggle.shade.down" x="68" y="243" w="54" h="18" tooltip="Shade mode"/>
       <togglebutton id="player.eq.toggle" action="TOGGLE_EQ" image="player.toggle.eq.normal" hoverimage="player.toggle.eq.hover" downimage="player.toggle.eq.down" x="126" y="243" w="54" h="18" tooltip="Equalizer"/>
+      <togglebutton id="player.library.toggle" action="TOGGLE_LIBRARY" image="player.toggle.library.normal" hoverimage="player.toggle.library.hover" downimage="player.toggle.library.down" x="184" y="243" w="54" h="18" tooltip="Media library"/>
       <layer id="player.footer.logo" image="player.logo" x="120" y="266" w="36" h="8"/>
     </layout>
 

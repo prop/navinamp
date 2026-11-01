@@ -49,7 +49,7 @@ Node ≥ 20, no network at build time. The script:
 | 96–108 | Balance (x=10, 110×13, center detent tick) + volume (x=155, 110×13) sliders |
 | 114–135 | Transport group `player.transport` at 52,114: PREV PLAY PAUSE STOP NEXT EJECT, 26×22 each, gap 3 |
 | 141–236 | Recessed vis panel 255×96 with dot grid + `vis` object at 14,145 (247×88) |
-| 243–260 | Bottom strip: PLAYLIST + SHADE + EQ togglebuttons (54×18) at x=10/68/126 (EQ carries `action="TOGGLE_EQ"` → the EQ OS window's visibility) |
+| 243–260 | Bottom strip: PLAYLIST + SHADE + EQ + LIBRARY togglebuttons (54×18) at x=10/68/126/184 (EQ and LIBRARY carry `action="TOGGLE_EQ"` / `"TOGGLE_LIBRARY"` → their OS windows' visibility) |
 | 261–279 | Footer groove + etched NAVINAMP logo at 120,266 |
 
 The titlebar's shade window-button carries `action="TOGGLE_SHADE"` (the
@@ -138,7 +138,7 @@ sub-rects where a grid is natural:
 |---|---|---|
 | `player/transport.png` (156×66) | 6 glyphs × 3 states, 26×22 | `player.btn.{prev,play,pause,stop,next,eject}.{normal,hover,down}` |
 | `player/titlebar-buttons.png` (42×30) | 3 × 3, 14×10 | `player.win.{min,shade,close}.*` (shared by all three title bars) |
-| `player/toggles.png` (162×54) | 3 × 3, 54×18 | `player.toggle.{playlist,shade,eq}.*` |
+| `player/toggles.png` (216×54) | 4 × 3, 54×18 | `player.toggle.{playlist,shade,eq,library}.*` |
 | `player/shade-buttons.png` (65×36) | 5 × 3, 13×12 | `player.shadebtn.{play,pause,stop,next,restore}.*` |
 | `playlist/actions.png` (144×48) | 4 × 3, 36×16 | `playlist.btn.{add,rem,sel,misc}.*` |
 | `eq/toggles.png` (58×36) | 2 × 3, 25/33×12 | `eq.{on,auto}.{normal,hover,down}` |
