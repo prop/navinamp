@@ -165,7 +165,9 @@
     const changed = key !== nodeQueryKey;
     nodeQueryKey = key;
     let cancelled = false;
-    if (sel.kind === "all" || sel.kind === "server") {
+    if (sel.kind === "all" || sel.kind === "server" || sel.kind === "remote") {
+      // Master-derived views (ALL / REMOTE) track `allTracks`; only the
+      // filtered node queries fetch their own rows.
       nodeTracks = null;
       nodeError = null;
       nodeLoading = false;
@@ -186,8 +188,6 @@
           rows = await smartViewRun(sel.value);
         } else if (sel.kind === "album") {
           rows = await libraryAlbumTracks(sel.value); // no source arg → filtered below
-        } else if (sel.kind === "remote") {
-          rows = await libraryTracks({ source: REMOTE_SOURCE });
         } else if (sel.kind === "playlist") {
           // Ephemeral rows straight from the server — never imported.
           rows = await navidromePlaylistTracks(sel.value);
@@ -329,6 +329,11 @@
     if (searchResults != null) return searchResults;
     if (selection.kind === "server") return []; // the pane is the status card
     if (selection.kind === "all") return allTracks;
+    // REMOTE TRACKS is a filter of the master snapshot — querying the whole
+    // remote library separately duplicated the 20k-row load on every sync.
+    if (selection.kind === "remote") {
+      return allTracks.filter((t) => t.source === REMOTE_SOURCE);
+    }
     return nodeTracks ?? [];
   });
 
@@ -467,7 +472,7 @@
   // during the walk (stats every second, the heavier lists every ~10s) so
   // already-synced items appear before the sync completes.
 
-  let aggregateSeq = 0;
+  let aggregatesBusy = false;
 
   function refreshStats(): void {
     void libraryStats().then(
@@ -480,14 +485,14 @@
   }
 
   async function refreshAggregates(): Promise<void> {
-    const seq = ++aggregateSeq;
+    if (aggregatesBusy) return;
+    aggregatesBusy = true;
     try {
       const [s, tracks, albumsNow] = await Promise.all([
         libraryStats(),
         libraryTracks(),
         libraryAlbums(),
       ]);
-      if (seq !== aggregateSeq) return;
       stats = s;
       statsError = null;
       allTracks = tracks;
@@ -495,6 +500,8 @@
       albums = albumsNow;
     } catch {
       // Keep the previous snapshot; a failed partial refresh is harmless.
+    } finally {
+      aggregatesBusy = false;
     }
   }
 
@@ -805,21 +812,29 @@
       // Events also fire for syncs started elsewhere — latch onto them.
       navSyncing = true;
       navProgress = p;
+      if (document.hidden) return; // no point repainting a hidden window
       const now = performance.now();
-      // Batches land in the DB as the walk advances; refresh the current
-      // pane (and the tree count) at most once a second while syncing.
-      if (now - lastProgressRefresh >= 1000) {
-        lastProgressRefresh = now;
-        dataVersion++; // re-run the current node query
-        void refreshNavStatus(); // live REMOTE TRACKS count
-      }
-      // Header counts are cheap counts; the aggregate lists are heavier and
-      // refresh on a slower cadence.
-      if (now - lastStatsRefresh >= 1000) {
+
+      // Header counts + the backend's remote count are cheap COUNT queries.
+      if (now - lastStatsRefresh >= 2000) {
         lastStatsRefresh = now;
         refreshStats();
+        void refreshNavStatus();
       }
-      if (now - lastAggregateRefresh >= 10_000) {
+
+      // ALL / REMOTE are master-derived views: they refresh with the
+      // aggregate snapshot below. Filtered panes (artist/album/…) requery
+      // at most every 5s and never while the previous query is in flight.
+      const masterView =
+        selection.kind === "all" || selection.kind === "remote" || selection.kind === "server";
+      if (!masterView && !nodeLoading && now - lastProgressRefresh >= 5000) {
+        lastProgressRefresh = now;
+        dataVersion++;
+      }
+
+      // The heavy snapshot (21k rows + album groups) on a slow cadence;
+      // refreshAggregates refuses to overlap itself.
+      if (now - lastAggregateRefresh >= 15_000) {
         lastAggregateRefresh = now;
         void refreshAggregates();
       }
