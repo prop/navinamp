@@ -49,7 +49,7 @@ impl Default for LlmConfig {
             preset: "openrouter".into(),
             provider: ProviderKind::OpenAiCompatible,
             base_url: "https://openrouter.ai/api/v1".into(),
-            model: "openai/gpt-4o-mini".into(),
+            model: "deepseek/deepseek-v4.1-flash-1017".into(),
             api_key: String::new(),
             timeout_secs: 30,
         }

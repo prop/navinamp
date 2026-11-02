@@ -166,17 +166,24 @@
     cap.
   - AI sends a bounded library digest (counts, genres, sampled artists, server
     names/ids) and the rule schema to the configured provider. The model may
-    call Discogs (database search, max 2 hops, optional personal token) and
-    must finish with a Smart View JSON definition, which is validated by the
-    library; one repair pass auto-corrects malformed output. EDIT RULES moves
-    the generated definition into the Advanced builder; REFINE reuses it.
+    call Discogs (structured artist/release/label/genre/style/year/format
+    filters, paged up to 100/call, max 4 calls, optional personal token) and
+    can finish with a Smart View definition, `def: null` for catalog-only
+    answers, or both. Catalog entries are a first-class result: the UI shows
+    a scrollable Discogs panel with COPY LIST, while library rules are
+    validated locally with one repair pass. EDIT RULES moves the generated
+    definition into the Advanced builder; REFINE reuses it.
   - Results can be SAVED as a smart view (simple mode synthesizes path rules),
     published as a `[NaVinaMP]` server playlist (new publish-by-name command),
     or used to replace the playlist editor (new queue `replaceAll` intent).
+    Catalog-only answers keep the library table empty and expose COPY LIST.
 - AI settings (`ai.json`, plaintext like navidrome.json): provider presets for
   OpenRouter, OpenAI, Claude, DeepSeek, GLM, Kimi, MiniMax and a custom
   OpenAI-compatible endpoint (covers local Ollama/LM Studio), plus an optional
-  Discogs token. `navinamp-llm` has OpenAI-compatible and Anthropic adapters;
+  Discogs token. The model picker lists current ids (DeepSeek V4.1 Flash is
+  `deepseek-flash`, GLM-5.3-Flash, Kimi K3.1 Pro, MiniMax M3.1 Flash, GPT-5.2,
+  Claude Sonnet 5) and REFRESH fetches the provider's live `/models` list.
+  `navinamp-llm` has OpenAI-compatible and Anthropic adapters;
   the key never reaches the model or logs. Embedding/vector search is
   deferred — GitHub issue #15 has the design.
 
