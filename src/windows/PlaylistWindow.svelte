@@ -91,8 +91,8 @@
     }
   }
 
-  // Size the OS window to the panel's natural size (initial mount + resizes,
-  // e.g. the list growing) via a ResizeObserver on the root.
+  // Size the OS window to the panel's box (initial mount + body/shade height
+  // changes, e.g. the list growing) via a ResizeObserver on the root.
   let root: HTMLElement | null = $state(null);
   let lastW = 0;
   let lastH = 0;
@@ -115,13 +115,15 @@
   });
 </script>
 
-<div class="win" bind:this={root}>
+<div class="win" class:shade={mode === "shade"} bind:this={root}>
   <!-- ONE header (this strip) and ONE count (the status row below) — the
        editor body repeats neither anymore. Double-clicking the strip folds
-       the window to the strip, classic windowshade style. -->
+       the window to the strip, classic windowshade style. The folded strip
+       shows the playing track in the playlist editor's own font/colors. -->
   <TitleStrip
     title={stripTitle}
     note={stripNote}
+    playlistTheme={mode === "shade" ? theme : undefined}
     onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
   />
 
@@ -150,18 +152,23 @@
 
 <style>
   .win {
-    /* Editor 275px + 4px padding per side; max-content keeps the editor's
-       natural size, min-width keeps the folded strip full-width. */
-    width: max-content;
-    min-width: 283px;
+    /* Match the 275px player/editor width. A fixed width keeps the OS window
+       from growing to fit the folded strip's (long) current-track title. */
+    width: 275px;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 4px;
+    padding: 4px 0;
     box-sizing: border-box;
     background: #000;
     user-select: none;
+  }
+
+  /* Classic windowshade is exactly the 14px strip; the normal-mode frame
+     padding would otherwise make it 22px tall. */
+  .win.shade {
+    padding: 0;
   }
 
   .qbar {
