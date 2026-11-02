@@ -44,7 +44,8 @@ use crate::{Error, Result};
 // Model (frozen IPC contract)
 // ---------------------------------------------------------------------------
 
-/// A rule value: `string | number` on the wire.
+/// A rule value: `string | number` on the wire. Booleans are accepted on
+/// input as `1`/`0` sugar (e.g. an LLM emitting `true` for `starred`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum RuleValue {
@@ -68,6 +69,12 @@ impl<'de> Deserialize<'de> for RuleValue {
 
             fn visit_str<E>(self, v: &str) -> std::result::Result<RuleValue, E> {
                 Ok(RuleValue::Str(v.to_owned()))
+            }
+
+            fn visit_bool<E>(self, v: bool) -> std::result::Result<RuleValue, E> {
+                // Convenience for booleans (the UI sends 1/0, but an LLM
+                // may emit true/false for `starred`).
+                Ok(RuleValue::Num(if v { 1.0 } else { 0.0 }))
             }
 
             fn visit_i64<E>(self, v: i64) -> std::result::Result<RuleValue, E> {
@@ -151,6 +158,7 @@ enum FieldKind {
     Text,
     Number,
     Date,
+    Bool,
 }
 
 impl Field {
@@ -189,8 +197,8 @@ impl Field {
             | Field::Path
             | Field::Source
             | Field::Server => FieldKind::Text,
-            Field::Starred
-            | Field::Year
+            Field::Starred => FieldKind::Bool,
+            Field::Year
             | Field::Rating
             | Field::PlayCount
             | Field::DurationSecs
@@ -419,6 +427,33 @@ fn compile_rule(rule: &RuleRow, index: usize, params: &mut Vec<Value>) -> Result
                 }
             };
             Ok(sql)
+        }
+        FieldKind::Bool => {
+            let truth = match &rule.value {
+                RuleValue::Num(n) if n.is_finite() => *n != 0.0,
+                RuleValue::Str(s) => match s.trim().to_ascii_lowercase().as_str() {
+                    "1" | "true" | "yes" => true,
+                    "0" | "false" | "no" => false,
+                    _ => {
+                        return Err(invalid(&ctx, "value must be true/false (or 1/0)"));
+                    }
+                },
+                RuleValue::Num(_) => {
+                    return Err(invalid(&ctx, "value must be true/false (or 1/0)"));
+                }
+            };
+            let integer = Value::Integer(if truth { 1 } else { 0 });
+            match rule.op {
+                Op::Is | Op::Eq => {
+                    params.push(integer);
+                    Ok(format!("{col} = ?"))
+                }
+                Op::IsNot | Op::Ne => {
+                    params.push(integer);
+                    Ok(format!("{col} <> ?"))
+                }
+                _ => Err(invalid(&ctx, "boolean fields support is, isNot, eq, ne")),
+            }
         }
         FieldKind::Number => {
             let require = |v: &RuleValue| -> Result<f64> {

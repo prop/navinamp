@@ -244,6 +244,22 @@ export function navidromePublishSmartView(
   return invoke<NavidromePublishReport>("navidrome_publish_smart_view", { id, serverId });
 }
 
+/**
+ * Publish an explicit set of Subsonic song ids under `[NaVinaMP] <name>`.
+ * Creates the playlist or updates the one with that exact name.
+ */
+export function navidromePublishTracks(
+  name: string,
+  songIds: string[],
+  serverId: string | null = null,
+): Promise<NavidromePublishReport> {
+  return invoke<NavidromePublishReport>("navidrome_publish_tracks", {
+    name,
+    songIds,
+    serverId,
+  });
+}
+
 /** Persist streaming prefs; `bitrateKbps` is only meaningful for transcodes. */
 export function navidromeSetStreaming(
   format: StreamFormat,

@@ -30,6 +30,7 @@
     emitMediaCommand,
     queueIntent,
     queuePlayNow,
+    queueReplaceAll,
     queueSnapshot,
     windowSetSize,
   } from "../lib/window/bus.svelte";
@@ -202,6 +203,7 @@
     <MediaLibrary
       onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
       onplaynow={(metas) => queuePlayNow(metas)}
+      onreplace={(metas) => queueReplaceAll(metas)}
       onlog={logLine} />
 
     <EqPanel manageCurves />

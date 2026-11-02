@@ -9,6 +9,7 @@ use std::time::SystemTime;
 
 use common::{Meta, Scratch};
 use navinamp_library::{Library, RemoteTrack, TrackFilter};
+use rusqlite::Connection;
 
 /// A scanned three-file library: two tagged MP3s from one album + one WAV.
 fn scanned_library(label: &str) -> (Scratch, Library) {
@@ -765,6 +766,16 @@ fn ad_hoc_query_supports_new_fields_and_respects_the_cap() {
     };
     assert_eq!(library.smart_view_query(&def, 1).unwrap().len(), 1);
     assert_eq!(library.smart_view_query(&def, 10).unwrap().len(), 2);
+
+    // The Advanced builder spells booleans as is/isNot with 1/0.
+    let mut is_def = def.clone();
+    is_def.group.rules[2] = navinamp_library::RuleRow {
+        field: navinamp_library::Field::Starred,
+        op: navinamp_library::Op::Is,
+        value: navinamp_library::RuleValue::Str("false".into()),
+        value2: None,
+    };
+    assert_eq!(library.smart_view_query(&is_def, 10).unwrap().len(), 2);
 }
 
 #[test]
@@ -788,4 +799,53 @@ fn artists_genres_and_source_stats_match_the_rows() {
     // Source filters are applied in SQL.
     assert_eq!(library.artists(Some("local")).unwrap(), artists);
     assert!(library.albums(Some("navidrome")).unwrap().is_empty());
+}
+
+#[test]
+fn old_fts_schema_is_rebuilt_with_album_artist_and_path() {
+    let (scratch, library) = scanned_library("fts-migration");
+    drop(library);
+
+    // Recreate the pre-0.9 four-column FTS shape (external content + triggers),
+    // then add a row whose album_artist is not in the old index.
+    {
+        let conn = Connection::open(scratch.db()).unwrap();
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS tracks_fts_ins;
+             DROP TRIGGER IF EXISTS tracks_fts_del;
+             DROP TRIGGER IF EXISTS tracks_fts_upd;
+             DROP TABLE IF EXISTS tracks_fts;
+             CREATE VIRTUAL TABLE tracks_fts USING fts5(
+                 title, artist, album, genre,
+                 content='tracks', content_rowid='id'
+             );
+             CREATE TRIGGER tracks_fts_ins AFTER INSERT ON tracks BEGIN
+                 INSERT INTO tracks_fts(rowid, title, artist, album, genre)
+                 VALUES (new.id, new.title, new.artist, new.album, new.genre);
+             END;
+             INSERT INTO tracks
+                 (path, mtime, size, title, artist, album_artist, album, album_key, genre, date_added)
+             VALUES
+                 ('/tmp/legacy-track.mp3', 0, 1, 'Legacy', 'Old Artist', 'Archive Name',
+                  'Old Album', 'legacy-key', 'Rock', 0);",
+        )
+        .unwrap();
+    }
+
+    let library = Library::open(scratch.db()).unwrap();
+    // Both new columns come from the rebuild, not from the old insert trigger.
+    assert!(
+        library
+            .search("archive", 10)
+            .unwrap()
+            .iter()
+            .any(|t| t.title == "Legacy")
+    );
+    assert!(
+        library
+            .search("legacy-track", 10)
+            .unwrap()
+            .iter()
+            .any(|t| t.title == "Legacy")
+    );
 }

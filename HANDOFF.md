@@ -18,6 +18,10 @@
   Bass Boost, selection-aware row context menus and global Always on Top.
 - Post-v0.8.0 master: the equalizer's automatic headroom is now visible as a
   live `auto headroom −X.X dB` readout.
+- Post-v0.8.0 master: three-mode library search — SIMPLE (full-text),
+  ADVANCED (field rules) and AI (LLM-built rules, optional Discogs lookup) —
+  with save-to-smart-view, publish-to-server and replace-playlist actions.
+  Detailed notes near the end of this section.
 - M4A/AAC playback (decoder priming for undeclared channel layouts)
 - Classic Winamp 2 `.wsz` skin support (base-2.91 renders)
 - Bitmap-glyph fonts (text.bmp/numbers.bmp), pledit.txt colors in the PE
@@ -153,11 +157,33 @@
   basename fallback). Deletions broadcast the usual clear event, so the
   playing track falls back to its artist curve or genre preset immediately.
   The manager is library-only; the EQ window's HTML fallback stays compact.
+- Search modes share one result table:
+  - SIMPLE keeps the FTS5/bm25 path; `tracks_fts` now also indexes
+    album_artist and path (navidrome://server/id), rebuilt once on upgrade.
+  - ADVANCED is the Smart View rule engine surfaced inline (AdvancedSearch)
+    with new `albumArtist`, `codec`, `starred` (boolean) and `server` fields;
+    `smart_view_query` runs an unsaved definition with an explicit 5000-row
+    cap.
+  - AI sends a bounded library digest (counts, genres, sampled artists, server
+    names/ids) and the rule schema to the configured provider. The model may
+    call Discogs (database search, max 2 hops, optional personal token) and
+    must finish with a Smart View JSON definition, which is validated by the
+    library; one repair pass auto-corrects malformed output. EDIT RULES moves
+    the generated definition into the Advanced builder; REFINE reuses it.
+  - Results can be SAVED as a smart view (simple mode synthesizes path rules),
+    published as a `[NaVinaMP]` server playlist (new publish-by-name command),
+    or used to replace the playlist editor (new queue `replaceAll` intent).
+- AI settings (`ai.json`, plaintext like navidrome.json): provider presets for
+  OpenRouter, OpenAI, Claude, DeepSeek, GLM, Kimi, MiniMax and a custom
+  OpenAI-compatible endpoint (covers local Ollama/LM Studio), plus an optional
+  Discogs token. `navinamp-llm` has OpenAI-compatible and Anthropic adapters;
+  the key never reaches the model or logs. Embedding/vector search is
+  deferred — GitHub issue #15 has the design.
 
 ## Next up
 
 The backlog lives in GitHub issues — `gh issue list` (labels:
-`enhancement`, `bug`). The next batch is a 0.8.1 release.
+`enhancement`, `bug`). The next batch is a 0.9.0 release.
 
 ## Design notes & deferred
 

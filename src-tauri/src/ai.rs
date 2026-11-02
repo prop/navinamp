@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State};
 
 use crate::library::{LibraryState, with_library};
+use crate::navidrome::NavidromeState;
 
 const AI_FILE: &str = "ai.json";
 const MAX_HOPS: usize = 4;
@@ -181,6 +182,7 @@ pub struct AiSearchReport {
 pub async fn ai_search(
     app: AppHandle,
     state: State<'_, LibraryState>,
+    nav: State<'_, NavidromeState>,
     prompt: String,
     base_def: Option<SmartViewDef>,
 ) -> Result<AiSearchReport, String> {
@@ -200,7 +202,8 @@ pub async fn ai_search(
         let stats = library.stats().map_err(|e| e.to_string())?;
         let genres = library.genres(None).map_err(|e| e.to_string())?;
         let artists = library.artists(None).map_err(|e| e.to_string())?;
-        Ok(build_context(&stats, &genres, &artists))
+        let servers = crate::navidrome::profile_names(&nav);
+        Ok(build_context(&stats, &genres, &artists, &servers))
     })?;
 
     let mut messages = vec![
@@ -219,9 +222,13 @@ pub async fn ai_search(
         match parse_reply(&text) {
             Ok(Reply::Discogs { query, kind, limit }) if tool_calls < MAX_TOOL_CALLS as u32 => {
                 tool_calls += 1;
-                let results = discogs_search(&config, &query, &kind, limit)
-                    .await
-                    .map_err(|e| config.scrubbed(e))?;
+                let results = match discogs_search(&config, &query, &kind, limit).await {
+                    Ok(results) => results,
+                    Err(e) => format!(
+                        "Discogs lookup failed: {}. Continue without it and emit final rules.",
+                        config.scrubbed(e)
+                    ),
+                };
                 messages.push(ChatMessage::assistant(text));
                 messages.push(ChatMessage::user(format!(
                     "Discogs results for “{query}”:\n{results}\n\n\
@@ -333,9 +340,10 @@ Rule schema:
   Operators: is, isNot, contains, notContains, startsWith, endsWith.
   Values are strings. `source` is "local" or "navidrome". `path` also matches
   navidrome://<server>/<id>; `server` is a profile id from the library digest.
-- Number fields: starred, year, rating, playCount, durationSecs, bitrateKbps.
+- Number fields: year, rating, playCount, durationSecs, bitrateKbps.
   Operators: eq, ne, gt, gte, lt, lte, between (between needs value and value2).
-  `starred` is 1 (favorited) or 0. `rating` is 0-5. `durationSecs` is seconds.
+  `rating` is 0-5. `durationSecs` is seconds.
+- Boolean field: starred. Use is/isNot with true/false (1/0 also works).
 - Date fields: lastPlayed, dateAdded.
   Operators: inLastDays, notInLastDays (numeric days), before, after (YYYY-MM-DD).
 - `group.match` is "all" (AND) or "any" (OR). Rules are flat; no nesting.
@@ -371,7 +379,12 @@ fn user_prompt(prompt: &str, context: &str, base: Option<&SmartViewDef>) -> Stri
 
 /// Compact, bounded digest of the library for the prompt. Artists are sampled
 /// across the whole alphabet (not just A-C) to stay representative.
-fn build_context(stats: &LibraryStats, genres: &[String], artists: &[String]) -> String {
+fn build_context(
+    stats: &LibraryStats,
+    genres: &[String],
+    artists: &[String],
+    servers: &[(String, String)],
+) -> String {
     let mut out = format!(
         "{} tracks, {} albums, {} artists, {} genres. local={} tracks, navidrome={} tracks.\n",
         stats.tracks,
@@ -381,14 +394,21 @@ fn build_context(stats: &LibraryStats, genres: &[String], artists: &[String]) ->
         stats.local.tracks,
         stats.navidrome.tracks
     );
-    if !stats.navidrome_servers.is_empty() {
+    if !servers.is_empty() {
         out.push_str("Navidrome servers: ");
-        let servers: Vec<String> = stats
-            .navidrome_servers
+        let list: Vec<String> = servers
             .iter()
-            .map(|s| format!("{} ({} tracks)", s.server_id, s.tracks))
+            .map(|(name, id)| {
+                let count = stats
+                    .navidrome_servers
+                    .iter()
+                    .find(|s| &s.server_id == id)
+                    .map(|s| s.tracks)
+                    .unwrap_or(0);
+                format!("“{name}” (server id {id}, {count} tracks)")
+            })
             .collect();
-        out.push_str(&servers.join(", "));
+        out.push_str(&list.join(", "));
         out.push('\n');
     }
     out.push_str("Genres: ");

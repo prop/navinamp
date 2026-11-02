@@ -543,6 +543,17 @@ pub fn navidrome_status(app: AppHandle, state: State<'_, NavidromeState>) -> Sta
     current_status(&app, &state)
 }
 
+/// `(display name, profile id)` pairs for prompt/context builders (AI search).
+pub(crate) fn profile_names(state: &NavidromeState) -> Vec<(String, String)> {
+    let guard = state.inner.lock().unwrap();
+    guard
+        .config
+        .profiles
+        .iter()
+        .map(|profile| (profile.name(), profile.id.clone()))
+        .collect()
+}
+
 /// Saved servers (in creation order) with the active one flagged.
 #[tauri::command]
 pub fn navidrome_profiles(state: State<'_, NavidromeState>) -> Vec<ProfileSummary> {

@@ -19,7 +19,6 @@
     smartViewDelete,
     smartViewPreview,
     smartViewSave,
-    type RuleRow,
     type SmartField,
     type SmartOp,
     type SmartSortField,
@@ -29,11 +28,13 @@
   import {
     SMART_FIELDS,
     SMART_SORTS,
+    blankRule,
+    coerceRuleRows,
     defaultOpFor,
-    fieldLabel,
-    fieldTypeOf,
     inputKindOf,
+    normalizeOp,
     opsForField,
+    type EditableRule,
   } from "../lib/library/smartView";
 
   /** One saved Navidrome server the view can be published to. */
@@ -81,20 +82,12 @@
   // svelte-ignore state_referenced_locally
   const init = $state.snapshot(initial);
 
-  /** Editable rule row: values stay raw strings until buildDef coerces. */
-  interface EditableRule {
-    field: SmartField;
-    op: SmartOp;
-    valueRaw: string;
-    value2Raw: string;
-  }
-
   let name = $state(init.name);
   let matchAll = $state(init.group.match === "all");
   let rules = $state<EditableRule[]>(
     init.group.rules.map((r) => ({
       field: r.field,
-      op: r.op,
+      op: normalizeOp(r.field, r.op),
       valueRaw: r.value == null ? "" : String(r.value),
       value2Raw: r.value2 == null ? "" : String(r.value2),
     })),
@@ -126,57 +119,16 @@
    * true for saving.
    */
   function buildDef(requireName: boolean): Built {
-    const errs: Record<number, string> = {};
-    const rows: RuleRow[] = [];
-
-    for (let i = 0; i < rules.length; i++) {
-      const r = rules[i];
-      const label = fieldLabel(r.field);
-      const type = fieldTypeOf(r.field);
-      if (type === "string") {
-        if (r.valueRaw.trim() === "") {
-          errs[i] = `${label} needs a value`;
-          continue;
-        }
-        rows.push({ field: r.field, op: r.op, value: r.valueRaw });
-      } else if (type === "number") {
-        const v = Number(r.valueRaw);
-        if (r.valueRaw.trim() === "" || !Number.isFinite(v)) {
-          errs[i] = `${label} needs a number`;
-          continue;
-        }
-        if (r.op === "between") {
-          const v2 = Number(r.value2Raw);
-          if (r.value2Raw.trim() === "" || !Number.isFinite(v2)) {
-            errs[i] = "range needs an upper bound";
-            continue;
-          }
-          rows.push({ field: r.field, op: r.op, value: v, value2: v2 });
-        } else {
-          rows.push({ field: r.field, op: r.op, value: v });
-        }
-      } else {
-        // date field
-        if (r.op === "inLastDays" || r.op === "notInLastDays") {
-          const v = Number(r.valueRaw);
-          if (r.valueRaw.trim() === "" || !Number.isFinite(v) || v < 0) {
-            errs[i] = "days needs a non-negative number";
-            continue;
-          }
-          rows.push({ field: r.field, op: r.op, value: v });
-        } else {
-          if (r.valueRaw === "") {
-            errs[i] = "pick a date";
-            continue;
-          }
-          rows.push({ field: r.field, op: r.op, value: r.valueRaw });
-        }
-      }
+    const coerced = coerceRuleRows(rules);
+    if (!coerced.ok) {
+      return {
+        ok: false,
+        rowErrors: coerced.errors,
+        message: "fix the highlighted rules",
+      };
     }
+    const rows = coerced.rows;
 
-    if (Object.keys(errs).length > 0) {
-      return { ok: false, rowErrors: errs, message: "fix the highlighted rules" };
-    }
     if (rules.length === 0) {
       return { ok: false, rowErrors: {}, message: "add at least one rule" };
     }
@@ -247,7 +199,7 @@
     const r = rules[i];
     r.field = field;
     r.op = defaultOpFor(field); // operator must follow the field's type
-    r.valueRaw = "";
+    r.valueRaw = inputKindOf(field, r.op) === "boolean" ? "1" : "";
     r.value2Raw = "";
   }
 
@@ -265,7 +217,7 @@
   }
 
   function addRule(): void {
-    rules.push({ field: "artist", op: "contains", valueRaw: "", value2Raw: "" });
+    rules.push(blankRule());
   }
 
   function removeRule(i: number): void {
@@ -453,6 +405,15 @@
                   oninput={(e) => (rules[i].value2Raw = e.currentTarget.value)}
                   aria-label="upper bound"
                 />
+              {:else if inputKindOf(rule.field, rule.op) === "boolean"}
+                <select
+                  class="sel"
+                  value={rule.valueRaw}
+                  onchange={(e) => (rules[i].valueRaw = e.currentTarget.value)}
+                  aria-label="value">
+                  <option value="1">true</option>
+                  <option value="0">false</option>
+                </select>
               {:else}
                 <input class="txt val" type="date" bind:value={rule.valueRaw} aria-label="date" />
               {/if}

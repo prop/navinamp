@@ -547,14 +547,19 @@ fn contract_rejects_unknown_fields_and_non_scalar_values() {
         );
     }
 
-    // rule values must be string or number
-    for bad in ["true", "null", "[\"x\"]", "{\"a\":1}"] {
+    // rule values must be string, finite number or boolean (booleans are
+    // accepted as 1/0 sugar, e.g. for `starred` from an LLM)
+    for bad in ["null", "[\"x\"]", "{\"a\":1}"] {
         let json = format!(r#"{{ "field": "title", "op": "is", "value": {bad} }}"#);
         assert!(
             serde_json::from_str::<RuleRow>(&json).is_err(),
             "value {bad} should not deserialize"
         );
     }
+    let bool_row: RuleRow =
+        serde_json::from_str(r#"{ "field": "starred", "op": "is", "value": true }"#)
+            .expect("booleans are accepted as 1/0");
+    assert_eq!(bool_row.value, RuleValue::Num(1.0));
 
     // limit is number | null
     let bad_limit = base.replace(

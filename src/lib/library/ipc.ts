@@ -148,11 +148,15 @@ export type SmartField =
   // string fields
   | "title"
   | "artist"
+  | "albumArtist"
   | "album"
   | "genre"
+  | "codec"
   | "path"
   | "source"
+  | "server"
   // number fields
+  | "starred"
   | "year"
   | "rating"
   | "playCount"
@@ -222,7 +226,7 @@ export function libraryScan(roots: string[]): Promise<ScanReport> {
   return invoke<ScanReport>("library_scan", { roots });
 }
 
-/** Ranked FTS5 search over title/artist/album/genre. */
+/** Ranked FTS5 search over title/artist/album/genre/album_artist/path. */
 export function librarySearch(q: string, limit?: number): Promise<Track[]> {
   return invoke<Track[]>("library_search", { q, limit });
 }
@@ -356,6 +360,14 @@ export function smartViewRun(id: number): Promise<Track[]> {
 /** Evaluate an unsaved def (live preview in the rule builder). */
 export function smartViewPreview(def: SmartViewDef): Promise<Track[]> {
   return invoke<Track[]>("smart_view_preview", { def });
+}
+
+/**
+ * Evaluate an unsaved def with an explicit row cap. Advanced/AI search use
+ * this instead of the 500-row preview cap.
+ */
+export function smartViewQuery(def: SmartViewDef, limit = 5000): Promise<Track[]> {
+  return invoke<Track[]>("smart_view_query", { def, limit });
 }
 
 // ─── events ─────────────────────────────────────────────────────────────────

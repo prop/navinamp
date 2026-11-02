@@ -344,6 +344,62 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn openai_chat_posts_to_the_compatible_endpoint() {
+        use wiremock::matchers::{body_string_contains, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(header("authorization", "Bearer sk-secret"))
+            .and(body_string_contains("\"model\":\"test-model\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"choices":[{"message":{"content":"hello"}}]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let config = LlmConfig {
+            base_url: format!("{}/v1", server.uri()),
+            ..cfg(ProviderKind::OpenAiCompatible, "")
+        };
+        let reply = chat(&config, &[ChatMessage::user("hi")]).await.unwrap();
+        assert_eq!(reply, "hello");
+    }
+
+    #[tokio::test]
+    async fn anthropic_chat_posts_messages_with_the_key_header() {
+        use wiremock::matchers::{body_string_contains, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "sk-secret"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(body_string_contains("\"system\":\"rules\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"content":[{"type":"text","text":"hello"}]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let config = LlmConfig {
+            base_url: server.uri(),
+            ..cfg(ProviderKind::Anthropic, "")
+        };
+        let reply = chat(
+            &config,
+            &[ChatMessage::system("rules"), ChatMessage::user("hi")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply, "hello");
+    }
+
     #[test]
     fn openai_body_uses_roles() {
         let body = openai_body(

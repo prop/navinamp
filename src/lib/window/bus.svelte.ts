@@ -82,6 +82,7 @@ export type QueueIntent =
   | { type: "play"; index: number }
   | { type: "add"; paths: string[] }
   | { type: "addFromLibrary"; metas: QueueItemMeta[] }
+  | { type: "replaceAll"; metas: QueueItemMeta[] }
   | { type: "addNext"; path: string; index?: number }
   | { type: "remove"; index: number }
   | { type: "move"; from: number; to: number }
@@ -112,6 +113,10 @@ export function applyQueueIntent(intent: QueueIntent): void {
       queue.add(intent.paths);
       break;
     case "addFromLibrary":
+      queue.addFromLibrary(intent.metas);
+      break;
+    case "replaceAll":
+      queue.clear();
       queue.addFromLibrary(intent.metas);
       break;
     case "addNext":
@@ -171,6 +176,12 @@ export function queuePlayNow(metas: QueueItemMeta[]): void {
   const at = IS_PLAYER ? queue.items.length : (queueSnapshot.value?.items.length ?? 0);
   queueIntent({ type: "addFromLibrary", metas });
   queueIntent({ type: "play", index: at });
+}
+
+/** Replace the playlist editor/queue contents with `metas`. */
+export function queueReplaceAll(metas: QueueItemMeta[]): void {
+  if (metas.length === 0) return;
+  queueIntent({ type: "replaceAll", metas });
 }
 
 // ── reactive stores ────────────────────────────────────────────────────────

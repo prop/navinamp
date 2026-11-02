@@ -36,12 +36,20 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import SmartViewEditor from "./SmartViewEditor.svelte";
+  import AdvancedSearch from "./AdvancedSearch.svelte";
+  import AiSettings from "./AiSettings.svelte";
   import {
     clearEqFor,
     getArtistEq,
     getTrackEq,
     rememberEq,
   } from "../lib/audio/auto";
+  import {
+    aiGetConfig,
+    aiSearch,
+    type AiConfig,
+    type AiSearchReport,
+  } from "../lib/ai/ipc";
   import {
     friendlyIpcError,
     libraryAlbumTracks,
@@ -59,6 +67,7 @@
     onLibraryProgress,
     onLibraryScanned,
     smartViewRun,
+    smartViewQuery,
     smartViewsList,
     isScanReport,
     type Album,
@@ -67,14 +76,16 @@
     type ScanProgressPayload,
     type SourceStats,
     type Track,
+    type SmartViewDef,
   } from "../lib/library/ipc";
-  import { emptySmartViewDef } from "../lib/library/smartView";
+  import { emptySearchDef, emptySmartViewDef, plainRules } from "../lib/library/smartView";
   import {
     isSyncReport,
     navidromePlaylistTracks,
     navidromePlaylists,
     navidromeProfiles,
     navidromePublishSmartView,
+    navidromePublishTracks,
     navidromeRate,
     navidromeStar,
     navidromeStatus,
@@ -96,10 +107,12 @@
     onenqueue: (metas: QueueItemMeta[]) => void;
     /** Append tracks and start playing the first of them. */
     onplaynow: (metas: QueueItemMeta[]) => void;
+    /** Replace the playlist editor/queue with these tracks. */
+    onreplace: (metas: QueueItemMeta[]) => void;
     onlog: (line: string) => void;
   }
 
-  let { onenqueue, onplaynow, onlog }: Props = $props();
+  let { onenqueue, onplaynow, onreplace, onlog }: Props = $props();
 
   // Must match the .trow height for content-visibility sizing.
   const ROW_H = 20;
@@ -250,37 +263,286 @@
     };
   });
 
-  // ── search (debounced 150 ms) ──────────────────────────────────────────────
+  // ── search: simple / advanced / AI ────────────────────────────────────────
+  // Simple = debounced FTS. Advanced = the Smart View rule engine. AI = one
+  // LLM call that emits (and optionally Discogs-enriches) a Smart View def,
+  // then the same local query runs. All three feed `searchResults`, so the
+  // table, selection and bulk actions are shared.
 
+  type SearchMode = "simple" | "advanced" | "ai";
+  const SEARCH_MODE_KEY = "navinamp.search.mode";
+
+  function readSearchMode(): SearchMode {
+    try {
+      const raw = localStorage.getItem(SEARCH_MODE_KEY);
+      return raw === "advanced" || raw === "ai" ? raw : "simple";
+    } catch {
+      return "simple";
+    }
+  }
+
+  let searchMode = $state<SearchMode>(readSearchMode());
   let searchQ = $state("");
+  let aiPrompt = $state("");
   let searchResults = $state.raw<Track[] | null>(null);
   let searchError = $state<string | null>(null);
+  let searchBusy = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   let searchSeq = 0;
+  /** Definition behind the current structured search (advanced or AI). */
+  let searchDef = $state.raw<SmartViewDef | null>(null);
+  let aiReport = $state.raw<AiSearchReport | null>(null);
+  let aiUsedPrompt = $state("");
+  let aiConfig = $state.raw<AiConfig | null>(null);
+  let showAiSettings = $state(false);
+  let advancedSeed = $state.raw<SmartViewDef>(emptySearchDef());
+  let advancedKey = $state(0);
+
+  // Save-to-server state (inline under the result bar).
+  let playlistSaveOpen = $state(false);
+  let playlistName = $state("");
+  let playlistServer = $state("");
+  let playlistBusy = $state(false);
+  let playlistNote = $state<string | null>(null);
+  let playlistError = $state<string | null>(null);
+
+  const playlistSaveCount = $derived(
+    (searchResults ?? []).filter(
+      (t) =>
+        t.source === REMOTE_SOURCE &&
+        t.serverId === playlistServer &&
+        t.remoteId != null,
+    ).length,
+  );
+
+  $effect(() => {
+    try {
+      localStorage.setItem(SEARCH_MODE_KEY, searchMode);
+    } catch {
+      // storage-less webview: mode is session-only
+    }
+  });
+
+  async function refreshAiConfig(): Promise<void> {
+    try {
+      aiConfig = await aiGetConfig();
+    } catch {
+      aiConfig = null;
+    }
+  }
+
+  $effect(() => {
+    void refreshAiConfig();
+  });
+
+  function switchMode(mode: SearchMode): void {
+    if (mode === searchMode) return;
+    searchMode = mode;
+    searchResults = null;
+    searchDef = null;
+    aiReport = null;
+    searchError = null;
+    searchBusy = false;
+    playlistSaveOpen = false;
+    searchSeq++;
+  }
 
   function onSearchInput(e: Event & { currentTarget: HTMLInputElement }): void {
     searchQ = e.currentTarget.value;
     if (searchTimer != null) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => void runSearch(searchQ), 150);
+    searchTimer = setTimeout(() => void runSimpleSearch(searchQ), 150);
   }
 
-  async function runSearch(q: string): Promise<void> {
+  async function runSimpleSearch(q: string): Promise<void> {
     const seq = ++searchSeq;
     if (q.trim() === "") {
       searchResults = null;
       searchError = null;
+      searchDef = null;
+      searchBusy = false;
       return;
     }
+    searchBusy = true;
     try {
       const rows = await librarySearch(q, 500);
+      if (seq !== searchSeq) return;
+      searchResults = rows;
+      searchError = null;
+      searchDef = null;
+      aiReport = null;
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      searchResults = null;
+      searchError = friendlyIpcError("library search", e);
+    } finally {
+      if (seq === searchSeq) searchBusy = false;
+    }
+  }
+
+  async function runStructuredSearch(def: SmartViewDef): Promise<void> {
+    const seq = ++searchSeq;
+    searchBusy = true;
+    searchError = null;
+    searchDef = def;
+    playlistSaveOpen = false;
+    try {
+      const rows = await smartViewQuery(def, 5000);
       if (seq !== searchSeq) return;
       searchResults = rows;
       searchError = null;
     } catch (e) {
       if (seq !== searchSeq) return;
       searchResults = null;
-      searchError = friendlyIpcError("library search", e);
+      searchError = friendlyIpcError("search", e);
+    } finally {
+      if (seq === searchSeq) searchBusy = false;
     }
+  }
+
+  async function runAiSearch(): Promise<void> {
+    const prompt = aiPrompt.trim();
+    if (prompt === "" || searchBusy) return;
+    if (aiConfig?.enabled !== true) {
+      searchError = "AI search is off — open AI SETTINGS to configure a provider";
+      return;
+    }
+    const seq = ++searchSeq;
+    const base = aiReport?.def ?? null;
+    searchBusy = true;
+    searchError = null;
+    searchResults = null;
+    playlistSaveOpen = false;
+    try {
+      const report = await aiSearch(prompt, base);
+      if (seq !== searchSeq) return;
+      aiReport = report;
+      searchDef = report.def;
+      const rows = await smartViewQuery(report.def, 5000);
+      if (seq !== searchSeq) return;
+      searchResults = rows;
+      aiUsedPrompt = prompt;
+      aiPrompt = ""; // next input is a refinement instruction
+      onlog(
+        `ai search: ${rows.length} track${rows.length === 1 ? "" : "s"} via ` +
+          `${report.preset}/${report.model}` +
+          (report.toolCalls > 0 ? ` (${report.toolCalls} discogs call${report.toolCalls === 1 ? "" : "s"})` : ""),
+      );
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      aiReport = null;
+      searchDef = null;
+      searchResults = null;
+      searchError = friendlyIpcError("AI search", e);
+    } finally {
+      if (seq === searchSeq) searchBusy = false;
+    }
+  }
+
+  function editAiRules(): void {
+    if (!aiReport) return;
+    advancedSeed = aiReport.def;
+    advancedKey++;
+    searchMode = "advanced";
+    aiReport = null;
+  }
+
+  function newAiSearch(): void {
+    aiReport = null;
+    searchDef = null;
+    searchResults = null;
+    searchError = null;
+    aiPrompt = "";
+    aiUsedPrompt = "";
+    playlistSaveOpen = false;
+  }
+
+  /** Build a saveable def for the current results (simple search fallback). */
+  function searchDefForSave(): SmartViewDef | null {
+    if (searchDef != null) return searchDef;
+    const rows = searchResults ?? [];
+    if (rows.length === 0) return null;
+    const sample = rows.slice(0, 500);
+    return {
+      name: (searchQ.trim() || "search results").slice(0, 60),
+      group: {
+        match: "any",
+        rules: sample.map((t) => ({ field: "path" as const, op: "is" as const, value: t.path })),
+      },
+      limit: rows.length,
+      sort: "title",
+      sortDesc: false,
+    };
+  }
+
+  function saveSearchAsView(): void {
+    const def = searchDefForSave();
+    if (def == null) return;
+    if (searchDef == null && (searchResults?.length ?? 0) > 500) {
+      onlog("search: simple-mode save covers the first 500 results as path rules");
+    }
+    editing = { id: null, def };
+  }
+
+  function openPlaylistSave(): void {
+    const rows = searchResults ?? [];
+    if (rows.length === 0) return;
+    const suggested =
+      searchDef?.name?.trim() ||
+      (searchMode === "ai" ? aiPrompt : searchQ).trim() ||
+      "search results";
+    playlistName = suggested.slice(0, 40);
+    playlistServer =
+      navProfiles.find((p) => p.id === navStatus?.profileId)?.id ??
+      navProfiles[0]?.id ??
+      "";
+    playlistNote = null;
+    playlistError = null;
+    playlistSaveOpen = true;
+  }
+
+  async function savePlaylist(): Promise<void> {
+    if (playlistBusy) return;
+    const rows = searchResults ?? [];
+    const ids = rows
+      .filter(
+        (t) =>
+          t.source === REMOTE_SOURCE &&
+          t.serverId === playlistServer &&
+          t.remoteId != null,
+      )
+      .map((t) => t.remoteId as string);
+    if (playlistName.trim() === "") {
+      playlistError = "playlist name is required";
+      return;
+    }
+    if (ids.length === 0) {
+      playlistError = "no Navidrome tracks for this server in the results";
+      return;
+    }
+    playlistBusy = true;
+    playlistError = null;
+    playlistNote = null;
+    try {
+      const report = await navidromePublishTracks(
+        playlistName.trim(),
+        ids,
+        playlistServer,
+      );
+      playlistNote = `${report.created ? "created" : "updated"} “${report.name}” — ${report.trackCount} track${report.trackCount === 1 ? "" : "s"}`;
+      onlog(`navidrome: ${report.created ? "created" : "updated"} playlist “${report.name}” (${report.trackCount} tracks)`);
+      void refreshPlaylists(playlistServer);
+    } catch (e) {
+      playlistError = friendlyIpcError("save playlist", e);
+    } finally {
+      playlistBusy = false;
+    }
+  }
+
+  function resultsToQueue(): void {
+    const rows = searchResults ?? [];
+    if (rows.length === 0) return;
+    onreplace(toMetas(rows));
+    onlog(`search: replaced the playlist with ${rows.length} track${rows.length === 1 ? "" : "s"}`);
   }
 
   // ── table selection (plain / ctrl+cmd toggle / shift ranges) ──────────────
@@ -755,7 +1017,11 @@
   });
 
   const emptyMessage = $derived.by(() => {
-    if (searchResults != null) return `no matches for “${searchQ.trim()}”`;
+    if (searchResults != null) {
+      if (searchMode === "ai") return "no tracks match the AI query";
+      if (searchMode === "advanced") return "no tracks match these rules";
+      return `no matches for “${searchQ.trim()}”`;
+    }
     if (selection.kind === "all") return "library is empty — use “Scan folder…” above";
     if (selection.kind === "smart") return "this smart view returned no tracks";
     if (selection.kind === "remote") return "no navidrome tracks — sync from SERVER STATUS";
@@ -1502,6 +1768,9 @@
     searchQ = "";
     searchResults = null;
     searchError = null;
+    searchDef = null;
+    aiReport = null;
+    playlistSaveOpen = false;
     if (searchTimer != null) clearTimeout(searchTimer);
   }
 
@@ -1606,6 +1875,13 @@
     <button class="hdrbtn" onclick={() => (showSettings = true)} title="navidrome connection & streaming">
       NAVIDROME
     </button>
+    <button
+      class="hdrbtn"
+      class:on={aiConfig?.enabled === true}
+      onclick={() => (showAiSettings = true)}
+      title="AI search provider, model and Discogs token">
+      AI
+    </button>
   </header>
 
   <!-- TASK 3: scan management strip -->
@@ -1627,15 +1903,104 @@
     </span>
   </div>
 
-  <!-- top bar: search + actions + stats -->
+  <!-- search deck: three modes, then the shared result table below -->
+  <div class="searchbar">
+    <div class="modes" role="group" aria-label="search mode">
+      <button
+        class="mode"
+        class:on={searchMode === "simple"}
+        onclick={() => switchMode("simple")}
+        title="title/artist/album/genre/path full-text search">SIMPLE</button>
+      <button
+        class="mode"
+        class:on={searchMode === "advanced"}
+        onclick={() => switchMode("advanced")}
+        title="field-by-field rules (album, artist, year, rating, path…)">ADVANCED</button>
+      <button
+        class="mode"
+        class:on={searchMode === "ai"}
+        onclick={() => switchMode("ai")}
+        title="describe the music you want; the model builds the rules">AI</button>
+    </div>
+
+    {#if searchMode === "simple"}
+      <input
+        class="search"
+        type="search"
+        placeholder="search title / artist / album / genre / path…"
+        value={searchQ}
+        oninput={onSearchInput}
+        aria-label="search library" />
+    {:else if searchMode === "ai"}
+      <input
+        class="search prompt"
+        type="text"
+        bind:value={aiPrompt}
+        placeholder={aiReport ? "refine these results…" : "describe what you want to hear…"}
+        aria-label="AI search prompt"
+        onkeydown={(e) => {
+          if (e.key === "Enter") void runAiSearch();
+        }} />
+      <button
+        class="runai"
+        onclick={() => void runAiSearch()}
+        disabled={searchBusy || aiPrompt.trim() === "" || aiConfig?.enabled !== true}
+        title="send the prompt to the configured provider">
+        {searchBusy ? "THINKING…" : aiReport ? "REFINE" : "ASK"}
+      </button>
+    {:else}
+      <span class="advhint">
+        {searchBusy ? "searching…" : "build rules below, then RUN"}
+      </span>
+    {/if}
+  </div>
+
+  {#if searchMode === "advanced"}
+    {#key advancedKey}
+      <AdvancedSearch
+        initial={advancedSeed}
+        busy={searchBusy}
+        onrun={(def) => void runStructuredSearch(def)} />
+    {/key}
+  {/if}
+
+  {#if searchMode === "ai"}
+    {#if aiConfig?.enabled !== true}
+      <div class="aioff">
+        AI search is off.
+        <button onclick={() => (showAiSettings = true)}>OPEN AI SETTINGS</button>
+      </div>
+    {:else if aiReport}
+      <div class="aibanner">
+        <div class="aihead">
+          <span class="aibadge">AI</span>
+          <span class="aimeta">
+            {aiReport.preset} · {aiReport.model}
+            {#if aiReport.toolCalls > 0}
+              · {aiReport.toolCalls} discogs lookup{aiReport.toolCalls === 1 ? "" : "s"}
+            {/if}
+          </span>
+          <button class="new" onclick={newAiSearch} title="start a fresh AI search">NEW</button>
+        </div>
+        {#if aiUsedPrompt}
+          <div class="aiquery">“{aiUsedPrompt}”</div>
+        {/if}
+        {#if aiReport.explanation}
+          <div class="aiexpl">{aiReport.explanation}</div>
+        {/if}
+        <div class="airules" title={plainRules(aiReport.def)}>{plainRules(aiReport.def)}</div>
+        <button class="editrules" onclick={editAiRules} title="load these rules into Advanced search">
+          EDIT RULES
+        </button>
+      </div>
+    {/if}
+  {/if}
+
+  {#if searchError}
+    <div class="search-err">{searchError}</div>
+  {/if}
+
   <div class="topbar">
-    <input
-      class="search"
-      type="search"
-      placeholder="search library…"
-      value={searchQ}
-      oninput={onSearchInput}
-      aria-label="search library" />
     <div class="actions">
       <button onclick={() => void enqueueAll()} disabled={displayedTotal === 0 || actionBusy} title="append every track in view">ENQUEUE ALL</button>
       <button
@@ -1646,8 +2011,63 @@
     </div>
     <span class="statline" title={roots.join("\n")}>{statsLine}</span>
   </div>
-  {#if searchError}
-    <div class="search-err">{searchError}</div>
+
+  {#if searchResults != null && searchResults.length > 0}
+    <div class="resultbar">
+      <span class="rbcount">
+        {searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"}
+      </span>
+      <span class="rbrule" title={searchDef ? plainRules(searchDef) : "simple full-text search"}>
+        {searchDef ? plainRules(searchDef) : "simple search"}
+      </span>
+      <button onclick={saveSearchAsView} title="save these results as a smart view">
+        SAVE VIEW
+      </button>
+      <button
+        onclick={openPlaylistSave}
+        disabled={navProfiles.length === 0}
+        title={navProfiles.length === 0 ? "connect a Navidrome server first" : "save the remote rows as a server playlist"}>
+        SAVE PLAYLIST
+      </button>
+      <button onclick={resultsToQueue} title="replace the playlist editor with these tracks">
+        TO PLAYLIST
+      </button>
+    </div>
+
+    {#if playlistSaveOpen}
+      <div class="savedialog">
+        <label>
+          name
+          <input
+            class="txt"
+            type="text"
+            bind:value={playlistName}
+            maxlength="40"
+            placeholder="playlist name" />
+        </label>
+        <label>
+          server
+          <select bind:value={playlistServer}>
+            {#each navProfiles as p (p.id)}
+              <option value={p.id}>{p.name}</option>
+            {/each}
+          </select>
+        </label>
+        <span class="dim">
+          {playlistSaveCount} of {searchResults.length} result{searchResults.length === 1 ? "" : "s"} on this server
+        </span>
+        <button class="primary" onclick={() => void savePlaylist()} disabled={playlistBusy}>
+          {playlistBusy ? "SAVING…" : "SAVE"}
+        </button>
+        <button
+          onclick={() => {
+            playlistSaveOpen = false;
+            playlistError = null;
+          }}>CANCEL</button>
+        {#if playlistNote}<span class="ok">{playlistNote}</span>{/if}
+        {#if playlistError}<span class="err">{playlistError}</span>{/if}
+      </div>
+    {/if}
   {/if}
 
   <div class="body">
@@ -2134,6 +2554,12 @@
       onlog={onlog} />
   {/if}
 
+  {#if showAiSettings}
+    <AiSettings
+      onclose={() => (showAiSettings = false)}
+      onchanged={() => void refreshAiConfig()} />
+  {/if}
+
   {#if rowMenu}
     <ContextMenu
       x={rowMenu.x}
@@ -2188,6 +2614,197 @@
     color: #3ccb4e;
   }
 
+  .hdrbtn.on {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+  }
+
+  .searchbar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 6px;
+    background: #101010;
+    border-bottom: 1px solid #2a2a2a;
+  }
+
+  .modes {
+    display: flex;
+    gap: 2px;
+    flex: none;
+  }
+
+  .searchbar .search {
+    flex: 1 1 auto;
+    min-width: 120px;
+  }
+
+  .searchbar .mode.on {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+    background: #12301b;
+  }
+
+  .runai {
+    flex: none;
+    color: #3ccb4e;
+  }
+
+  .advhint {
+    flex: 1;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    color: #707070;
+  }
+
+  .aioff {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    background: #101010;
+    border-bottom: 1px solid #2a2a2a;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    color: #d8a63c;
+  }
+
+  .aibanner {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 5px 8px;
+    background: #0b140d;
+    border-bottom: 1px solid #2a2a2a;
+    border-left: 2px solid #3ccb4e;
+  }
+
+  .aihead {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9px;
+    color: #707070;
+  }
+
+  .aibadge {
+    padding: 0 4px;
+    background: #3ccb4e;
+    color: #0d0d0d;
+    border-radius: 2px;
+    font-weight: 600;
+  }
+
+  .aihead .new {
+    margin-left: auto;
+  }
+
+  .aiexpl {
+    font-size: 10px;
+    line-height: 1.35;
+    color: #b8b8c0;
+  }
+
+  .aiquery {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9px;
+    color: #d8a63c;
+  }
+
+  .airules {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    color: #8dff9e;
+  }
+
+  .aibanner .editrules {
+    align-self: flex-start;
+  }
+
+  .resultbar {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 6px;
+    background: #0d0d0d;
+    border-bottom: 1px solid #2a2a2a;
+    font-size: 10px;
+  }
+
+  .rbcount {
+    flex: none;
+    color: #3ccb4e;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  .rbrule {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9px;
+    color: #707070;
+  }
+
+  .savedialog {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 4px 6px;
+    background: #111;
+    border-bottom: 1px solid #2a2a2a;
+    font-size: 10px;
+    color: #808080;
+  }
+
+  .savedialog label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .savedialog .txt,
+  .savedialog select {
+    background: #000;
+    color: #3ccb4e;
+    border: 1px solid #3a3a3a;
+    border-radius: 2px;
+    padding: 1px 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+  }
+
+  .savedialog .txt {
+    width: 14ch;
+  }
+
+  .savedialog .dim {
+    color: #707070;
+  }
+
+  .savedialog .ok {
+    color: #3ccb4e;
+  }
+
+  .savedialog .err {
+    color: #d8604c;
+  }
+
+  .savedialog .primary {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+  }
+
   .scanstrip,
   .topbar {
     display: flex;
@@ -2199,7 +2816,12 @@
   }
 
   .scanstrip button,
+  .searchbar button,
   .topbar button,
+  .resultbar button,
+  .aibanner button,
+  .aioff button,
+  .savedialog button,
   .bar button,
   .tree .node,
   .tree .leaf,
@@ -2216,7 +2838,12 @@
   }
 
   .scanstrip button:hover:not(:disabled),
+  .searchbar button:hover:not(:disabled),
   .topbar button:hover:not(:disabled),
+  .resultbar button:hover:not(:disabled),
+  .aibanner button:hover:not(:disabled),
+  .aioff button:hover:not(:disabled),
+  .savedialog button:hover:not(:disabled),
   .bar button:hover:not(:disabled),
   .tree .node:hover,
   .tree .leaf:hover,
