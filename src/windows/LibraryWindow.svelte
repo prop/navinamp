@@ -234,7 +234,7 @@
 
   <!-- LIBRARY stays mounted (hidden while inactive): selection, search,
        scroll position and loaded pages survive a tab round-trip (#16). -->
-  <div class="pane" class:off={tab !== "library"}>
+  <div id="pane-library" class="pane" role="tabpanel" aria-labelledby="tab-library" class:off={tab !== "library"}>
     <MediaLibrary
       onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
       onplaynow={(metas) => queuePlayNow(metas)}
@@ -243,13 +243,13 @@
   </div>
 
   {#if tab === "eq"}
-    <div class="pane">
+    <div id="pane-eq" class="pane" role="tabpanel" aria-labelledby="tab-eq">
       <EqPanel manageCurves />
     </div>
   {/if}
 
   {#if tab === "skin"}
-    <section class="pane skinbar">
+    <section id="pane-skin" class="pane skinbar" role="tabpanel" aria-labelledby="tab-skin">
       <span class="skinlabel">skin</span>
       <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
         {#each skins as s (s.id)}
@@ -267,7 +267,7 @@
   {/if}
 
   {#if tab === "dev"}
-    <section class="pane dev">
+    <section id="pane-dev" class="pane dev" role="tabpanel" aria-labelledby="tab-dev">
       <div class="devbox">
         <div class="row">
           <button onclick={() => void devOpenPlay()}>Open &amp; Play…</button>
