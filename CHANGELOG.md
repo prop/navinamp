@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.0](https://github.com/prop/navinamp/compare/v0.6.0...v0.7.0) (2026-11-02)
+
+
+### Features
+
+* **eq:** genre-based AUTO preset loading ([f7407f3](https://github.com/prop/navinamp/commit/f7407f34b23f47b1955724f71ec1bf461bec9acb))
+* **eq:** per-track and per-artist AUTO curves ([34c6e82](https://github.com/prop/navinamp/commit/34c6e826ead994628fb6f24eb64b66bf4a0ed86a))
+* **library:** SELECT ALL covers the whole filter ([0596c51](https://github.com/prop/navinamp/commit/0596c513fc9c00fa448e664976292403dd8f6f9d))
+* **navidrome:** aggregate multiple server libraries ([bf7cb67](https://github.com/prop/navinamp/commit/bf7cb67ff9760f7d51adc6b706fe65c604d363bb))
+* **navidrome:** choose a library for sync ([081317f](https://github.com/prop/navinamp/commit/081317fb7e732d96986e092dbea8dc8e469e378c))
+* **navidrome:** make adding a server explicit in settings ([80afbf1](https://github.com/prop/navinamp/commit/80afbf1e87bb3bb951b454efe67511888219049a))
+* **navidrome:** multiple server profiles (one active) ([1d2db94](https://github.com/prop/navinamp/commit/1d2db948660cdc5480d9f48e38a17d2e3d9a5ceb))
+
+
+### Bug Fixes
+
+* **eq:** match curves saved before server-qualified paths ([1f80ee4](https://github.com/prop/navinamp/commit/1f80ee43d773ffde6c5445eddf01fa974b1c519e))
+* **navidrome:** accept numeric music-folder ids ([1e882e6](https://github.com/prop/navinamp/commit/1e882e685991a03b8b78bf761f2fd921b9af1504))
+
+
+### Performance Improvements
+
+* **library:** virtualize the artist/album/genre tree ([8b4423a](https://github.com/prop/navinamp/commit/8b4423a9f9f95582cba17b058425fce6978b8213))
+* **library:** virtualize the track table ([8d4f4e9](https://github.com/prop/navinamp/commit/8d4f4e9a5d42fb8ebbc2ea9217d7e3c0778150c6))
+
 ## [0.6.0](https://github.com/prop/navinamp/compare/v0.5.0...v0.6.0) (2026-11-01)
 
 
