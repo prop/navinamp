@@ -13,6 +13,7 @@
     AI_DEFAULTS,
     AI_PRESETS,
     aiGetConfig,
+    aiModels,
     aiSetConfig,
     aiTest,
     presetById,
@@ -34,13 +35,34 @@
   let testing = $state(false);
   let note = $state<string | null>(null);
   let error = $state<string | null>(null);
+  /** Model ids returned by the provider's live `/models` endpoint. */
+  let fetchedModels = $state.raw<string[]>([]);
+  /** The current model is not one of the known ids → show the free-text row. */
+  let useCustomModel = $state(false);
+  let modelsBusy = $state(false);
 
   const preset = $derived(presetById(config.preset));
+
+  /** Curated preset models plus anything the provider just reported. */
+  const modelOptions = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of [...(preset?.models ?? []), ...fetchedModels]) {
+      const clean = id.trim();
+      if (clean === "" || seen.has(clean)) continue;
+      seen.add(clean);
+      out.push(clean);
+    }
+    return out;
+  });
 
   $effect(() => {
     void (async () => {
       try {
         config = await aiGetConfig();
+        useCustomModel = !(presetById(config.preset)?.models ?? []).includes(
+          config.model,
+        );
         error = null;
       } catch (e) {
         error = friendlyIpcError("AI settings", e);
@@ -57,6 +79,8 @@
     config.provider = next.provider;
     config.baseUrl = next.baseUrl;
     config.model = next.model;
+    fetchedModels = [];
+    useCustomModel = next.models.length === 0;
     note = null;
     error = null;
   }
@@ -64,7 +88,34 @@
   function chooseProvider(kind: AiProviderKind): void {
     config.provider = kind;
     config.preset = "custom";
+    fetchedModels = [];
     note = null;
+  }
+
+  function chooseModel(value: string): void {
+    if (value === "__custom") {
+      useCustomModel = true;
+      return;
+    }
+    useCustomModel = false;
+    config.model = value;
+  }
+
+  async function fetchModels(): Promise<void> {
+    if (modelsBusy) return;
+    modelsBusy = true;
+    note = null;
+    error = null;
+    try {
+      const list = await aiModels(config);
+      fetchedModels = list;
+      useCustomModel = !list.includes(config.model);
+      note = `fetched ${list.length} model${list.length === 1 ? "" : "s"}`;
+    } catch (e) {
+      error = friendlyIpcError("fetch models", e);
+    } finally {
+      modelsBusy = false;
+    }
   }
 
   async function save(): Promise<void> {
@@ -145,15 +196,47 @@
               spellcheck="false" />
           </label>
 
-          <label class="row">
+          <div class="row">
             model
-            <input
-              class="txt"
-              type="text"
-              bind:value={config.model}
-              placeholder="openai/gpt-4o-mini"
-              spellcheck="false" />
-          </label>
+            {#if modelOptions.length > 0}
+              <select
+                value={useCustomModel ? "__custom" : config.model}
+                onchange={(e) => chooseModel(e.currentTarget.value)}>
+                {#each modelOptions as id (id)}
+                  <option value={id}>{id}</option>
+                {/each}
+                <option value="__custom">custom…</option>
+              </select>
+            {:else}
+              <input
+                class="txt wide"
+                type="text"
+                bind:value={config.model}
+                placeholder="model id"
+                spellcheck="false" />
+            {/if}
+            <button
+              class="fetch"
+              onclick={() => void fetchModels()}
+              disabled={modelsBusy}
+              title="ask the provider for its /models list">
+              {modelsBusy ? "…" : "REFRESH"}
+            </button>
+          </div>
+          {#if modelOptions.length > 0 && useCustomModel}
+            <div class="row">
+              custom model
+              <input
+                class="txt wide"
+                type="text"
+                bind:value={config.model}
+                placeholder="model id"
+                spellcheck="false" />
+            </div>
+          {/if}
+          <div class="hint">
+            REFRESH asks the provider for its model list; the id stays editable.
+          </div>
 
           <label class="row">
             API key
@@ -368,6 +451,12 @@
   button.primary {
     border-color: #3ccb4e;
     color: #3ccb4e;
+  }
+
+  button.fetch {
+    flex: none;
+    padding: 2px 5px;
+    font-size: 9px;
   }
 
   button:disabled {
