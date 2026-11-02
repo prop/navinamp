@@ -1,3 +1,4 @@
+mod ai;
 mod art;
 mod audio;
 mod commands;
@@ -56,6 +57,10 @@ pub fn run() {
             audio::audio_state,
             audio::eq_state,
             audio::eq_headroom,
+            ai::ai_get_config,
+            ai::ai_set_config,
+            ai::ai_test,
+            ai::ai_search,
             audio::eq_set_enabled,
             audio::eq_set_preamp,
             audio::eq_set_band,
@@ -84,6 +89,7 @@ pub fn run() {
             smart::smart_view_delete,
             smart::smart_view_run,
             smart::smart_view_preview,
+            smart::smart_view_query,
             navidrome::navidrome_status,
             navidrome::navidrome_profiles,
             navidrome::navidrome_connect,
@@ -102,6 +108,7 @@ pub fn run() {
             navidrome::navidrome_playlists,
             navidrome::navidrome_playlist_tracks,
             navidrome::navidrome_publish_smart_view,
+            navidrome::navidrome_publish_tracks,
             navidrome::navidrome_set_streaming,
             windows::windows_get,
             windows::window_set_visible,

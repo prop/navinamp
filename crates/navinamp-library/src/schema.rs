@@ -33,6 +33,23 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id)",
         [],
     )?;
+    // FTS over title/artist/album/genre originally; simple search now also
+    // covers album_artist and the full path (navidrome://server/id). The FTS5
+    // table is external-content, so widening it means dropping/recreating the
+    // table + triggers and rebuilding the index once.
+    let rebuild_fts = !has_column(conn, "tracks_fts", "album_artist")?;
+    if rebuild_fts {
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS tracks_fts_ins;
+             DROP TRIGGER IF EXISTS tracks_fts_del;
+             DROP TRIGGER IF EXISTS tracks_fts_upd;
+             DROP TABLE IF EXISTS tracks_fts;",
+        )?;
+    }
+    conn.execute_batch(FTS_SCHEMA)?;
+    if rebuild_fts {
+        conn.execute("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')", [])?;
+    }
     if !has_column(conn, "smart_view_playlists", "server")? {
         // Rebuild the single-server mapping table with a composite key;
         // existing rows survive under the legacy '' server key.
@@ -102,29 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_tracks_artist    ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_genre     ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist_album ON tracks(artist, album);
 
--- Full-text index for search; text lives in `tracks` (external content) and
--- the triggers below keep the token index in lockstep with every write path.
-CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
-    title, artist, album, genre,
-    content='tracks', content_rowid='id'
-);
-
-CREATE TRIGGER IF NOT EXISTS tracks_fts_ins AFTER INSERT ON tracks BEGIN
-    INSERT INTO tracks_fts(rowid, title, artist, album, genre)
-    VALUES (new.id, new.title, new.artist, new.album, new.genre);
-END;
-
-CREATE TRIGGER IF NOT EXISTS tracks_fts_del AFTER DELETE ON tracks BEGIN
-    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, genre)
-    VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre);
-END;
-
-CREATE TRIGGER IF NOT EXISTS tracks_fts_upd AFTER UPDATE ON tracks BEGIN
-    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, genre)
-    VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre);
-    INSERT INTO tracks_fts(rowid, title, artist, album, genre)
-    VALUES (new.id, new.title, new.artist, new.album, new.genre);
-END;
+-- Full-text index: see FTS_SCHEMA below (widened with album_artist/path by
+-- the init migration, so its definition lives outside this batch).
 
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -153,4 +149,32 @@ CREATE TABLE IF NOT EXISTS smart_view_playlists (
     PRIMARY KEY (server, smart_view_id)
 );
 COMMIT;
+";
+
+/// Full-text index over the searchable text. `tracks` is the external content
+/// table (text lives there once); the triggers keep the token index in lockstep
+/// with every write path. Kept separate from [`SCHEMA`] so the init migration
+/// can rebuild it when the column set changes.
+const FTS_SCHEMA: &str = "\
+CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
+    title, artist, album, genre, album_artist, path,
+    content='tracks', content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS tracks_fts_ins AFTER INSERT ON tracks BEGIN
+    INSERT INTO tracks_fts(rowid, title, artist, album, genre, album_artist, path)
+    VALUES (new.id, new.title, new.artist, new.album, new.genre, new.album_artist, new.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tracks_fts_del AFTER DELETE ON tracks BEGIN
+    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, genre, album_artist, path)
+    VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre, old.album_artist, old.path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tracks_fts_upd AFTER UPDATE ON tracks BEGIN
+    INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album, genre, album_artist, path)
+    VALUES ('delete', old.id, old.title, old.artist, old.album, old.genre, old.album_artist, old.path);
+    INSERT INTO tracks_fts(rowid, title, artist, album, genre, album_artist, path)
+    VALUES (new.id, new.title, new.artist, new.album, new.genre, new.album_artist, new.path);
+END;
 ";

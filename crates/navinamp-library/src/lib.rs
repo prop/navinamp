@@ -377,6 +377,12 @@ impl Library {
     pub fn smart_view_preview(&self, def: &SmartViewDef) -> Result<Vec<Track>> {
         smart::preview(&self.conn, def)
     }
+
+    /// Validates and evaluates an ad-hoc definition with an explicit row cap
+    /// (advanced/AI search). The def's own limit wins when smaller.
+    pub fn smart_view_query(&self, def: &SmartViewDef, cap: u32) -> Result<Vec<Track>> {
+        smart::query(&self.conn, def, cap)
+    }
 }
 
 // `Library` must stay `Send` so the bridge can hand it to worker threads;

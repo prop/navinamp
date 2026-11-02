@@ -100,7 +100,7 @@ fn fts_query(q: &str) -> Option<String> {
     Some(terms.fold(first, |acc, t| acc + " " + &t))
 }
 
-/// Ranked FTS5 search over title/artist/album/genre.
+/// Ranked FTS5 search over title/artist/album/genre plus album_artist/path.
 ///
 /// `bm25` ascending puts the best matches first (FTS5's `bm25()` is
 /// smaller-is-better); the text tie-breakers keep the order stable and

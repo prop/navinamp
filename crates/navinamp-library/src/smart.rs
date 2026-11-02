@@ -128,10 +128,14 @@ fn format_number(n: f64) -> String {
 pub enum Field {
     Title,
     Artist,
+    AlbumArtist,
     Album,
     Genre,
+    Codec,
     Path,
     Source,
+    Server,
+    Starred,
     Year,
     Rating,
     PlayCount,
@@ -156,10 +160,14 @@ impl Field {
         match self {
             Field::Title => "title",
             Field::Artist => "artist",
+            Field::AlbumArtist => "album_artist",
             Field::Album => "album",
             Field::Genre => "genre",
+            Field::Codec => "codec",
             Field::Path => "path",
             Field::Source => "source",
+            Field::Server => "server_id",
+            Field::Starred => "starred",
             Field::Year => "year",
             Field::Rating => "rating",
             Field::PlayCount => "play_count",
@@ -174,11 +182,15 @@ impl Field {
         match self {
             Field::Title
             | Field::Artist
+            | Field::AlbumArtist
             | Field::Album
             | Field::Genre
+            | Field::Codec
             | Field::Path
-            | Field::Source => FieldKind::Text,
-            Field::Year
+            | Field::Source
+            | Field::Server => FieldKind::Text,
+            Field::Starred
+            | Field::Year
             | Field::Rating
             | Field::PlayCount
             | Field::DurationSecs
@@ -292,6 +304,8 @@ enum Purpose {
     Run,
     /// A preview: `limit: null` means 500, and any limit is capped at 500.
     Preview,
+    /// An ad-hoc search/query with an explicit cap (`limit: null` = cap).
+    Query(i64),
 }
 
 /// A validated definition, ready to evaluate.
@@ -573,6 +587,8 @@ fn compile_def(def: &SmartViewDef, purpose: Purpose) -> Result<Compiled> {
     let limit = match (purpose, def.limit) {
         (Purpose::Preview, Some(n)) => Some((n.min(PREVIEW_CAP as f64)) as i64),
         (Purpose::Preview, None) => Some(PREVIEW_CAP),
+        (Purpose::Query(cap), Some(n)) => Some((n.min(cap as f64)) as i64),
+        (Purpose::Query(cap), None) => Some(cap),
         (Purpose::Run, Some(n)) => Some(n as i64),
         (Purpose::Run, None) => None,
     };
@@ -755,6 +771,15 @@ pub(super) fn run_view(conn: &Connection, id: i64) -> Result<Vec<Track>> {
 /// [`PREVIEW_CAP`] rows (or the def's own smaller limit).
 pub(super) fn preview(conn: &Connection, def: &SmartViewDef) -> Result<Vec<Track>> {
     let compiled = compile_def(def, Purpose::Preview)?;
+    execute(conn, compiled).map_err(Error::from)
+}
+
+/// Validates and evaluates `def` with an explicit row cap (an ad-hoc query —
+/// advanced search and AI results). The def's own `limit`, when set, wins if
+/// it is smaller; `cap` is clamped to [`MAX_LIMIT`].
+pub(super) fn query(conn: &Connection, def: &SmartViewDef, cap: u32) -> Result<Vec<Track>> {
+    let cap = i64::from(cap.clamp(1, MAX_LIMIT as u32));
+    let compiled = compile_def(def, Purpose::Query(cap))?;
     execute(conn, compiled).map_err(Error::from)
 }
 

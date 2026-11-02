@@ -89,9 +89,9 @@ fn full_scan_inserts_tags_and_properties() {
     // album ordering: track 1 before track 2
     assert_eq!(tracks[1].track_no, Some(2));
 
-    // the WAV: no tags, so FTS can't see it — but the row exists with sane
-    // properties and an empty-string baseline
-    assert!(library.search("note", 10).unwrap().is_empty());
+    // the WAV has no tags, but its path is in the FTS index now, so a
+    // filename search still finds it
+    assert_eq!(library.search("note", 10).unwrap().len(), 1);
     let wav = library
         .tracks_filtered(&TrackFilter::default())
         .unwrap()
@@ -247,6 +247,8 @@ fn fts_search_matches_prefixes_case_and_unicode() {
 
     // genre
     assert_eq!(library.search("electron", 10).unwrap().len(), 2);
+    // path (the filename is indexed, so navidrome://server/id works too)
+    assert_eq!(library.search("a1", 10).unwrap().len(), 1);
     // multiple terms AND together
     assert_eq!(library.search("björk venus", 10).unwrap().len(), 0);
     assert_eq!(library.search("björk sens", 10).unwrap().len(), 1);
@@ -727,6 +729,42 @@ fn track_by_path_returns_the_row_or_none() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn ad_hoc_query_supports_new_fields_and_respects_the_cap() {
+    let (_scratch, library) = scanned_library("smart-ad-hoc");
+    let def = navinamp_library::SmartViewDef {
+        name: "adhoc".into(),
+        group: navinamp_library::RuleGroup {
+            mode: navinamp_library::MatchMode::All,
+            rules: vec![
+                navinamp_library::RuleRow {
+                    field: navinamp_library::Field::AlbumArtist,
+                    op: navinamp_library::Op::Contains,
+                    value: navinamp_library::RuleValue::Str("björk".into()),
+                    value2: None,
+                },
+                navinamp_library::RuleRow {
+                    field: navinamp_library::Field::Codec,
+                    op: navinamp_library::Op::Is,
+                    value: navinamp_library::RuleValue::Str("mp3".into()),
+                    value2: None,
+                },
+                navinamp_library::RuleRow {
+                    field: navinamp_library::Field::Starred,
+                    op: navinamp_library::Op::Eq,
+                    value: navinamp_library::RuleValue::Num(0.0),
+                    value2: None,
+                },
+            ],
+        },
+        limit: None,
+        sort: navinamp_library::SortField::Title,
+        sort_desc: false,
+    };
+    assert_eq!(library.smart_view_query(&def, 1).unwrap().len(), 1);
+    assert_eq!(library.smart_view_query(&def, 10).unwrap().len(), 2);
 }
 
 #[test]

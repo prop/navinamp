@@ -72,3 +72,19 @@ pub fn smart_view_preview(
         library.smart_view_preview(&def).map_err(|e| e.to_string())
     })
 }
+
+/// Validates and evaluates `def` with an explicit row cap (advanced/AI search
+/// results). The def's own limit wins when smaller.
+#[tauri::command]
+pub fn smart_view_query(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    def: SmartViewDef,
+    limit: u32,
+) -> Result<Vec<Track>, String> {
+    with_library(&app, &state, |library| {
+        library
+            .smart_view_query(&def, limit)
+            .map_err(|e| e.to_string())
+    })
+}

@@ -1067,6 +1067,58 @@ pub async fn navidrome_publish_smart_view(
     })
 }
 
+/// Publish an explicit set of Subsonic song ids as a Navidrome playlist.
+///
+/// Unlike [`navidrome_publish_smart_view`], this is not tied to a saved smart
+/// view: the playlist is found by its `[NaVinaMP] ` name (updated in place) or
+/// created. Advanced/AI search results use it for “save to server”.
+#[tauri::command]
+pub async fn navidrome_publish_tracks(
+    state: State<'_, NavidromeState>,
+    name: String,
+    song_ids: Vec<String>,
+    server_id: Option<String>,
+) -> Result<PublishReport, String> {
+    let server = resolve_server(&state, server_id)?;
+    let client = ensure_client_for(&state, &server).await?;
+    let clean = name.trim();
+    if clean.is_empty() {
+        return Err("playlist name is required".into());
+    }
+    if song_ids.is_empty() {
+        return Err("no Navidrome tracks to publish".into());
+    }
+    let playlist_name = format!("{SMART_PLAYLIST_PREFIX}{clean}");
+    let existing = client
+        .get_playlists()
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))?
+        .into_iter()
+        .find(|p| p.name == playlist_name);
+    let (playlist_id, created) = match existing {
+        Some(playlist) => {
+            client
+                .update_playlist(&playlist.id, &song_ids)
+                .await
+                .map_err(|e| scrub_urls(&e.to_string()))?;
+            (playlist.id, false)
+        }
+        None => {
+            let playlist = client
+                .create_playlist(&playlist_name, &song_ids)
+                .await
+                .map_err(|e| scrub_urls(&e.to_string()))?;
+            (playlist.id, true)
+        }
+    };
+    Ok(PublishReport {
+        playlist_id,
+        name: playlist_name,
+        track_count: song_ids.len() as u64,
+        created,
+    })
+}
+
 /// Set the streaming format/bitrate used by [`navidrome_stream_url`].
 /// `original` forces the bitrate off (the file is served as stored).
 #[tauri::command]
@@ -1459,7 +1511,7 @@ fn emit_progress(app: &AppHandle, scanned: u64, total: u64, server: &str, label:
 
 /// Blanks `http(s)://…` runs in `msg`: reqwest/Subsonic errors embed whole
 /// request URLs, and ours carry auth tokens. Cheap scanner, no regex.
-fn scrub_urls(msg: &str) -> String {
+pub(crate) fn scrub_urls(msg: &str) -> String {
     let mut out = String::with_capacity(msg.len());
     let mut rest = msg;
     loop {
