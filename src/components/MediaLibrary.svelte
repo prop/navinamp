@@ -1909,7 +1909,8 @@
 
 <div class="ml">
   <header class="hdr">
-    <span class="title">MEDIA LIBRARY</span>
+    <!-- No title here: the window's TitleStrip + tab strip name the pane
+         (#16); this row is the library pane's toolbar. -->
     <button class="hdrbtn" onclick={() => (showSettings = true)} title="navidrome connection & streaming">
       NAVIDROME
     </button>
@@ -2675,10 +2676,6 @@
     color: #808080;
     background: #101010;
     border-bottom: 1px solid #2a2a2a;
-  }
-
-  .hdr .title {
-    flex: 1;
   }
 
   .hdrbtn {

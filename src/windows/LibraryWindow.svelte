@@ -1,14 +1,20 @@
 <script lang="ts">
   /**
-   * The LIBRARY window (label "library") — everything that used to live in
-   * the stacked M1-M5 app: Media Library (with its Navidrome settings +
-   * smart-view modals), the EQ panel, and the M1 debug surface as a
-   * collapsible DEV section (M6b).
+   * The LIBRARY window (label "library") — the M1-M5 app surface behind
+   * one tab strip (#16): LIBRARY (Media Library with its Navidrome
+   * settings + smart-view modals), EQUALIZER (the shared EqPanel with
+   * the AUTO CURVES manager), SKIN (the skin switcher) and DEV (the M1
+   * debug surface).
+   *
+   * The LIBRARY pane stays mounted (hidden while inactive) so its
+   * selection, search, scroll and loaded pages survive tab round-trips;
+   * EQUALIZER/DEV mount only while active, so their pollers never run
+   * in the background. The active tab persists in localStorage.
    *
    * Queue hooks are intents: ENQUEUE/PLAY append via the player; the queue
    * status line in the title strip renders from snapshots.
    *
-   * The DEV block keeps the M1 engine probes: transport buttons go through
+   * The DEV pane keeps the M1 engine probes: transport buttons go through
    * `media-command` (relayed to the player, whose executor applies the same
    * semantics as the skin buttons — a raw `audio_stop` from here would
    * desync the player's feed-order correlation), while the file dialogs and
@@ -19,6 +25,7 @@
 
   import EqPanel from "../components/EqPanel.svelte";
   import MediaLibrary from "../components/MediaLibrary.svelte";
+  import TabStrip from "../components/TabStrip.svelte";
   import {
     chooseSkin,
     listSkins,
@@ -42,6 +49,30 @@
   const queueNote = $derived(
     `QUEUE ${snap?.currentIndex == null ? "--" : snap.currentIndex + 1}/${snap?.items.length ?? 0}`,
   );
+
+  // ── tabs (#16): LIBRARY | EQUALIZER | SKIN | DEV; active tab persists ───
+
+  const TAB_KEY = "navinamp.library.tab";
+
+  const TABS = [
+    { id: "library", label: "LIBRARY" },
+    { id: "eq", label: "EQUALIZER" },
+    { id: "skin", label: "SKIN" },
+    { id: "dev", label: "DEV" },
+  ] as const;
+
+  type TabId = (typeof TABS)[number]["id"];
+
+  function storedTab(): TabId {
+    const raw = localStorage.getItem(TAB_KEY);
+    return TABS.some((t) => t.id === raw) ? (raw as TabId) : "library";
+  }
+
+  let tab = $state<TabId>(storedTab());
+
+  $effect(() => {
+    localStorage.setItem(TAB_KEY, tab);
+  });
 
   // ── skin switcher (validates, persists, broadcasts; player + EQ reload) ──
 
@@ -97,9 +128,7 @@
     log = [`${new Date().toLocaleTimeString()}  ${line}`, ...log].slice(0, 8);
   }
 
-  // ── DEV block (M1 debug surface) ─────────────────────────────────────────
-
-  let devOpen = $state(false);
+  // ── DEV pane (M1 debug surface) ──────────────────────────────────────────
 
   type AudioState = {
     status: "stopped" | "playing" | "paused";
@@ -123,7 +152,9 @@
   });
   let seeking = $state<number | null>(null);
 
+  // The 10 Hz audio poll runs only while the DEV tab is visible (#16).
   $effect(() => {
+    if (tab !== "dev") return;
     const timer = setInterval(async () => {
       try {
         devState = await invoke<AudioState>("audio_state");
@@ -197,18 +228,28 @@
 </script>
 
 <div class="win" bind:this={root}>
-  <TitleStrip title="MEDIA LIBRARY / EQ / DEV" note={queueNote} />
+  <TitleStrip title="MEDIA LIBRARY" note={queueNote} />
 
-  <div class="content">
+  <TabStrip tabs={TABS} active={tab} onselect={(id) => (tab = id as TabId)} />
+
+  <!-- LIBRARY stays mounted (hidden while inactive): selection, search,
+       scroll position and loaded pages survive a tab round-trip (#16). -->
+  <div id="pane-library" class="pane" role="tabpanel" aria-labelledby="tab-library" class:off={tab !== "library"}>
     <MediaLibrary
       onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
       onplaynow={(metas) => queuePlayNow(metas)}
       onreplace={(metas) => queueReplaceAll(metas)}
       onlog={logLine} />
+  </div>
 
-    <EqPanel manageCurves />
+  {#if tab === "eq"}
+    <div id="pane-eq" class="pane" role="tabpanel" aria-labelledby="tab-eq">
+      <EqPanel manageCurves />
+    </div>
+  {/if}
 
-    <section class="skinbar">
+  {#if tab === "skin"}
+    <section id="pane-skin" class="pane skinbar" role="tabpanel" aria-labelledby="tab-skin">
       <span class="skinlabel">skin</span>
       <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
         {#each skins as s (s.id)}
@@ -223,13 +264,10 @@
       {#if skinNote}<span class="ok">{skinNote}</span>{/if}
       {#if skinError}<span class="err">{skinError}</span>{/if}
     </section>
+  {/if}
 
-  <section class="dev">
-    <button class="devtoggle" class:on={devOpen} onclick={() => (devOpen = !devOpen)}>
-      DEV {devOpen ? "▾" : "▸"}
-    </button>
-
-    {#if devOpen}
+  {#if tab === "dev"}
+    <section id="pane-dev" class="pane dev" role="tabpanel" aria-labelledby="tab-dev">
       <div class="devbox">
         <div class="row">
           <button onclick={() => void devOpenPlay()}>Open &amp; Play…</button>
@@ -308,46 +346,38 @@
           </ul>
         {/if}
       </div>
-    {/if}
-  </section>
-  </div>
+    </section>
+  {/if}
 </div>
 
 <style>
   .win {
-    width: max-content; /* panel (640px) + padding */
-    height: 100vh;
+    width: max-content; /* widest pane (640px) + padding */
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     padding: 6px;
-    overflow: hidden;
     background: #000;
     color: #c8c8c8;
     font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     user-select: none;
   }
 
-  /* The stack is taller than a typical window; keep the title strip fixed
-     and let the panels scroll instead of clipping DEV/skin controls. */
-  .content {
-    flex: 1;
-    min-height: 0;
-    width: 100%;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    scrollbar-width: thin;
-    scrollbar-color: #2f4f33 #000;
+  /* One pane per tab; the OS window is sized to the active pane's natural
+     height by the ResizeObserver above (#16). The LIBRARY pane is merely
+     hidden (not unmounted) so its state survives tab round-trips. */
+  .pane {
+    width: 640px;
+    box-sizing: border-box;
+  }
+
+  .pane.off {
+    display: none;
   }
 
   .dev {
-    width: 100%;
-    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -357,8 +387,6 @@
   }
 
   .skinbar {
-    width: 100%;
-    box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -405,23 +433,6 @@
 
   .skinbar .err {
     color: #d8604c;
-  }
-
-  .devtoggle {
-    background: #1a1a1a;
-    color: #707070;
-    border: 1px solid #3a3a3a;
-    border-radius: 3px;
-    padding: 0.15rem 0.8rem;
-    font-size: 0.7rem;
-    letter-spacing: 0.12em;
-    cursor: pointer;
-  }
-
-  .devtoggle:hover,
-  .devtoggle.on {
-    border-color: #3ccb4e;
-    color: #3ccb4e;
   }
 
   .devbox {
