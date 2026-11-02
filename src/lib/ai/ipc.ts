@@ -31,6 +31,8 @@ export interface AiPreset {
   provider: AiProviderKind;
   baseUrl: string;
   model: string;
+  /** Current model ids for the picker; the live `/models` fetch can extend it. */
+  models: string[];
   hint?: string;
 }
 
@@ -45,50 +47,62 @@ export const AI_PRESETS: AiPreset[] = [
     label: "OpenRouter (many models)",
     provider: "openAiCompatible",
     baseUrl: "https://openrouter.ai/api/v1",
-    model: "openai/gpt-4o-mini",
-    hint: "one key for OpenAI, Claude, Gemini, DeepSeek, GLM, Kimi, MiniMax…",
+    model: "deepseek/deepseek-v4.1-flash-1017",
+    models: [
+      "deepseek/deepseek-v4.1-flash-1017",
+      "z-ai/glm-5.3-flash",
+    ],
+    hint: "one key for OpenAI, Claude, Gemini, DeepSeek, GLM, Kimi, MiniMax… use REFRESH for the full list",
   },
   {
     id: "openai",
     label: "OpenAI",
     provider: "openAiCompatible",
     baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
+    model: "gpt-5.2",
+    models: ["gpt-5.2", "gpt-5.1", "gpt-5"],
   },
   {
     id: "anthropic",
     label: "Anthropic (Claude)",
     provider: "anthropic",
     baseUrl: "https://api.anthropic.com",
-    model: "claude-sonnet-4-5",
+    model: "claude-sonnet-5",
+    models: ["claude-sonnet-5"],
   },
   {
     id: "deepseek",
     label: "DeepSeek",
     provider: "openAiCompatible",
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-flash",
+    models: ["deepseek-flash", "deepseek-v4-pro"],
+    hint: "deepseek-flash serves DeepSeek V4.1 Flash (1017 snapshot)",
   },
   {
     id: "glm",
     label: "Zhipu GLM",
     provider: "openAiCompatible",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-4-flash",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    model: "glm-5.3-flash",
+    models: ["glm-5.3-flash", "glm-5.3", "glm-5.3-highspeed"],
+    hint: "Z.ai platform; use the bigmodel.cn endpoint as a custom URL for the China platform",
   },
   {
     id: "kimi",
     label: "Moonshot Kimi",
     provider: "openAiCompatible",
-    baseUrl: "https://api.moonshot.cn/v1",
-    model: "moonshot-v1-8k",
+    baseUrl: "https://api.moonshot.ai/v1",
+    model: "kimi-k3.1-pro",
+    models: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3", "kimi-k2.6"],
   },
   {
     id: "minimax",
     label: "MiniMax",
     provider: "openAiCompatible",
-    baseUrl: "https://api.minimax.chat/v1",
-    model: "MiniMax-Text-01",
+    baseUrl: "https://api.minimax.io/v1",
+    model: "MiniMax-M3.1-Flash",
+    models: ["MiniMax-M3.1-Flash", "MiniMax-M3"],
   },
   {
     id: "custom",
@@ -96,6 +110,7 @@ export const AI_PRESETS: AiPreset[] = [
     provider: "openAiCompatible",
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.2",
+    models: [],
     hint: "any OpenAI-compatible endpoint; leave the key blank for local servers",
   },
 ];
@@ -105,7 +120,7 @@ export const AI_DEFAULTS: AiConfig = {
   preset: "openrouter",
   provider: "openAiCompatible",
   baseUrl: "https://openrouter.ai/api/v1",
-  model: "openai/gpt-4o-mini",
+  model: "deepseek/deepseek-v4.1-flash-1017",
   apiKey: "",
   timeoutSecs: 30,
   discogsToken: "",
@@ -128,6 +143,14 @@ export function aiSetConfig(config: AiConfig): Promise<AiConfig> {
 /** Tiny completion against a draft config (does not save it). */
 export function aiTest(config: AiConfig): Promise<string> {
   return invoke<string>("ai_test", { config });
+}
+
+/**
+ * Fetch the provider's model list (`/models`; `/v1/models` for Anthropic).
+ * Used by the settings picker so it does not go stale.
+ */
+export function aiModels(config: AiConfig): Promise<string[]> {
+  return invoke<string[]>("ai_models", { config });
 }
 
 export interface AiSearchReport {

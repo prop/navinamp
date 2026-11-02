@@ -150,6 +150,16 @@ pub async fn ai_test(config: AiConfig) -> Result<String, String> {
     Ok(reply.trim().chars().take(200).collect())
 }
 
+/// Fetch the configured provider's model ids for the settings picker. Uses
+/// the same draft settings as TEST and does not save them.
+#[tauri::command]
+pub async fn ai_models(config: AiConfig) -> Result<Vec<String>, String> {
+    let config = config.sanitized();
+    navinamp_llm::list_models(&config.llm())
+        .await
+        .map_err(|e| config.scrubbed(e))
+}
+
 /// What the model may reply with.
 enum Reply {
     Discogs {

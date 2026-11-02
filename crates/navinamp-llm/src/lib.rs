@@ -280,6 +280,75 @@ pub async fn chat(config: &LlmConfig, messages: &[ChatMessage]) -> Result<String
     }
 }
 
+fn models_endpoint(config: &LlmConfig) -> String {
+    let base = config.base_url.trim_end_matches('/');
+    match config.provider {
+        ProviderKind::OpenAiCompatible => format!("{base}/models"),
+        ProviderKind::Anthropic => format!("{base}/v1/models"),
+    }
+}
+
+/// Parse a model-list body. Accepts the OpenAI/Anthropic `{ "data": [...] }`
+/// shape and the occasional `{ "models": [...] }` variant; entries may be
+/// plain id strings or `{ "id": "…" }` objects.
+fn parse_models(body: &str) -> Result<Vec<String>> {
+    let value: Value = serde_json::from_str(body).map_err(|e| LlmError::Shape(e.to_string()))?;
+    let list = value
+        .get("data")
+        .or_else(|| value.get("models"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| LlmError::Shape("model list has no data array".into()))?;
+    let mut ids: Vec<String> = list
+        .iter()
+        .filter_map(|item| match item {
+            Value::String(id) => Some(id.trim().to_owned()),
+            Value::Object(_) => item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| id.trim().to_owned()),
+            _ => None,
+        })
+        .filter(|id| !id.is_empty())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Err(LlmError::Empty);
+    }
+    Ok(ids)
+}
+
+/// Fetch the provider's available model ids for the settings picker.
+pub async fn list_models(config: &LlmConfig) -> Result<Vec<String>> {
+    let timeout = Duration::from_secs(config.timeout_secs.clamp(5, 300));
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(USER_AGENT)
+        .build()?;
+    let url = models_endpoint(config);
+    let request = match config.provider {
+        ProviderKind::OpenAiCompatible => {
+            let mut request = client.get(&url);
+            if !config.api_key.trim().is_empty() {
+                request = request.bearer_auth(config.api_key.trim());
+            }
+            request
+        }
+        ProviderKind::Anthropic => client
+            .get(&url)
+            .header("x-api-key", config.api_key.trim())
+            .header("anthropic-version", "2023-06-01"),
+    };
+    let response = request.send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        let excerpt: String = body.chars().take(400).collect();
+        return Err(LlmError::Status(status.as_u16(), excerpt));
+    }
+    parse_models(&body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,5 +478,76 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["role"], "user");
         assert_eq!(body["model"], "test-model");
+    }
+
+    #[test]
+    fn parses_model_lists_in_both_shapes() {
+        let openai = r#"{"data":[{"id":"gpt-5.2"},{"id":"gpt-5.1"},{"id":"gpt-5.1"}]}"#;
+        assert_eq!(
+            parse_models(openai).unwrap(),
+            vec!["gpt-5.1".to_string(), "gpt-5.2".to_string()]
+        );
+        let plain = r#"{"models":["a","b"]}"#;
+        assert_eq!(
+            parse_models(plain).unwrap(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(matches!(
+            parse_models(r#"{"data":[]}"#),
+            Err(LlmError::Empty)
+        ));
+        assert!(parse_models("{}").is_err());
+    }
+
+    #[tokio::test]
+    async fn openai_model_list_uses_the_models_endpoint() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer sk-secret"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"data":[{"id":"gpt-5.2"},{"id":"gpt-5.1"}]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let config = LlmConfig {
+            base_url: format!("{}/v1", server.uri()),
+            ..cfg(ProviderKind::OpenAiCompatible, "")
+        };
+        assert_eq!(
+            list_models(&config).await.unwrap(),
+            vec!["gpt-5.1".to_string(), "gpt-5.2".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_model_list_uses_v1_models() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("x-api-key", "sk-secret"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"data":[{"id":"claude-sonnet-5","display_name":"Claude Sonnet 5"}]}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let config = LlmConfig {
+            base_url: server.uri(),
+            ..cfg(ProviderKind::Anthropic, "")
+        };
+        assert_eq!(
+            list_models(&config).await.unwrap(),
+            vec!["claude-sonnet-5".to_string()]
+        );
     }
 }

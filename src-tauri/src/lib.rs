@@ -60,6 +60,7 @@ pub fn run() {
             ai::ai_get_config,
             ai::ai_set_config,
             ai::ai_test,
+            ai::ai_models,
             ai::ai_search,
             audio::eq_set_enabled,
             audio::eq_set_preamp,
