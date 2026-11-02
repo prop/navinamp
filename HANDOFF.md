@@ -59,10 +59,13 @@
   pruning only runs after a complete walk.
 - Track list containment: the 320px table now clips/scrolls its rows instead
   of painting over the footer and EQ panel (overscroll contained)
+- Track table virtualization: only the visible ~20 rows (+8 overscan) are in
+  the DOM; top/bottom spacers preserve the scroll height. Page loading still
+  appends as you scroll.
 - Paged views: SELECT ALL selects the loaded rows only; shift-range
   selection is limited to loaded rows (a select-all-by-filter command is a
-  future addition). Row virtualization is still pending for very deep
-  scrolls / the 100k target.
+  future addition). The tree renders 200-row slices but is not virtualized,
+  so a deep scroll through thousands of albums still builds DOM rows.
 
 ## Next up
 

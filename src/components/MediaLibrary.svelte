@@ -312,6 +312,8 @@
   let pageError = $state<string | null>(null);
   let pageSeq = 0;
   let rowsEl = $state<HTMLElement | null>(null);
+  /** Vertical scroll offset of the track list (virtualization window). */
+  let scrollTop = $state(0);
 
   const pagedView = $derived(selection.kind === "all" || selection.kind === "remote");
 
@@ -366,8 +368,9 @@
 
   /** Infinite scroll: fetch the next page near the bottom of the list. */
   function onRowsScroll(e: Event & { currentTarget: HTMLElement }): void {
-    if (!pagedView) return;
     const el = e.currentTarget;
+    scrollTop = el.scrollTop;
+    if (!pagedView) return;
     if (searchResults != null) return; // search results are client-side
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) {
       void loadPaged(false);
@@ -490,6 +493,24 @@
     if (selection.kind === "server") return []; // the pane is the status card
     if (pagedView) return pagedRows;
     return nodeTracks ?? [];
+  });
+
+  // Row virtualization: only the visible slice (plus overscan) is rendered.
+  // Spacers above/below preserve the true scroll height for the full view.
+  const ROWS_VIEWPORT = 300; // .body height 320 − thead 20
+  const OVERSCAN = 8;
+  const windowStart = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN));
+  const windowEnd = $derived(
+    Math.min(displayed.length, Math.ceil((scrollTop + ROWS_VIEWPORT) / ROW_H) + OVERSCAN),
+  );
+  const windowRows = $derived(displayed.slice(windowStart, windowEnd));
+
+  // Any view/search change starts back at the top of the list.
+  $effect(() => {
+    void selection;
+    void searchResults;
+    scrollTop = 0;
+    if (rowsEl) rowsEl.scrollTop = 0;
   });
 
   const tableLoading = $derived(
@@ -1495,7 +1516,8 @@
               <div class="msg">{emptyMessage}</div>
             {/if}
           {:else}
-            {#each displayed as t, i (t.id)}
+            <div style="height:{windowStart * ROW_H}px" aria-hidden="true"></div>
+            {#each windowRows as t, i (t.id)}
               <div
                 class="trow"
                 class:selected={selectedIds.has(t.id)}
@@ -1503,10 +1525,10 @@
                 aria-selected={selectedIds.has(t.id)}
                 tabindex="-1"
                 title={t.path}
-                onpointerdown={(e) => rowDown(e, i)}
+                onpointerdown={(e) => rowDown(e, windowStart + i)}
                 ondblclick={() => onplaynow([toMeta(t)])}
                 oncontextmenu={(e) => openRowMenu(e, t)}>
-                <span class="c-num">{i + 1}</span>
+                <span class="c-num">{windowStart + i + 1}</span>
                 <span class="c-title">{#if t.source === REMOTE_SOURCE}<span class="rmark" title="navidrome track">◈ </span>{/if}{t.title !== "" ? t.title : baseName(t.path)}</span>
                 <span class="c-artist">{t.artist}</span>
                 <span class="c-album">{t.album}</span>
@@ -1555,6 +1577,9 @@
                 </span>
               </div>
             {/each}
+            <div
+              style="height:{Math.max(0, (displayed.length - windowEnd) * ROW_H)}px"
+              aria-hidden="true"></div>
           {/if}
         </div>
       </section>
@@ -2045,10 +2070,8 @@
     font-size: 12px;
     color: #3ccb4e; /* classic Winamp playlist green */
     cursor: default;
-    /* Windowed rendering: offscreen rows skip layout/paint but keep their
-       reserved 20px, so the scrollbar math stays exact at any list size. */
-    content-visibility: auto;
-    contain-intrinsic-size: auto 20px;
+    /* The table is virtualized (only ~visible rows are in the DOM); no
+       content-visibility needed here. */
   }
 
   .trow:hover {
