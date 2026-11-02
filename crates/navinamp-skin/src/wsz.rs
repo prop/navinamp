@@ -787,7 +787,8 @@ fn main_window_shade(out: &mut Builder, text_font: Option<&str>) {
     let mut objects = vec![layer("main.shade", bg, 0, 0, WINDOW_W, 14)];
 
     // Mini clock: text.bmp's 5×6 glyphs at the classic shade position
-    // (Webamp's `.mini-time`: left 127, top 4, 25×6).
+    // (Webamp's `.mini-time`: left 127, top 4, 25×6). The 25px rect fits the
+    // five "MM:SS" cells exactly; longer strings clip in the renderer.
     if let Some(font) = text_font {
         let mut params = Params::new();
         params.insert("font".to_owned(), font.to_owned());

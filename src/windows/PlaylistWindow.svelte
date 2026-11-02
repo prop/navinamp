@@ -134,7 +134,10 @@
 
 <style>
   .win {
-    width: 283px; /* editor 275px + padding; keeps the folded strip full-width */
+    /* Editor 275px + 4px padding per side; max-content keeps the editor's
+       natural size, min-width keeps the folded strip full-width. */
+    width: max-content;
+    min-width: 283px;
     display: flex;
     flex-direction: column;
     align-items: center;

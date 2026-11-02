@@ -41,6 +41,7 @@
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
   import { dragRects } from "../lib/skin/titlebar";
+  import { dragWindow } from "../lib/window/drag";
   import type { SkinPayload } from "../lib/skin/types";
   import {
     layoutMode,
@@ -395,7 +396,7 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="drag"
-          data-tauri-drag-region
+          use:dragWindow
           title="Drag to move — double-click toggles shade"
           style="left:{r.x * scale}px; top:{r.y * scale}px; width:{r.w * scale}px; height:{r.h * scale}px;"
           ondblclick={() => windowToggleLayout(LABEL).catch(() => undefined)}
