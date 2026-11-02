@@ -921,12 +921,22 @@ async fn discogs_search(config: &AiConfig, query: &DiscogsQuery) -> Result<Disco
             })
         })
         .collect();
+    let response_page = if parsed.pagination.page > 0 {
+        parsed.pagination.page
+    } else {
+        page
+    };
+    let response_per_page = if parsed.pagination.per_page > 0 {
+        parsed.pagination.per_page
+    } else {
+        per_page
+    };
     let payload = json!({
         "pagination": {
-            "page": page,
+            "page": response_page,
             "pages": parsed.pagination.pages,
             "items": total,
-            "per_page": per_page,
+            "per_page": response_per_page,
         },
         "results": model_results,
     });
