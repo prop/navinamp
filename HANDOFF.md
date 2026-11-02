@@ -86,7 +86,8 @@
   Q=8 (low/mid bands Q=2) so three adjacent treble boosts don't multiply
   into a +30 dB spike; Rock's headroom is now ~-13 dB instead of ~-28 dB.
   Volume sits after the EQ, so loudness can be raised back without
-  reintroducing distortion.
+  reintroducing distortion. “Bass Boost” (+6/+5/+4/+2 at 60–600 Hz) was
+  added to the preset table.
 - Navidrome library selection: `getMusicFolders` lists the user's libraries,
   the selected id (`libraryId`) persists in `navidrome.json` and scopes the
   sync walk via `musicFolderId`; Navidrome Settings has an all-libraries /

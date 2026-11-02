@@ -169,11 +169,16 @@ pub struct EqPreset {
 }
 
 /// The classic Winamp preset curves (values from the well-known preset
-/// tables), clamped to ±12 dB. Order is alphabetical, like the Winamp menu.
-/// No preset carries a preamp: the DSP applies automatic headroom for the
-/// boosted curves, which is safer than baking guessed preamp values into the
-/// table.
-static EQ_PRESETS: [EqPreset; 17] = [
+/// tables), clamped to ±12 dB, plus a Bass Boost curve mapped onto the same
+/// band centres. Order is alphabetical, like the Winamp menu. No preset
+/// carries a preamp: the DSP applies automatic headroom for the boosted
+/// curves, which is safer than baking guessed preamp values into the table.
+static EQ_PRESETS: [EqPreset; 18] = [
+    EqPreset {
+        name: "Bass Boost",
+        // +6/+5/+4/+2 low shelf adapted to our 60/170/310/600 Hz bands.
+        bands_db: [6.0, 5.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    },
     EqPreset {
         name: "Classical",
         bands_db: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -7.2, -7.2, -7.2, -9.6],
