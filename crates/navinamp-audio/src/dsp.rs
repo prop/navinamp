@@ -476,10 +476,7 @@ mod tests {
             for &freq in &freqs {
                 let frames = (RATE as usize) / 5; // 200 ms
                 let input: Vec<f32> = (0..frames)
-                    .map(|n| {
-                        (2.0 * PI * f64::from(freq) * n as f64 / f64::from(RATE)).sin() as f32
-                            * 0.95
-                    })
+                    .map(|n| (2.0 * PI * freq * n as f64 / f64::from(RATE)).sin() as f32 * 0.95)
                     .collect();
                 let mut stereo: Vec<f32> = input.iter().flat_map(|&s| [s, s]).collect();
                 for (n, chunk) in stereo.chunks_mut(1024).enumerate() {
