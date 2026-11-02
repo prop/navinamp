@@ -37,6 +37,12 @@
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import SmartViewEditor from "./SmartViewEditor.svelte";
   import {
+    clearEqFor,
+    getArtistEq,
+    getTrackEq,
+    rememberEq,
+  } from "../lib/audio/auto";
+  import {
     friendlyIpcError,
     libraryAlbumTracks,
     libraryAlbums,
@@ -1034,6 +1040,23 @@
       });
     }
     list.push({ id: "rate", label: "rating", rating: ratingOf(t) });
+
+    // AUTO associations: capture the curve currently in the EQ engine for
+    // this track/artist (the EQ window reapplies it on the next match).
+    const trackEq = getTrackEq(t.path) != null;
+    const artistEq = t.artist.trim() !== "" && getArtistEq(t.artist) != null;
+    list.push({ id: "eqsep", label: "", separator: true });
+    list.push({
+      id: "eq-track",
+      label: trackEq ? "EQ: update track curve" : "EQ: save current curve for track",
+    });
+    list.push({
+      id: "eq-artist",
+      label: artistEq ? "EQ: update artist curve" : "EQ: save current curve for artist",
+    });
+    if (trackEq || artistEq) {
+      list.push({ id: "eq-clear", label: "EQ: clear track/artist curve" });
+    }
     return list;
   });
 
@@ -1060,6 +1083,20 @@
     } else if (id.startsWith("rate:")) {
       const rating = Number(id.slice("rate:".length));
       if (Number.isFinite(rating)) void rateTrack(t, rating);
+    } else if (id === "eq-track") {
+      void rememberEq(t.path, t.artist, "track")
+        .then(() => onlog(`eq: saved the current curve for “${t.title || t.path}”`))
+        .catch((e) => onlog(`eq: save failed: ${e}`));
+    } else if (id === "eq-artist") {
+      void rememberEq(t.path, t.artist, "artist")
+        .then(() => onlog(`eq: saved the current curve for ${t.artist || "artist"}`))
+        .catch((e) => onlog(`eq: save failed: ${e}`));
+    } else if (id === "eq-clear") {
+      void clearEqFor(t.path, t.artist)
+        .then((changed) => {
+          if (changed) onlog(`eq: cleared the track/artist curve for “${t.title || t.path}”`);
+        })
+        .catch((e) => onlog(`eq: clear failed: ${e}`));
     }
   }
 

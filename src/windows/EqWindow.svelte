@@ -17,10 +17,11 @@
    * param `index` 0 = PREAMP (`eq_set_preamp`), 1..10 = bands 60 Hz…16 kHz
    * (`eq_set_band(index-1)`).
    *
-   * AUTO: UI-side auto-load policy. When enabled, each track change loads a
-   * preset named after the track's genre (built-in or user-saved); the flag
-   * persists in localStorage. Per-track/artist associations are a future
-   * refinement.
+   * AUTO: UI-side auto-load policy. When enabled, each track change applies
+   * the curve saved for that track, else the one saved for its artist, else
+   * a preset named after its genre (built-in or user-saved). Track/artist
+   * curves are saved from the library and playlist row context menus; the
+   * AUTO flag persists in localStorage.
    */
   import {
     EQ_BAND_COUNT,
@@ -33,6 +34,7 @@
     type EqLive,
     type EqPreset,
   } from "../lib/audio/eq";
+  import { getArtistEq, getTrackEq, onEqAssocChanged } from "../lib/audio/auto";
   import EqPanel from "../components/EqPanel.svelte";
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
@@ -41,7 +43,7 @@
   import { dragRects } from "../lib/skin/titlebar";
   import type { SkinPayload } from "../lib/skin/types";
   import { windowIsVisible, windowSetSize, queueSnapshot } from "../lib/window/bus.svelte";
-  import { libraryTrack } from "../lib/library/ipc";
+  import { libraryTrack, type Track } from "../lib/library/ipc";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
 
@@ -191,58 +193,76 @@
     };
   });
 
-  function cyclePreset(): void {
-    if (presets.length === 0) return;
-    // Applying a preset implies wanting to HEAR it: auto-enable the EQ
-    // stage (it ships disabled — a disabled EQ makes presets inaudible).
+  function applyBands(bandsDb: number[], index = -1): void {
+    // Applying a curve implies wanting to HEAR it: auto-enable the EQ stage
+    // (it ships disabled — a disabled EQ makes presets inaudible).
     if (!eq.enabled) {
       eq.enabled = true;
       eqSetEnabled(true).catch(warnEq);
     }
-    presetIndex = (presetIndex + 1) % presets.length;
-    const bands = normalize(presets[presetIndex]?.bandsDb);
+    presetIndex = index;
+    const bands = normalize(bandsDb);
     eq.bandsDb = bands;
     bands.forEach((db, i) => eqSetBand(i, db).catch(warnEq));
   }
 
-  // ── AUTO: apply a genre-named preset on every track change ──────────────
-  // The engine has no AUTO concept; this is a UI policy. A preset named after
-  // the track's genre (built-in "Rock"/"Jazz"/… or a user save) is loaded
-  // automatically. Tracks without a known genre (or unsynced remote rows)
-  // leave the curve alone.
+  function cyclePreset(): void {
+    if (presets.length === 0) return;
+    const next = (presetIndex + 1) % presets.length;
+    applyBands(normalize(presets[next]?.bandsDb), next);
+  }
+
+  // ── AUTO: track curve → artist curve → genre-named preset ───────────────
+  // The engine has no AUTO concept; this is a UI policy. Track/artist curves
+  // are captured from the library/playlist context menus; the genre fallback
+  // uses a preset named after the track's genre (built-in or user save).
+  // Tracks with no match leave the curve alone.
 
   let lastAutoPath = "";
   let autoSeq = 0;
 
-  async function applyAutoPreset(path: string): Promise<void> {
+  async function applyAutoEq(path: string, metaArtist: string): Promise<void> {
     const seq = ++autoSeq;
-    let genre = "";
-    try {
-      genre = (await libraryTrack(path))?.genre ?? "";
-    } catch {
-      return; // unknown/unsynced track: nothing to match
+
+    // 1. Track curve — applies even when the path has no library row.
+    const trackCurve = getTrackEq(path);
+    if (trackCurve) {
+      applyBands(trackCurve.bandsDb);
+      return;
     }
-    if (seq !== autoSeq || genre === "") return;
+
+    let track: Track | null = null;
+    try {
+      track = await libraryTrack(path);
+    } catch {
+      // unknown/unsynced track: keep the queue metadata as the fallback
+    }
+    if (seq !== autoSeq) return;
+
+    // 2. Artist curve.
+    const artist = (track?.artist || metaArtist || "").trim();
+    const artistCurve = getArtistEq(artist);
+    if (artistCurve) {
+      applyBands(artistCurve);
+      return;
+    }
+
+    // 3. Genre-named preset.
+    const genre = track?.genre ?? "";
+    if (genre === "") return;
     if (presets.length === 0) {
       try {
         presets = await eqPresets();
       } catch {
         return;
       }
+      if (seq !== autoSeq) return;
     }
     const index = presets.findIndex(
       (p) => p.name.toLowerCase() === genre.toLowerCase(),
     );
     if (index < 0) return;
-
-    if (!eq.enabled) {
-      eq.enabled = true;
-      eqSetEnabled(true).catch(warnEq);
-    }
-    presetIndex = index;
-    const bands = normalize(presets[index]?.bandsDb);
-    eq.bandsDb = bands;
-    bands.forEach((db, i) => eqSetBand(i, db).catch(warnEq));
+    applyBands(normalize(presets[index]?.bandsDb), index);
   }
 
   $effect(() => {
@@ -252,9 +272,38 @@
       lastAutoPath = ""; // apply again when AUTO is re-enabled
       return;
     }
-    if (!item || item.path === lastAutoPath) return;
+    if (!item) {
+      lastAutoPath = ""; // queue cleared: a re-play should re-apply
+      return;
+    }
+    if (item.path === lastAutoPath) return;
     lastAutoPath = item.path;
-    void applyAutoPreset(item.path);
+    void applyAutoEq(item.path, item.artist);
+  });
+
+  // Saving/clearing a curve in another window re-evaluates the current track
+  // only when the change affects it (a curve saved for another row must not
+  // clobber manual tweaks on this one).
+  $effect(() => {
+    const unlisten = onEqAssocChanged((change) => {
+      if (!eq.auto) return;
+      const snap = queueSnapshot.value;
+      const item = snap?.currentIndex != null ? snap.items[snap.currentIndex] : null;
+      if (!item) return;
+      const sameArtist =
+        change.artist.trim() !== "" &&
+        change.artist.trim().toLowerCase() === item.artist.trim().toLowerCase();
+      const affects =
+        change.scope === "track"
+          ? change.path === item.path
+          : change.path === item.path || sameArtist;
+      if (!affects) return;
+      lastAutoPath = item.path;
+      void applyAutoEq(item.path, item.artist);
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
   });
 
   // ── actions from the skin's EQ objects ───────────────────────────────────

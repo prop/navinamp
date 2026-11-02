@@ -15,6 +15,7 @@
   import type { QueueItem } from "../lib/player/queue.svelte";
   import type { SkinTheme } from "../lib/skin/theme";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
+  import { clearEqFor, getArtistEq, getTrackEq, rememberEq } from "../lib/audio/auto";
   import { librarySetRating, libraryTrack } from "../lib/library/ipc";
   import { navidromeRate, navidromeStar } from "../lib/navidrome/ipc";
 
@@ -147,6 +148,21 @@
         list.push({ id: "rate", label: "rating", rating: menuInfo.rating });
       }
     }
+    // AUTO associations; the EQ window reapplies the saved curve on match.
+    const trackEq = getTrackEq(item.path) != null;
+    const artistEq = item.artist.trim() !== "" && getArtistEq(item.artist) != null;
+    list.push({ id: "eqsep", label: "", separator: true });
+    list.push({
+      id: "eq-track",
+      label: trackEq ? "EQ: update track curve" : "EQ: save current curve for track",
+    });
+    list.push({
+      id: "eq-artist",
+      label: artistEq ? "EQ: update artist curve" : "EQ: save current curve for artist",
+    });
+    if (trackEq || artistEq) {
+      list.push({ id: "eq-clear", label: "EQ: clear track/artist curve" });
+    }
     return list;
   });
 
@@ -227,6 +243,12 @@
     } else if (id.startsWith("rate:")) {
       const rating = Number(id.slice("rate:".length));
       if (Number.isFinite(rating)) void setItemRating(item, rating);
+    } else if (id === "eq-track" || id === "eq-artist") {
+      void rememberEq(item.path, item.artist, id === "eq-track" ? "track" : "artist")
+        .catch((e) => console.warn(`[navinamp] eq: save failed: ${e}`));
+    } else if (id === "eq-clear") {
+      void clearEqFor(item.path, item.artist)
+        .catch((e) => console.warn(`[navinamp] eq: clear failed: ${e}`));
     }
   }
 

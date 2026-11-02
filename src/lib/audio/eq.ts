@@ -41,8 +41,9 @@ export interface EqState {
 
 /**
  * Live EQ view-state the skinned EQ window renders from (M6c): the polled
- * `eq_state` plus the UI-side AUTO flag (genre-based preset auto-load,
- * persisted in localStorage; the engine itself has no AUTO concept).
+ * `eq_state` plus the UI-side AUTO flag (track → artist → genre curve
+ * auto-load, persisted in localStorage; the engine itself has no AUTO
+ * concept).
  */
 export interface EqLive {
   enabled: boolean;

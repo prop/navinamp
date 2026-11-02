@@ -62,9 +62,12 @@
 - Track table virtualization: only the visible ~20 rows (+8 overscan) are in
   the DOM; top/bottom spacers preserve the scroll height. Page loading still
   appends as you scroll.
-- EQ AUTO works: each track change auto-applies a preset named after the
-  track's genre (built-in curves or user saves); the flag persists in
-  localStorage. Per-track/artist associations remain a future refinement.
+- EQ AUTO works: each track change applies the curve saved for that track,
+  else the one saved for its artist, else a preset named after its genre
+  (built-in curves or user saves). Track/artist curves are captured from the
+  library and playlist row context menus (the live EQ bands are stored in
+  localStorage); saving an artist curve replaces a track curve for that row,
+  and clear removes both. The AUTO flag persists in localStorage.
 - Navidrome library selection: `getMusicFolders` lists the user's libraries,
   the selected id (`libraryId`) persists in `navidrome.json` and scopes the
   sync walk via `musicFolderId`; Navidrome Settings has an all-libraries /
@@ -104,12 +107,10 @@
 
 1. True multi-server aggregation (rows from several servers at once; needs a
    server identity in track paths and per-server routing).
-2. AUTO per-track/artist associations (genre matching ships today).
 
 ## Known follow-ups / deferred
 
-- EQ: per-track/artist AUTO associations (current AUTO matches presets by
-  genre), EQ window close button (decorative), duplicate HTML EqPanel in the
+- EQ: EQ window close button (decorative), duplicate HTML EqPanel in the
   library DEV section
 - Metadata bitrate is average source bytes ÷ duration; streams whose
   container declares no duration (some transcodes) leave the kbps digits
@@ -127,6 +128,9 @@
   becomes a problem
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
+- EQ track curves are keyed by path; identical Navidrome song ids on two
+  saved servers share a path, so a curve can carry across profiles (same
+  class of issue as queued remote rows on server switch)
 - Signing ($99/yr) for prompt-free installs; auto-updater after that
 - Deferred by decision: multi-platform CI releases, MAKI runtime,
   video window, Shoutcast
