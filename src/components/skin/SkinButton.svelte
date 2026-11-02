@@ -7,8 +7,10 @@
    * hovered, image otherwise — each falling back to the normal image (and,
    * one day, to a disabled look; the model carries no disabled image).
    * togglebutton: while its toggle is active (`toggled`, fed by SkinSurface
-   * from the App's visibility state, e.g. TOGGLE_PLAYLIST / TOGGLE_SHADE)
-   * the downimage stays rendered.
+   * from the App's state, e.g. TOGGLE_PLAYLIST / TOGGLE_SHUFFLE) the
+   * skin's dedicated active cell (`params["activeimage"]`, shufrep.bmp's
+   * third row) stays rendered — the lit glyph, not the momentary pressed
+   * one. Skins without an activeimage fall back to downimage.
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
 
@@ -29,8 +31,17 @@
   let hover = $state(false);
   let down = $state(false);
 
+  // The togglebutton's lit cell. The model has no typed `activeimage` (it
+  // rides in `params`, where a Wasabi parser would keep unknown attributes).
+  const activeImage = $derived.by(() => {
+    if (obj.object.kind !== "togglebutton") return undefined;
+    const key = obj.object.params?.["activeimage"];
+    return key ? images[key] : undefined;
+  });
+
   const image = $derived.by(() => {
     if (!o) return undefined;
+    if (toggled && activeImage) return activeImage;
     const pressed = down || (obj.object.kind === "togglebutton" && toggled);
     if (pressed && o.downimage && images[o.downimage]) return images[o.downimage];
     if (hover && o.hoverimage && images[o.hoverimage]) return images[o.hoverimage];
@@ -64,7 +75,7 @@
     class="btn"
     class:hover
     class:down
-    class:toggled={obj.object.kind === "togglebutton" && toggled}
+    class:toggled={obj.object.kind === "togglebutton" && toggled && !activeImage}
     role="button"
     tabindex="0"
     style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{image
@@ -104,7 +115,7 @@
     filter: brightness(0.85);
   }
 
-  /* Toggled without a downimage: at least look held down. */
+  /* Toggled without an activeimage (or a downimage): at least look held down. */
   .btn.toggled {
     filter: brightness(0.85);
   }
