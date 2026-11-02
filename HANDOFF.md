@@ -156,14 +156,11 @@
 
 ## Next up
 
-1. Signing + auto-updater when the Apple membership is available (deferred
-   today; see the known follow-ups).
-2. Nothing else queued — next batch is a 0.8.1 release.
+The backlog lives in GitHub issues — `gh issue list` (labels:
+`enhancement`, `bug`). The next batch is a 0.8.1 release.
 
-## Known follow-ups / deferred
+## Design notes & deferred
 
-- EQ: EQ window close button (decorative), duplicate HTML EqPanel in the
-  library DEV section
 - Metadata bitrate is average source bytes ÷ duration; streams whose
   container declares no duration (some transcodes) leave the kbps digits
   blank by design
@@ -174,9 +171,6 @@
   its profile id; re-adding the same server later gets a fresh id, so the
   next publish creates a new `[NaVinaMP]` playlist instead of updating the
   old one
-- `Warning::ClassicMissingOptional` missing from the frontend `Warning`
-  union in `src/lib/skin/types.ts`
-- Signing ($99/yr) for prompt-free installs; auto-updater after that
 - Deferred by decision: multi-platform CI releases, MAKI runtime,
   video window, Shoutcast
 
