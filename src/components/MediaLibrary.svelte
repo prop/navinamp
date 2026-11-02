@@ -1421,6 +1421,7 @@
             <div class="kv"><span>url</span><b>{navStatus.url}</b></div>
             <div class="kv"><span>user</span><b>{navStatus.user}</b></div>
             <div class="kv"><span>version</span><b>{navStatus.serverVersion ?? "—"}</b></div>
+            <div class="kv"><span>library</span><b>{navStatus.libraryId ?? "all libraries"}</b></div>
             <div class="kv"><span>tracks</span><b>{navStatus.trackCount.toLocaleString()}</b></div>
             <div class="kv"><span>last sync</span><b>{fmtDate(navStatus.syncedAt)}</b></div>
           {/if}

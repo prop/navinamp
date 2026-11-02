@@ -32,7 +32,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use navinamp_library::{Library, RemoteTrack, Track, remote_path};
-use navinamp_subsonic::{AlbumDetail, PlaylistSummary, SongSummary, StreamFormat, SubsonicClient};
+use navinamp_subsonic::{
+    AlbumDetail, MusicFolder, PlaylistSummary, SongSummary, StreamFormat, SubsonicClient,
+};
 
 use crate::library::{LibraryState, db_file, with_library};
 
@@ -68,6 +70,8 @@ struct StoredConfig {
     bitrate_kbps: Option<u32>,
     synced_at: Option<i64>,
     server_version: Option<String>,
+    /// Selected Navidrome library (music folder); `None` = all libraries.
+    library_id: Option<String>,
 }
 
 impl StoredConfig {
@@ -165,6 +169,8 @@ pub struct Status {
     pub server_version: Option<String>,
     /// Navidrome rows currently in the library.
     pub track_count: i64,
+    /// Selected library (music folder) id, or `null` for all libraries.
+    pub library_id: Option<String>,
 }
 
 /// Everything the UI needs to know about one completed sync.
@@ -215,6 +221,7 @@ fn current_status(app: &AppHandle, state: &NavidromeState) -> Status {
         },
         synced_at: config.and_then(|c| c.synced_at),
         server_version: config.and_then(|c| c.server_version.clone()),
+        library_id: config.and_then(|c| c.library_id.clone()),
         // Unconfigured → 0; configured → the live count (an unopenable
         // library reads as 0 too — status must never fail).
         track_count: if config.is_some() {
@@ -307,12 +314,18 @@ pub async fn navidrome_connect(
 
     let mut guard = state.inner.lock().unwrap();
     // Keep the previous streaming prefs across a reconnect; a fresh
-    // configuration starts at `original` / unlimited.
+    // configuration starts at `original` / unlimited. The library selection
+    // survives only when reconnecting to the same server/user.
     let (format, bitrate_kbps) = guard
         .config
         .as_ref()
         .map(|c| (c.format.clone(), c.bitrate_kbps))
         .unwrap_or_else(|| ("original".into(), None));
+    let previous_library = guard
+        .config
+        .as_ref()
+        .filter(|c| c.url == url && c.user == user)
+        .and_then(|c| c.library_id.clone());
     let config = StoredConfig {
         url,
         user,
@@ -321,6 +334,7 @@ pub async fn navidrome_connect(
         bitrate_kbps,
         synced_at: None,
         server_version: client.server_version().map(str::to_owned),
+        library_id: previous_library,
     };
     save_config(&app, &config)?;
     *guard = Inner {
@@ -449,6 +463,52 @@ pub async fn navidrome_rate(
         .rate(&remote_id, rating)
         .await
         .map_err(|e| scrub_urls(&e.to_string()))
+}
+
+/// Libraries (music folders) accessible to the connected user.
+#[tauri::command]
+pub async fn navidrome_libraries(
+    state: State<'_, NavidromeState>,
+) -> Result<Vec<MusicFolder>, String> {
+    let client = ensure_client(&state).await?;
+    client
+        .get_music_folders()
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))
+}
+
+/// Select one library for sync; `null` means all accessible libraries.
+/// Validates the id against `getMusicFolders` before persisting it.
+#[tauri::command]
+pub async fn navidrome_set_library(
+    app: AppHandle,
+    state: State<'_, NavidromeState>,
+    library_id: Option<String>,
+) -> Result<Status, String> {
+    let client = ensure_client(&state).await?;
+    let library_id = match library_id
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => {
+            let folders = client
+                .get_music_folders()
+                .await
+                .map_err(|e| scrub_urls(&e.to_string()))?;
+            if !folders.iter().any(|folder| folder.id == id) {
+                return Err(format!("unknown library `{id}`"));
+            }
+            Some(id)
+        }
+        None => None,
+    };
+    {
+        let mut guard = state.inner.lock().unwrap();
+        let config = guard.config.as_mut().ok_or("not connected")?;
+        config.library_id = library_id;
+        save_config(&app, config)?;
+    }
+    Ok(current_status(&app, &state))
 }
 
 /// All playlists visible to the connected user (server order).
@@ -667,6 +727,13 @@ pub async fn navidrome_sync(
         state.syncing.store(false, Ordering::SeqCst);
         format!("cannot open library: {e}")
     })?;
+    let selected_library = state
+        .inner
+        .lock()
+        .unwrap()
+        .config
+        .as_ref()
+        .and_then(|config| config.library_id.clone());
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<SyncReport, String>>();
     let emitter = app.clone();
@@ -677,7 +744,7 @@ pub async fn navidrome_sync(
         .name("navinamp-navidrome-sync".into())
         .spawn(move || {
             let _guard = SyncGuard(flag);
-            let result = run_sync(&emitter, &client, &library);
+            let result = run_sync(&emitter, &client, &library, selected_library.as_deref());
             match &result {
                 Ok(report) => {
                     // Persist the timestamp while we still own the app handle.
@@ -722,13 +789,14 @@ fn run_sync(
     app: &AppHandle,
     client: &SubsonicClient,
     library: &Library,
+    library_id: Option<&str>,
 ) -> Result<SyncReport, String> {
     let started = Instant::now();
     tauri::async_runtime::block_on(async {
         let mut report = SyncReport::default();
 
         let artists = client
-            .get_artists()
+            .get_artists(library_id)
             .await
             .map_err(|e| scrub_urls(&e.to_string()))?;
         report.artists = artists.len() as u64;
@@ -938,9 +1006,11 @@ mod tests {
             bitrate_kbps: Some(128),
             synced_at: Some(1),
             server_version: Some("0.5x".into()),
+            library_id: Some("lib-2".into()),
         })
         .unwrap();
         assert!(text.contains("\"bitrateKbps\":128"), "{text}");
+        assert!(text.contains("\"libraryId\":\"lib-2\""), "{text}");
         assert!(text.contains("\"syncedAt\":1"), "{text}");
     }
 

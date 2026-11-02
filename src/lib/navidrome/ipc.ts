@@ -37,6 +37,14 @@ export interface NavidromeStatus {
   syncedAt: number | null;
   serverVersion: string | null;
   trackCount: number;
+  /** Selected library (music folder) id; null = all accessible libraries. */
+  libraryId: string | null;
+}
+
+/** One music library (music folder) on the server. */
+export interface MusicFolder {
+  id: string;
+  name: string;
 }
 
 /** Everything the caller needs to know about one completed sync. */
@@ -113,6 +121,20 @@ export interface NavidromePlaylist {
 /** All playlists visible to the connected user (browse-only). */
 export function navidromePlaylists(): Promise<NavidromePlaylist[]> {
   return invoke<NavidromePlaylist[]>("navidrome_playlists");
+}
+
+/** Libraries (music folders) accessible to the connected user. */
+export function navidromeLibraries(): Promise<MusicFolder[]> {
+  return invoke<MusicFolder[]>("navidrome_libraries");
+}
+
+/**
+ * Select one library for sync (`null` = all libraries). The backend
+ * validates the id; callers should trigger a sync so the local remote rows
+ * match the new selection (the sync prunes rows outside it).
+ */
+export function navidromeSetLibrary(libraryId: string | null): Promise<NavidromeStatus> {
+  return invoke<NavidromeStatus>("navidrome_set_library", { libraryId });
 }
 
 /**

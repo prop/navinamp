@@ -65,6 +65,10 @@
 - EQ AUTO works: each track change auto-applies a preset named after the
   track's genre (built-in curves or user saves); the flag persists in
   localStorage. Per-track/artist associations remain a future refinement.
+- Navidrome library selection: `getMusicFolders` lists the user's libraries,
+  the selected id (`libraryId`) persists in `navidrome.json` and scopes the
+  sync walk via `musicFolderId`; Navidrome Settings has an all-libraries /
+  library dropdown that re-syncs (the prune drops rows outside the choice).
 - Release-build devtools enabled (tauri `devtools` feature); inspect works in
   packaged builds too.
 - svelte-check is clean (0 errors). The old 14-diagnostic baseline was a
@@ -77,9 +81,10 @@
 
 ## Next up
 
-1. Tree virtualization (deep album/artist scrolling still builds rows).
-2. SELECT ALL by filter (paged views currently select loaded rows only).
-3. AUTO per-track/artist associations (genre matching ships today).
+1. Multiple Navidrome servers (profiles with one active server first).
+2. Tree virtualization (deep album/artist scrolling still builds rows).
+3. SELECT ALL by filter (paged views currently select loaded rows only).
+4. AUTO per-track/artist associations (genre matching ships today).
 
 ## Known follow-ups / deferred
 

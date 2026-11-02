@@ -184,6 +184,16 @@ pub struct SearchResults {
     pub albums: Vec<AlbumSummary>,
 }
 
+/// One music library (music folder) accessible to the user. Navidrome's
+/// multi-library feature maps each library to one of these.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicFolder {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
 /// One playlist from `getPlaylists`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -278,6 +288,18 @@ pub(crate) struct SearchResult3 {
     pub album: Vec<AlbumSummary>,
     // `artist` results arrive too, but NaVinaMP's search UI only wants
     // songs/albums; that field is ignored rather than carried around unread.
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct GetMusicFoldersResponse {
+    #[serde(default, rename = "musicFolders")]
+    pub music_folders: MusicFolders,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct MusicFolders {
+    #[serde(default, rename = "musicFolder")]
+    pub music_folder: Vec<MusicFolder>,
 }
 
 #[derive(Debug, Deserialize)]

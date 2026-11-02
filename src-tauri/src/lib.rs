@@ -92,6 +92,8 @@ pub fn run() {
             navidrome::navidrome_scrobble,
             navidrome::navidrome_star,
             navidrome::navidrome_rate,
+            navidrome::navidrome_libraries,
+            navidrome::navidrome_set_library,
             navidrome::navidrome_playlists,
             navidrome::navidrome_playlist_tracks,
             navidrome::navidrome_publish_smart_view,

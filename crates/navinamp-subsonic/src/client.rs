@@ -132,9 +132,26 @@ impl SubsonicClient {
         })
     }
 
+    /// All music libraries (folders) accessible to the authenticated user.
+    /// Navidrome's multi-library feature exposes each library here.
+    pub async fn get_music_folders(&self) -> Result<Vec<MusicFolder>, SubsonicError> {
+        let inner = self.request("getMusicFolders.view", &[]).await?;
+        let resp: GetMusicFoldersResponse = payload(inner)?;
+        Ok(resp.music_folders.music_folder)
+    }
+
     /// All artists, flattened out of the `getArtists` index groups (A–Z, #).
-    pub async fn get_artists(&self) -> Result<Vec<ArtistSummary>, SubsonicError> {
-        let inner = self.request("getArtists.view", &[]).await?;
+    /// `music_folder_id` scopes the index to one library (Navidrome multi-
+    /// library); `None` asks the server for everything visible to the user.
+    pub async fn get_artists(
+        &self,
+        music_folder_id: Option<&str>,
+    ) -> Result<Vec<ArtistSummary>, SubsonicError> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(id) = music_folder_id {
+            params.push(("musicFolderId", id.to_owned()));
+        }
+        let inner = self.request("getArtists.view", &params).await?;
         let resp: GetArtistsResponse = payload(inner)?;
         Ok(resp
             .artists

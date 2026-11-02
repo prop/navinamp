@@ -14,7 +14,8 @@
 //! | Method | Subsonic endpoint |
 //! |---|---|
 //! | [`SubsonicClient::connect`] / [`SubsonicClient::ping`] | `ping` |
-//! | [`SubsonicClient::get_artists`] | `getArtists` |
+//! | [`SubsonicClient::get_artists`] | `getArtists` (optional `musicFolderId`) |
+//! | [`SubsonicClient::get_music_folders`] | `getMusicFolders` |
 //! | [`SubsonicClient::get_artist`] | `getArtist` (artist → their albums) |
 //! | [`SubsonicClient::get_album`] | `getAlbum` (songs inline) |
 //! | [`SubsonicClient::search3`] | `search3` |
@@ -41,6 +42,6 @@ pub mod models;
 pub use client::{SubsonicClient, normalize_base_url};
 pub use error::SubsonicError;
 pub use models::{
-    AlbumDetail, AlbumSummary, ArtistSummary, PingInfo, PlaylistSummary, SearchResults,
-    SongSummary, StreamFormat,
+    AlbumDetail, AlbumSummary, ArtistSummary, MusicFolder, PingInfo, PlaylistSummary,
+    SearchResults, SongSummary, StreamFormat,
 };

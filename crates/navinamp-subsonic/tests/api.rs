@@ -220,7 +220,7 @@ async fn get_artists_flattens_index_groups() {
     )
     .await;
 
-    let artists = client.get_artists().await.expect("artists parse");
+    let artists = client.get_artists(None).await.expect("artists parse");
     assert_eq!(
         artists,
         vec![
@@ -246,6 +246,53 @@ async fn get_artists_flattens_index_groups() {
     assert_eq!(
         query(&requests[0]).get("u").map(String::as_str),
         Some("admin")
+    );
+    assert!(
+        !query(&requests[0]).contains_key("musicFolderId"),
+        "None must not send a library filter"
+    );
+
+    // A selected library travels as `musicFolderId`.
+    client
+        .get_artists(Some("lib-2"))
+        .await
+        .expect("filtered artists");
+    let requests = requests_to(&server, "getArtists").await;
+    assert_eq!(
+        query(&requests[1]).get("musicFolderId").map(String::as_str),
+        Some("lib-2")
+    );
+}
+
+#[tokio::test]
+async fn music_folders_parse_the_multi_library_index() {
+    let server = MockServer::start().await;
+    let client = connected_client(&server).await;
+    mock_endpoint(
+        &server,
+        "getMusicFolders",
+        ok_response(json!({
+            "musicFolders": { "musicFolder": [
+                { "id": "1", "name": "Music" },
+                { "id": "2", "name": "Audiobooks" }
+            ]}
+        })),
+    )
+    .await;
+
+    let folders = client.get_music_folders().await.expect("folders parse");
+    assert_eq!(
+        folders,
+        vec![
+            navinamp_subsonic::MusicFolder {
+                id: "1".into(),
+                name: "Music".into()
+            },
+            navinamp_subsonic::MusicFolder {
+                id: "2".into(),
+                name: "Audiobooks".into()
+            },
+        ]
     );
 }
 
@@ -789,7 +836,10 @@ async fn malformed_json_maps_to_json_error() {
         .mount(&server)
         .await;
 
-    let error = client.get_artists().await.expect_err("garbage must fail");
+    let error = client
+        .get_artists(None)
+        .await
+        .expect_err("garbage must fail");
     assert!(matches!(error, SubsonicError::Json(_)), "got: {error:?}");
 }
 
@@ -805,7 +855,7 @@ async fn missing_envelope_maps_to_json_error() {
         .mount(&server)
         .await;
 
-    let error = client.get_artists().await.expect_err("must fail");
+    let error = client.get_artists(None).await.expect_err("must fail");
     assert!(matches!(error, SubsonicError::Json(_)), "got: {error:?}");
 }
 

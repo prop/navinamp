@@ -19,9 +19,13 @@
   import {
     navidromeConnect,
     navidromeDisconnect,
+    navidromeLibraries,
+    navidromeSetLibrary,
     navidromeSetStreaming,
     navidromeStatus,
+    navidromeSync,
     onNavidromeSynced,
+    type MusicFolder,
     type NavidromeStatus,
     type StreamFormat,
   } from "../lib/navidrome/ipc";
@@ -154,6 +158,78 @@
   }
 
   const configured = $derived(status?.configured === true);
+
+  // ── library (music folder) selection ─────────────────────────────────────
+  // Navidrome exposes each library through getMusicFolders; the selected id
+  // scopes the sync walk (musicFolderId). Applying triggers a sync, whose
+  // prune removes remote rows outside the new selection.
+
+  let libraries = $state.raw<MusicFolder[]>([]);
+  let libraryId = $state("");
+  let libError = $state<string | null>(null);
+  let libLoading = $state(false);
+  let libSaving = $state(false);
+  let libSeq = 0;
+
+  const libraryName = $derived(
+    status?.libraryId == null
+      ? "all libraries"
+      : (libraries.find((l) => l.id === status?.libraryId)?.name ?? status.libraryId),
+  );
+
+  async function refreshLibraries(): Promise<void> {
+    if (status?.configured !== true) {
+      libraries = [];
+      libraryId = "";
+      libLoading = false;
+      return;
+    }
+    const seq = ++libSeq;
+    libLoading = true;
+    try {
+      const list = await navidromeLibraries();
+      if (seq !== libSeq) return;
+      libraries = list;
+      libraryId = status.libraryId ?? "";
+      libError = null;
+    } catch (e) {
+      if (seq !== libSeq) return;
+      libraries = [];
+      libError = friendlyIpcError("navidrome libraries", e);
+    } finally {
+      if (seq === libSeq) libLoading = false;
+    }
+  }
+
+  $effect(() => {
+    void status?.configured;
+    void status?.libraryId;
+    void refreshLibraries();
+  });
+
+  async function applyLibrary(): Promise<void> {
+    if (!configured || libSaving) return;
+    libSaving = true;
+    libError = null;
+    try {
+      status = await navidromeSetLibrary(libraryId === "" ? null : libraryId);
+      onchanged?.();
+      const name =
+        libraryId === ""
+          ? "all libraries"
+          : (libraries.find((l) => l.id === libraryId)?.name ?? libraryId);
+      onlog?.(`navidrome: library — ${name}`);
+      // Re-sync so the local remote rows match the new scope.
+      void navidromeSync().catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!/already|running/i.test(msg)) onlog?.(`navidrome: sync error: ${msg}`);
+      });
+    } catch (e) {
+      libError = friendlyIpcError("library selection", e);
+    } finally {
+      libSaving = false;
+    }
+  }
 </script>
 
 <div class="overlay" role="dialog" aria-modal="true" aria-label="navidrome settings">
@@ -174,8 +250,39 @@
           <div class="kv"><span>url</span><b>{status.url}</b></div>
           <div class="kv"><span>user</span><b>{status.user}</b></div>
           <div class="kv"><span>server version</span><b>{status.serverVersion ?? "—"}</b></div>
+          <div class="kv"><span>library</span><b>{libraryName}</b></div>
           <div class="kv"><span>tracks synced</span><b>{status.trackCount.toLocaleString()}</b></div>
           <div class="kv"><span>last sync</span><b>{fmtDate(status.syncedAt)}</b></div>
+        {/if}
+      </div>
+
+      <div class="block">
+        <div class="bh">LIBRARY</div>
+        {#if !configured}
+          <div class="dim">connect first</div>
+        {:else if libLoading}
+          <div class="dim">loading libraries…</div>
+        {:else}
+          <div class="btnrow">
+            <label class="field">
+              library
+              <select class="sel" bind:value={libraryId} disabled={libSaving}>
+                <option value="">all libraries</option>
+                {#each libraries as lib (lib.id)}
+                  <option value={lib.id}>{lib.name}</option>
+                {/each}
+              </select>
+            </label>
+            <button onclick={() => void applyLibrary()} disabled={libSaving}>
+              {libSaving ? "APPLYING…" : "APPLY"}
+            </button>
+          </div>
+          <div class="dim">
+            applying re-syncs and removes remote tracks outside the selection
+          </div>
+          {#if libError}
+            <div class="banner">{libError}</div>
+          {/if}
         {/if}
       </div>
 
