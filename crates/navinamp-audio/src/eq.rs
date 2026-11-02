@@ -18,11 +18,13 @@
 //!
 //! # Layout
 //!
-//! 10 peaking biquads (RBJ cookbook, Q ≈ 1.0) at 60, 170, 310, 600, 1k, 3k,
-//! 6k, 12k, 14k, 16k — the authentic classic-Winamp band centres — plus a
-//! preamp applied *before* the bands. Flat (all bands 0 dB, preamp 0 dB,
-//! enabled or not) bypasses the entire EQ stage bit-exactly; see
-//! [`crate::dsp`].
+//! 10 peaking biquads (RBJ cookbook) at 60, 170, 310, 600, 1k, 3k, 6k, 12k,
+//! 14k, 16k — the authentic classic-Winamp band centres — plus a preamp
+//! applied *before* the bands. Low/mid bands are broad (Q=2); the three
+//! closely-spaced treble bands and 6k use Q=8 so adjacent boosts do not
+//! multiply into +30 dB of treble (see [`EQ_BAND_Q`]). Flat (all bands
+//! 0 dB, preamp 0 dB, enabled or not) bypasses the entire EQ stage
+//! bit-exactly; see [`crate::dsp`].
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -43,10 +45,13 @@ pub const EQ_BAND_FREQUENCIES_HZ: [f32; EQ_BAND_COUNT] = [
 /// Slider range in dB (`±12`, like Winamp).
 pub const EQ_RANGE_DB: f32 = 12.0;
 
-/// Q of every peaking band (~1.0 — a middle-of-the-road curve width; a
-/// peaking filter's response at its centre frequency is exactly the band
-/// gain regardless of Q, so this only shapes the shoulders).
-pub(crate) const EQ_Q: f32 = 1.0;
+/// Per-band Q. The low/mid bands are one-octave-ish (Q=2); 6k and the very
+/// closely-spaced 12k/14k/16k trio use Q=8 so three simultaneous +12 dB
+/// sliders don't multiply into a +30 dB treble spike (which used to clip the
+/// DAC even before auto headroom). Q affects only the shoulders; a peaking
+/// filter's gain at its centre is the slider value regardless of Q.
+pub(crate) const EQ_BAND_Q: [f32; EQ_BAND_COUNT] =
+    [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 8.0, 8.0, 8.0, 8.0];
 
 /// Sanitize + clamp a dB value coming from the IPC surface. Non-finite
 /// values (NaN, ±inf — legal f32, absurd EQ) collapse to flat 0 dB so the
@@ -165,6 +170,9 @@ pub struct EqPreset {
 
 /// The classic Winamp preset curves (values from the well-known preset
 /// tables), clamped to ±12 dB. Order is alphabetical, like the Winamp menu.
+/// No preset carries a preamp: the DSP applies automatic headroom for the
+/// boosted curves, which is safer than baking guessed preamp values into the
+/// table.
 static EQ_PRESETS: [EqPreset; 17] = [
     EqPreset {
         name: "Classical",

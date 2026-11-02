@@ -120,9 +120,10 @@ fn default_eq_is_bit_exact_passthrough() {
 }
 
 #[test]
-fn eq_band_boosts_its_center_frequency() {
-    // +12 dB on the 1 kHz band: a 1 kHz sine must come out ≈ 4× (+12 dB,
-    // ±1 dB tolerance) after the filter settles.
+fn eq_band_boost_is_headroom_compensated() {
+    // +12 dB on the 1 kHz band is compensated by the automatic headroom
+    // attenuation, so a 1 kHz sine comes out at ≈ -0.25 dB (not +12) and a
+    // full-scale master can never clip at the DAC.
     let (wav, expected) = stereo_sine_fixture_amp("eq-boost", RATE, 1.0, 1000.0, 0.25);
     let sink = TestSink::new(RATE);
     let engine = engine_on(&sink);
@@ -145,8 +146,8 @@ fn eq_band_boosts_its_center_frequency() {
     let exp_l: Vec<f32> = expected[settle..].iter().step_by(2).copied().collect();
     let ratio_db = 20.0 * (rms(&out_l) / rms(&exp_l)).log10();
     assert!(
-        (ratio_db - 12.0).abs() <= 1.0,
-        "1 kHz boost measured {ratio_db:.2} dB (expected ≈ +12)"
+        (ratio_db + 0.25).abs() <= 1.0,
+        "1 kHz boost measured {ratio_db:.2} dB (expected ≈ -0.25 after headroom)"
     );
     assert!(out.iter().all(|s| s.is_finite()));
 

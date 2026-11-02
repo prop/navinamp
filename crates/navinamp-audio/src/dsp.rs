@@ -30,10 +30,20 @@
 //! current ReplayGain is exactly 1.0, `process` touches nothing — output is
 //! bit-identical to the decoder's f32. Running audio through identity
 //! biquads would only accumulate float error, so flat means bypass.
+//!
+//! # Headroom
+//!
+//! Boosting several overlapping bands (the classic presets do exactly that)
+//! can push the cascade well above 0 dBFS; the output device hard-clips,
+//! which is heard as distortion. On every parameter change the chain
+//! estimates the composite worst-case gain over a log-spaced frequency grid
+//! and attenuates the pre-EQ signal by that amount (plus a small margin), so
+//! a full-scale input stays inside ±1.0. Volume lives after the EQ, so it
+//! can raise the result back up without reintroducing clipping.
 
 use std::sync::Arc;
 
-use crate::eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_Q, EqParams};
+use crate::eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_BAND_Q, EqParams};
 use crate::shared::RgMarkers;
 
 /// One peaking-EQ biquad section (RBJ cookbook) in transposed direct form
@@ -112,6 +122,21 @@ impl EqBand {
         state.z2 = self.b2 * x - self.a2 * y;
         y
     }
+
+    /// |H(e^{jω})| of this section at `w` radians/sample. Used only when
+    /// parameters change (headroom estimation), never per sample.
+    fn magnitude(&self, w: f32) -> f32 {
+        let (sin1, cos1) = w.sin_cos();
+        let (sin2, cos2) = (2.0 * w).sin_cos();
+        // z^-1 = cos(w) − j sin(w), z^-2 = cos(2w) − j sin(2w).
+        let num_re = self.b0 + self.b1 * cos1 + self.b2 * cos2;
+        let num_im = -(self.b1 * sin1 + self.b2 * sin2);
+        let den_re = 1.0 + self.a1 * cos1 + self.a2 * cos2;
+        let den_im = -(self.a1 * sin1 + self.a2 * sin2);
+        let num = (num_re * num_re + num_im * num_im).sqrt();
+        let den = (den_re * den_re + den_im * den_im).sqrt();
+        if den > 0.0 { num / den } else { 1.0 }
+    }
 }
 
 /// Real-time DSP chain: ReplayGain scalar → preamp → 10-band EQ. All state
@@ -125,6 +150,9 @@ pub(crate) struct DspChain {
     eq_generation: u64,
     eq_active: bool,
     preamp_gain: f32,
+    /// Automatic attenuation that keeps the boosted cascade inside ±1.0.
+    /// Derived from the composite response whenever coefficients change.
+    auto_gain: f32,
     bands: Box<[EqBand]>,
     /// Current ReplayGain scalar (starts at unity: no track, no gain).
     rg_gain: f32,
@@ -139,7 +167,7 @@ impl DspChain {
         let channels = channels.max(1);
         let bands: [EqBand; EQ_BAND_COUNT] = std::array::from_fn(|b| {
             let mut band = EqBand::new(channels);
-            band.set_peaking(0.0, EQ_BAND_FREQUENCIES_HZ[b], sample_rate, EQ_Q);
+            band.set_peaking(0.0, EQ_BAND_FREQUENCIES_HZ[b], sample_rate, EQ_BAND_Q[b]);
             band
         });
         Self {
@@ -150,6 +178,7 @@ impl DspChain {
             eq_generation: u64::MAX,
             eq_active: false,
             preamp_gain: 1.0,
+            auto_gain: 1.0,
             rg_gain: 1.0,
             rg_pending: None,
             rg_read: 0,
@@ -157,8 +186,8 @@ impl DspChain {
     }
 
     /// Re-read the EQ parameters (only called when the generation moved)
-    /// and recompute what the chain needs: bypass decision, preamp scalar
-    /// and all ten coefficient sets.
+    /// and recompute what the chain needs: bypass decision, preamp scalar,
+    /// all ten coefficient sets, and the automatic headroom attenuation.
     fn refresh_eq(&mut self) {
         let snapshot = self.eq.snapshot();
         self.eq_active = snapshot.active();
@@ -167,9 +196,43 @@ impl DspChain {
         for (index, band) in self.bands.iter_mut().enumerate() {
             let db = snapshot.bands_db[index];
             if db != band.db {
-                band.set_peaking(db, EQ_BAND_FREQUENCIES_HZ[index], rate, EQ_Q);
+                band.set_peaking(db, EQ_BAND_FREQUENCIES_HZ[index], rate, EQ_BAND_Q[index]);
             }
         }
+
+        // Boosting several overlapping bands (the classic presets do exactly
+        // that) can push the composite response far above 0 dB. Without
+        // headroom the DAC hard-clips, which is heard as "dirty" distortion.
+        // Attenuate by the cascade's worst-case gain so a full-scale input
+        // never exceeds full scale; the user's volume/preamp can raise it
+        // back if desired. Cuts never trigger this (peak stays ≤ 1).
+        let peak_db = self.composite_peak_db();
+        self.auto_gain = if peak_db > 0.0 {
+            db_to_gain(-(peak_db + HEADROOM_MARGIN_DB))
+        } else {
+            1.0
+        };
+    }
+
+    /// Worst-case magnitude of the 10-band cascade, in dB, over a
+    /// log-spaced grid covering the audible band. Called on parameter
+    /// changes only (≈2.5k evaluations, no allocation).
+    fn composite_peak_db(&self) -> f32 {
+        let f_min = 20.0f32;
+        let f_max = (self.sample_rate as f32 * 0.45).min(20_000.0);
+        let ratio = f_max / f_min;
+        let mut peak = 0.0f32;
+        for i in 0..HEADROOM_POINTS {
+            let t = i as f32 / (HEADROOM_POINTS - 1) as f32;
+            let freq = f_min * ratio.powf(t);
+            let w = std::f32::consts::TAU * freq / self.sample_rate as f32;
+            let mut magnitude = 1.0f32;
+            for band in self.bands.iter() {
+                magnitude *= band.magnitude(w);
+            }
+            peak = peak.max(magnitude);
+        }
+        20.0 * peak.max(1e-9).log10()
     }
 }
 
@@ -216,7 +279,8 @@ impl DspChain {
 
         let rg = self.rg_gain;
         let preamp = self.preamp_gain;
-        let scale = rg * preamp;
+        let auto = self.auto_gain;
+        let scale = rg * preamp * auto;
         for (i, frame) in buf.chunks_exact_mut(self.channels).enumerate() {
             let absolute = first_frame + i as u64;
             // A switch due mid-block takes effect at exactly its frame.
@@ -229,7 +293,7 @@ impl DspChain {
             let scale = if self.rg_gain == rg {
                 scale
             } else {
-                self.rg_gain * preamp
+                self.rg_gain * preamp * auto
             };
 
             if !self.eq_active {
@@ -251,6 +315,13 @@ impl DspChain {
         }
     }
 }
+
+/// Headroom estimation grid: 256 log-spaced points across 20 Hz–20 kHz
+/// (limited to 0.45× the sample rate). The bands are broad enough that this
+/// resolves every peak while staying cheap on parameter changes.
+const HEADROOM_POINTS: usize = 256;
+/// Extra attenuation below full scale to absorb filter/intersample overshoot.
+const HEADROOM_MARGIN_DB: f32 = 1.0;
 
 /// dB → linear amplitude.
 fn db_to_gain(db: f32) -> f32 {
@@ -341,11 +412,29 @@ mod tests {
     }
 
     #[test]
-    fn plus_12db_band_gains_center_frequency() {
+    fn peaking_magnitude_matches_band_gain() {
+        let mut band = EqBand::new(2);
+        let w = std::f32::consts::TAU * 1000.0 / RATE as f32;
+        band.set_peaking(12.0, 1000.0, RATE, EQ_BAND_Q[4]);
+        let db = 20.0 * band.magnitude(w).log10();
+        assert!((db - 12.0).abs() < 0.1, "center gain {db:.2} dB (want +12)");
+        band.set_peaking(-6.0, 1000.0, RATE, EQ_BAND_Q[4]);
+        let db = 20.0 * band.magnitude(w).log10();
+        assert!((db + 6.0).abs() < 0.1, "center gain {db:.2} dB (want -6)");
+    }
+
+    #[test]
+    fn plus_12db_band_is_headroom_compensated() {
         let (mut dsp, eq, markers) = chain();
         eq.set_enabled(true);
         eq.set_band_db(4, 12.0); // 1 kHz band
         eq.set_band_db(4, 12.0); // idempotent set, exercises generation skip
+        dsp.refresh_eq(); // the audio callback does this on its next block
+        assert!(
+            dsp.auto_gain < 0.3,
+            "single +12 dB band should get ~-12 dB headroom, got {}",
+            dsp.auto_gain
+        );
 
         // 1 kHz sine, well below clipping even boosted (×3.98).
         let frames = RATE as usize / 2;
@@ -364,9 +453,54 @@ mod tests {
         let in_l: Vec<f32> = input[settle / 2..].to_vec();
         let ratio_db = 20.0 * (rms(&out_l) / rms(&in_l)).log10();
         assert!(
-            (ratio_db - 12.0).abs() <= 1.0,
-            "1 kHz gain {ratio_db:.2} dB (expected ≈ +12)"
+            (ratio_db + f64::from(HEADROOM_MARGIN_DB)).abs() <= 1.0,
+            "compensated 1 kHz gain {ratio_db:.2} dB (want ≈ -{HEADROOM_MARGIN_DB})"
         );
+    }
+
+    #[test]
+    fn classic_presets_stay_below_full_scale() {
+        // The stacked treble bands (Rock, Full Treble, …) used to clip a
+        // full-scale master at the DAC. Auto headroom must keep every classic
+        // curve inside ±1.0 even with a near-full-scale input.
+        let freqs = [
+            60.0, 170.0, 310.0, 600.0, 1000.0, 3000.0, 6000.0, 12_000.0, 13_000.0, 14_000.0,
+            16_000.0,
+        ];
+        for preset in crate::eq::eq_presets() {
+            let (mut dsp, eq, markers) = chain();
+            eq.set_enabled(true);
+            for (i, db) in preset.bands_db.iter().enumerate() {
+                eq.set_band_db(i, *db);
+            }
+            for &freq in &freqs {
+                let frames = (RATE as usize) / 5; // 200 ms
+                let input: Vec<f32> = (0..frames)
+                    .map(|n| {
+                        (2.0 * PI * f64::from(freq) * n as f64 / f64::from(RATE)).sin() as f32
+                            * 0.95
+                    })
+                    .collect();
+                let mut stereo: Vec<f32> = input.iter().flat_map(|&s| [s, s]).collect();
+                for (n, chunk) in stereo.chunks_mut(1024).enumerate() {
+                    dsp.process(chunk, (n * 512) as u64, &markers);
+                }
+                let settle = (RATE as usize / 10) * 2; // skip 100 ms transient
+                let peak = stereo[settle..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                assert!(
+                    peak <= 1.0,
+                    "{} at {freq} Hz peaks at {peak:.3} (> full scale)",
+                    preset.name
+                );
+            }
+            if preset.name == "Rock" {
+                let headroom_db = 20.0 * dsp.auto_gain.log10();
+                assert!(
+                    (-16.0..0.0).contains(&headroom_db),
+                    "Rock headroom {headroom_db:.1} dB is excessive"
+                );
+            }
+        }
     }
 
     #[test]
