@@ -402,10 +402,8 @@
   async function runAiSearch(): Promise<void> {
     const prompt = aiPrompt.trim();
     if (prompt === "" || searchBusy) return;
-    if (aiConfig?.enabled !== true) {
-      searchError = "AI search isn't set up yet — choose a provider in AI settings";
-      return;
-    }
+    // No enabled/provider gate here: the backend runs the deterministic
+    // offline rules parser when no provider is configured.
     const seq = ++searchSeq;
     const base = aiReport?.def ?? null;
     searchBusy = true;
@@ -1978,23 +1976,22 @@
         placeholder={aiReport ? "refine these results…" : "describe what you want to hear…"}
         aria-label="AI search prompt"
         onkeydown={(e) => {
-          if (e.key !== "Enter") return;
-          if (aiConfig?.enabled === true) void runAiSearch();
-          else showAiSettings = true;
+          if (e.key === "Enter") void runAiSearch();
         }} />
-      {#if aiConfig?.enabled === true}
-        <button
-          class="runai"
-          onclick={() => void runAiSearch()}
-          disabled={searchBusy || aiPrompt.trim() === ""}
-          title="send the prompt to the configured provider">
-          {searchBusy ? "THINKING…" : aiReport ? "REFINE" : "ASK"}
-        </button>
-      {:else}
+      <button
+        class="runai"
+        onclick={() => void runAiSearch()}
+        disabled={searchBusy || aiPrompt.trim() === ""}
+        title={aiConfig?.enabled === true
+          ? "send the prompt to the configured provider"
+          : "build rules with the offline parser"}>
+        {searchBusy ? "THINKING…" : aiReport ? "REFINE" : "ASK"}
+      </button>
+      {#if aiConfig?.enabled !== true}
         <button
           class="runai setup"
           onclick={() => (showAiSettings = true)}
-          title="connect a provider to enable AI search">
+          title="connect a provider for full AI search">
           SET UP
         </button>
       {/if}
@@ -2015,12 +2012,13 @@
   {/if}
 
   {#if searchMode === "ai"}
-    {#if aiConfig?.enabled !== true}
+    {#if aiConfig?.enabled !== true && !aiReport}
       <div class="aioff">
-        AI search isn't set up yet — connect OpenRouter, OpenAI, Claude, DeepSeek,
-        GLM/Kimi, or a local model.
+        Offline mode — prompts are matched against genres, artists, years, ratings
+        and phrases locally. Connect a provider for free-form search.
       </div>
-    {:else if aiReport}
+    {/if}
+    {#if aiReport}
       <div class="aibanner">
         <div class="aihead">
           <span class="aibadge">AI</span>

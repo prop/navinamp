@@ -1,4 +1,5 @@
 mod ai;
+mod ai_rules;
 mod art;
 mod audio;
 mod commands;
