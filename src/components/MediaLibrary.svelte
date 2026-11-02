@@ -403,7 +403,7 @@
     const prompt = aiPrompt.trim();
     if (prompt === "" || searchBusy) return;
     if (aiConfig?.enabled !== true) {
-      searchError = "AI search is off — open AI SETTINGS to configure a provider";
+      searchError = "AI search isn't set up yet — choose a provider in AI settings";
       return;
     }
     const seq = ++searchSeq;
@@ -1948,15 +1948,26 @@
         placeholder={aiReport ? "refine these results…" : "describe what you want to hear…"}
         aria-label="AI search prompt"
         onkeydown={(e) => {
-          if (e.key === "Enter") void runAiSearch();
+          if (e.key !== "Enter") return;
+          if (aiConfig?.enabled === true) void runAiSearch();
+          else showAiSettings = true;
         }} />
-      <button
-        class="runai"
-        onclick={() => void runAiSearch()}
-        disabled={searchBusy || aiPrompt.trim() === "" || aiConfig?.enabled !== true}
-        title="send the prompt to the configured provider">
-        {searchBusy ? "THINKING…" : aiReport ? "REFINE" : "ASK"}
-      </button>
+      {#if aiConfig?.enabled === true}
+        <button
+          class="runai"
+          onclick={() => void runAiSearch()}
+          disabled={searchBusy || aiPrompt.trim() === ""}
+          title="send the prompt to the configured provider">
+          {searchBusy ? "THINKING…" : aiReport ? "REFINE" : "ASK"}
+        </button>
+      {:else}
+        <button
+          class="runai setup"
+          onclick={() => (showAiSettings = true)}
+          title="connect a provider to enable AI search">
+          SET UP
+        </button>
+      {/if}
     {:else}
       <span class="advhint">
         {searchBusy ? "searching…" : "build rules below, then RUN"}
@@ -1976,8 +1987,8 @@
   {#if searchMode === "ai"}
     {#if aiConfig?.enabled !== true}
       <div class="aioff">
-        AI search is off.
-        <button onclick={() => (showAiSettings = true)}>OPEN AI SETTINGS</button>
+        AI search isn't set up yet — connect OpenRouter, OpenAI, Claude, DeepSeek,
+        GLM/Kimi, or a local model.
       </div>
     {:else if aiReport}
       <div class="aibanner">
@@ -2675,6 +2686,7 @@
     border-bottom: 1px solid #2a2a2a;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 10px;
+    line-height: 1.35;
     color: #d8a63c;
   }
 
@@ -2829,7 +2841,6 @@
   .topbar button,
   .resultbar button,
   .aibanner button,
-  .aioff button,
   .savedialog button,
   .bar button,
   .tree .node,
@@ -2851,7 +2862,6 @@
   .topbar button:hover:not(:disabled),
   .resultbar button:hover:not(:disabled),
   .aibanner button:hover:not(:disabled),
-  .aioff button:hover:not(:disabled),
   .savedialog button:hover:not(:disabled),
   .bar button:hover:not(:disabled),
   .tree .node:hover,
