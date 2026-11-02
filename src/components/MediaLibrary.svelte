@@ -271,11 +271,22 @@
 
   let selectedIds = $state.raw<Set<number>>(new Set());
   let anchorIndex: number | null = null;
+  /**
+   * SELECT ALL is virtual for paged views: it covers every row matching the
+   * current view (not just the loaded pages), and actions fetch the rows on
+   * demand. Any explicit row click leaves this mode.
+   */
+  let selectAllMode = $state(false);
+
+  function isRowSelected(t: Track): boolean {
+    return selectAllMode || selectedIds.has(t.id);
+  }
 
   function rowDown(e: PointerEvent, index: number): void {
     if (e.button !== 0) return;
     const id = displayed[index]?.id;
     if (id == null) return;
+    selectAllMode = false;
     if (e.shiftKey && anchorIndex != null) {
       const a = Math.min(anchorIndex, index);
       const b = Math.max(anchorIndex, index);
@@ -296,7 +307,17 @@
   }
 
   function selectAllView(): void {
-    selectedIds = new Set(displayed.map((t) => t.id));
+    if (selectAllMode) {
+      selectAllMode = false;
+      selectedIds = new Set();
+      anchorIndex = null;
+      return;
+    }
+    // No ids are materialized: the view may hold 20k+ rows across pages that
+    // have not been fetched. Bulk actions call `allRowsForAction()` instead.
+    selectedIds = new Set();
+    selectAllMode = true;
+    anchorIndex = null;
   }
 
   // ── paged table (ALL TRACKS / REMOTE TRACKS) ─────────────────────────────
@@ -505,11 +526,13 @@
   );
   const windowRows = $derived(displayed.slice(windowStart, windowEnd));
 
-  // Any view/search change starts back at the top of the list.
+  // Any view/search change starts back at the top of the list and leaves the
+  // virtual SELECT ALL mode (ids are view-relative).
   $effect(() => {
     void selection;
     void searchResults;
     scrollTop = 0;
+    selectAllMode = false;
     if (rowsEl) rowsEl.scrollTop = 0;
   });
 
@@ -524,6 +547,9 @@
     if (selectedIds.size === 0) return [];
     return displayed.filter((t) => selectedIds.has(t.id));
   });
+
+  /** Rows covered by the current selection (virtual SELECT ALL included). */
+  const selectedCount = $derived(selectAllMode ? displayedTotal : selectedMetas.length);
 
   // A blocking message replaces the table only when the current view failed.
   const viewError = $derived.by(() => {
@@ -1155,8 +1181,11 @@
     if (rows.length > 0) onenqueue(toMetas(rows));
   }
 
-  function enqueueSelected(): void {
-    if (selectedMetas.length > 0) onenqueue(selectedMetas.map(toMeta));
+  async function enqueueSelected(): Promise<void> {
+    // SELECT ALL covers rows that were never loaded into the table; fetch
+    // the full filtered set only when the action actually needs it.
+    const rows = selectAllMode ? await allRowsForAction() : selectedMetas;
+    if (rows.length > 0) onenqueue(toMetas(rows));
   }
 
   async function playAll(): Promise<void> {
@@ -1229,7 +1258,7 @@
       <button onclick={() => void enqueueAll()} disabled={displayedTotal === 0 || actionBusy} title="append every track in view">ENQUEUE ALL</button>
       <button
         onclick={enqueueSelected}
-        disabled={selectedMetas.length === 0}
+        disabled={selectedCount === 0 || actionBusy}
         title="append the selected tracks">ENQUEUE SEL</button>
       <button onclick={() => void playAll()} disabled={displayedTotal === 0 || actionBusy} title="append and start playing">PLAY ALL</button>
     </div>
@@ -1390,6 +1419,7 @@
                   title={`${p.songCount} track${p.songCount === 1 ? "" : "s"} on the server`}
                   onclick={() => {
                     selectedIds = new Set(); // playlist rows use ephemeral ids
+                    selectAllMode = false;
                     select({ kind: "playlist", value: p.id });
                   }}>{p.name}</button>
                 <span class="cnt">{p.songCount}</span>
@@ -1522,9 +1552,9 @@
             {#each windowRows as t, i (t.id)}
               <div
                 class="trow"
-                class:selected={selectedIds.has(t.id)}
+                class:selected={isRowSelected(t)}
                 role="option"
-                aria-selected={selectedIds.has(t.id)}
+                aria-selected={isRowSelected(t)}
                 tabindex="-1"
                 title={t.path}
                 onpointerdown={(e) => rowDown(e, windowStart + i)}
@@ -1598,11 +1628,15 @@
       </span>
     {/if}
     <span class="totals">{footerText}</span>
-    {#if displayed.length > 0 && selectedIds.size > 0}
-      <span class="selnote">{selectedIds.size.toLocaleString()} selected</span>
+    {#if selectedCount > 0}
+      <span class="selnote">{selectedCount.toLocaleString()} selected</span>
     {/if}
-    <button class="selall" onclick={selectAllView} disabled={displayed.length === 0}
-      title="select the loaded rows">SELECT ALL</button>
+    <button class="selall" onclick={selectAllView} disabled={displayedTotal === 0}
+      title={selectAllMode
+        ? "clear the selection"
+        : `select all ${displayedTotal.toLocaleString()} tracks in this view`}>
+      {selectAllMode ? "DESELECT ALL" : "SELECT ALL"}
+    </button>
   </footer>
 
   {#if editing}

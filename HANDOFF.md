@@ -83,18 +83,22 @@
 - svelte-check is clean (0 errors). The old 14-diagnostic baseline was a
   variable named `state` colliding with the `$state` rune (parsed as a store
   subscription); renamed to `audio`, plus InvokeArgs typings.
-- Paged views: SELECT ALL selects the loaded rows only; shift-range
-  selection is limited to loaded rows (a select-all-by-filter command is a
-  future addition). The tree renders 200-row slices but is not virtualized,
-  so a deep scroll through thousands of albums still builds DOM rows.
+- SELECT ALL is view-wide: in paged views it covers every row matching the
+  view (not just the loaded pages), and ENQUEUE SEL fetches the full filtered
+  set on demand. Any explicit row click leaves the virtual all-mode; clicking
+  SELECT ALL again (DESELECT ALL) clears it.
+- Paged views: shift-range selection is limited to loaded rows. Deselecting a
+  single row out of a 20k-row SELECT ALL isn't representable, so a row click
+  replaces the virtual selection. The tree renders 200-row slices but is not
+  virtualized, so a deep scroll through thousands of albums still builds DOM
+  rows.
 
 ## Next up
 
 1. True multi-server aggregation (rows from several servers at once; needs a
    server identity in track paths and per-server routing).
 2. Tree virtualization (deep album/artist scrolling still builds rows).
-3. SELECT ALL by filter (paged views currently select loaded rows only).
-4. AUTO per-track/artist associations (genre matching ships today).
+3. AUTO per-track/artist associations (genre matching ships today).
 
 ## Known follow-ups / deferred
 
