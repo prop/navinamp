@@ -1,17 +1,21 @@
 # NaVinaMP — current status & next steps
 
 > Handoff note for the next development session. Last updated: 2026-11-02,
-> after v0.7.0.
+> after v0.8.0.
 
 ## State
 
-- All six roadmap milestones shipped. Latest release: **v0.7.0**
-  (dmg on the Releases page; see the release-runner gotcha below).
+- All six roadmap milestones shipped. Latest release: **v0.8.0**
+  (dmg on the Releases page; built successfully by the cached self-hosted
+  runner — see the release-runner gotcha below).
 - Test suites: 25+ green across five crates + frontend. Clippy/fmt clean.
 - Four windows: player (skinned), playlist editor, media library, EQ.
 
 ## Just shipped (v0.5.0 + master since)
 
+- **v0.8.0**: per-server Navidrome playlists + publish-target picker, sticky
+  A–Z tree rails, the EQ AUTO curve manager, EQ clipping/headroom fix with
+  Bass Boost, selection-aware row context menus and global Always on Top.
 - M4A/AAC playback (decoder priming for undeclared channel layouts)
 - Classic Winamp 2 `.wsz` skin support (base-2.91 renders)
 - Bitmap-glyph fonts (text.bmp/numbers.bmp), pledit.txt colors in the PE
@@ -147,10 +151,10 @@
 
 ## Next up
 
-1. Cut 0.8.0 (release-please PR #7: multi-server playlists/publishing, A–Z
-   rails, EQ curve manager) and watch the cached release runner.
-2. Optional: show the automatic EQ headroom in the panel (currently computed
+1. Optional: show the automatic EQ headroom in the panel (currently computed
    silently) and offer a “match loudness” hint.
+2. Signing + auto-updater when the Apple membership is available (deferred
+   today; see the known follow-ups).
 
 ## Known follow-ups / deferred
 
@@ -180,15 +184,16 @@
 - Deleting/re-pushing a release tag can detach the GitHub Release into an
   untagged draft. Re-publish it with
   `gh release edit vX.Y.Z --draft=false --tag vX.Y.Z`.
-- Self-hosted mac-mini release builds: the 2014 2-core/8 GB mini can't
-  sustain a cold tauri release build — rustc starves the runner, its
-  heartbeat stalls for 10+ minutes, GitHub cancels the job (later
-  `CompleteJob` returns "job not found") while local rustc keeps running.
-  `ci.yml` now caches the release target and caps `CARGO_BUILD_JOBS=2`. If a
-  tag job still fails this way, build locally:
+- Self-hosted mac-mini release builds: a cold tauri release build can
+  starve the 2014 2-core/8 GB runner — rustc stalls its heartbeat for 10+
+  minutes and GitHub cancels the job (later `CompleteJob` returns "job not
+  found"). `ci.yml` caches the release target and caps
+  `CARGO_BUILD_JOBS=2`; v0.8.0 built, packaged and uploaded on the runner
+  in ~16 minutes this way. v0.7.0 predated the cache and needed a local
+  build. If a tag job still stalls, build locally:
   `CARGO_BUILD_JOBS=2 npm run tauri build -- --bundles app`, package with
   the workflow's `hdiutil` command, and
-  `gh release upload vX.Y.Z <dmg> --clobber`. v0.7.0's dmg was made this way.
+  `gh release upload vX.Y.Z <dmg> --clobber`.
 - Empty-string GitHub secrets reach the Tauri CLI and break signing —
   the release job filters them (see ci.yml "Prepare signing environment").
 - Session resumption: OpenCode sessions live on this machine
