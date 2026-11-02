@@ -16,6 +16,8 @@
 - **v0.8.0**: per-server Navidrome playlists + publish-target picker, sticky
   A–Z tree rails, the EQ AUTO curve manager, EQ clipping/headroom fix with
   Bass Boost, selection-aware row context menus and global Always on Top.
+- Post-v0.8.0 master: the equalizer's automatic headroom is now visible as a
+  live `auto headroom −X.X dB` readout.
 - M4A/AAC playback (decoder priming for undeclared channel layouts)
 - Classic Winamp 2 `.wsz` skin support (base-2.91 renders)
 - Bitmap-glyph fonts (text.bmp/numbers.bmp), pledit.txt colors in the PE
@@ -91,7 +93,10 @@
   into a +30 dB spike; Rock's headroom is now ~-13 dB instead of ~-28 dB.
   Volume sits after the EQ, so loudness can be raised back without
   reintroducing distortion. “Bass Boost” (+6/+5/+4/+2 at 60–600 Hz) was
-  added to the preset table.
+  added to the preset table. The panel now shows the computed attenuation
+  (`auto headroom −X.X dB`) under the response graph and dims it while the
+  EQ is bypassed; `eq_headroom` is stateless (the UI sends the displayed
+  bands) so the readout tracks preset applies and slider releases exactly.
 - Navidrome library selection: `getMusicFolders` lists the user's libraries,
   the selected id (`libraryId`) persists in `navidrome.json` and scopes the
   sync walk via `musicFolderId`; Navidrome Settings has an all-libraries /
@@ -151,10 +156,9 @@
 
 ## Next up
 
-1. Optional: show the automatic EQ headroom in the panel (currently computed
-   silently) and offer a “match loudness” hint.
-2. Signing + auto-updater when the Apple membership is available (deferred
+1. Signing + auto-updater when the Apple membership is available (deferred
    today; see the known follow-ups).
+2. Nothing else queued — next batch is a 0.8.1 release.
 
 ## Known follow-ups / deferred
 

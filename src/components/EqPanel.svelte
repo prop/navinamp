@@ -20,6 +20,7 @@
   import {
     EQ_BAND_COUNT,
     eqDeletePreset,
+    eqHeadroom,
     eqPresets,
     eqSavePreset,
     eqSetBand,
@@ -65,6 +66,9 @@
   let presetBusy = $state(false);
   let available = $state(false);
   let error = $state<string | null>(null);
+  /** Auto attenuation readout in dB (0 or negative); null until queried. */
+  let headroomDb = $state<number | null>(null);
+  let headroomSeq = 0;
 
   // ── AUTO CURVES manager (library window only) ────────────────────────────
   // Reads the same localStorage associations the context menus write. Track
@@ -109,8 +113,23 @@
       bandsDb = normalize(s.bandsDb);
       available = true;
       error = null;
+      void syncHeadroom();
     } catch (e) {
       note(e);
+    }
+  }
+
+  /**
+   * Refresh the auto-headroom readout. A sequence guard keeps a slow reply
+   * from overwriting a newer curve's value; a missing command hides the line.
+   */
+  async function syncHeadroom(bands: number[] = bandsDb): Promise<void> {
+    const seq = ++headroomSeq;
+    try {
+      const db = await eqHeadroom(bands);
+      if (seq === headroomSeq) headroomDb = Number.isFinite(db) ? db : null;
+    } catch {
+      if (seq === headroomSeq) headroomDb = null;
     }
   }
 
@@ -229,6 +248,7 @@
     }
     curveError = null;
     curveNote = "applied to the live EQ";
+    void syncHeadroom();
   }
 
   async function deleteTrackCurve(entry: EqTrackEntry): Promise<void> {
@@ -286,6 +306,7 @@
       enabled = true;
       eqSetEnabled(true).catch(note);
     }
+    void syncHeadroom();
   }
 
   async function savePreset(): Promise<void> {
@@ -379,6 +400,7 @@
       eqSetPreamp(db).catch(note);
     } else {
       setBand(kind, db);
+      void syncHeadroom();
     }
   }
 
@@ -543,6 +565,18 @@
     height={SPARK_H}
     title="approximate frequency response (band gains only)"
   ></canvas>
+
+  {#if headroomDb != null}
+    <div
+      class="headroom"
+      class:off={!enabled}
+      title="automatic attenuation applied before the EQ so boosted curves cannot clip; the volume control sits after it and can raise the result back">
+      <span>auto headroom</span>
+      <span class="hrval" class:cut={headroomDb < -0.05}>
+        {headroomDb > -0.05 ? "0.0" : headroomDb.toFixed(1)} dB
+      </span>
+    </div>
+  {/if}
 
   {#if manageCurves}
     <div class="curves">
@@ -810,6 +844,29 @@
     background: #0b0b0f;
     border: 1px solid #26262e;
     border-radius: 2px;
+  }
+
+  .headroom {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: -0.35rem;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: #707070;
+  }
+
+  .headroom.off {
+    opacity: 0.45;
+  }
+
+  .headroom .hrval {
+    color: #3ccb4e;
+  }
+
+  .headroom .hrval.cut {
+    color: #d8a63c;
   }
 
   /* ── AUTO CURVES manager ── */

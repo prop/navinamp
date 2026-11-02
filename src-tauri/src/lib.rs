@@ -55,6 +55,7 @@ pub fn run() {
             audio::audio_set_volume,
             audio::audio_state,
             audio::eq_state,
+            audio::eq_headroom,
             audio::eq_set_enabled,
             audio::eq_set_preamp,
             audio::eq_set_band,

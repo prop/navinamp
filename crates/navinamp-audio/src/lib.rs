@@ -116,6 +116,7 @@ mod sink_cpal;
 mod sink_test;
 mod spectrum;
 
+pub use dsp::auto_headroom_db;
 pub use eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_RANGE_DB, EqPreset, EqState, eq_presets};
 pub use error::AudioError;
 pub use shared::{PlaybackStatus, TrackMetadata};

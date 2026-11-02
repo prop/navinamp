@@ -433,6 +433,19 @@ pub fn eq_state(state: State<'_, Audio>) -> EqState {
     }
 }
 
+/// Automatic headroom attenuation for `bands_db`, in dB (≤ 0).
+///
+/// Stateless: the panel sends the curve it is displaying, so the readout
+/// updates immediately without waiting for the per-band IPC commands. The
+/// nominal 48 kHz grid is effectively identical to 44.1 kHz across the
+/// audible band; positive preamp is an explicit user gain and is not
+/// compensated.
+#[tauri::command]
+pub fn eq_headroom(bands_db: Vec<f32>, sample_rate_hz: Option<u32>) -> f32 {
+    let bands = normalize_bands(&bands_db);
+    navinamp_audio::auto_headroom_db(&bands, sample_rate_hz.unwrap_or(48_000))
+}
+
 #[tauri::command]
 pub fn eq_set_enabled(state: State<'_, Audio>, enabled: bool) -> Result<(), String> {
     state.eq.lock().unwrap().enabled = enabled;

@@ -218,21 +218,7 @@ impl DspChain {
     /// log-spaced grid covering the audible band. Called on parameter
     /// changes only (≈2.5k evaluations, no allocation).
     fn composite_peak_db(&self) -> f32 {
-        let f_min = 20.0f32;
-        let f_max = (self.sample_rate as f32 * 0.45).min(20_000.0);
-        let ratio = f_max / f_min;
-        let mut peak = 0.0f32;
-        for i in 0..HEADROOM_POINTS {
-            let t = i as f32 / (HEADROOM_POINTS - 1) as f32;
-            let freq = f_min * ratio.powf(t);
-            let w = std::f32::consts::TAU * freq / self.sample_rate as f32;
-            let mut magnitude = 1.0f32;
-            for band in self.bands.iter() {
-                magnitude *= band.magnitude(w);
-            }
-            peak = peak.max(magnitude);
-        }
-        20.0 * peak.max(1e-9).log10()
+        composite_peak_db(&self.bands, self.sample_rate)
     }
 }
 
@@ -322,6 +308,51 @@ impl DspChain {
 const HEADROOM_POINTS: usize = 256;
 /// Extra attenuation below full scale to absorb filter/intersample overshoot.
 const HEADROOM_MARGIN_DB: f32 = 1.0;
+
+/// Worst-case magnitude of a cascade of peaking bands, in dB, over a
+/// log-spaced grid covering the audible band.
+fn composite_peak_db(bands: &[EqBand], sample_rate: u32) -> f32 {
+    let f_min = 20.0f32;
+    let f_max = (sample_rate as f32 * 0.45).min(20_000.0);
+    let ratio = f_max / f_min;
+    let mut peak = 0.0f32;
+    for i in 0..HEADROOM_POINTS {
+        let t = i as f32 / (HEADROOM_POINTS - 1) as f32;
+        let freq = f_min * ratio.powf(t);
+        let w = std::f32::consts::TAU * freq / sample_rate as f32;
+        let mut magnitude = 1.0f32;
+        for band in bands {
+            magnitude *= band.magnitude(w);
+        }
+        peak = peak.max(magnitude);
+    }
+    20.0 * peak.max(1e-9).log10()
+}
+
+/// Automatic attenuation (dB, ≤ 0) applied before the EQ for `bands_db` at
+/// `sample_rate`, including the safety margin.
+///
+/// This mirrors the DSP chain's headroom calculation for the UI readout; the
+/// chain itself uses the live output rate, while the panel may query before a
+/// stream exists (the audible-band response is effectively rate-independent).
+pub fn auto_headroom_db(bands_db: &[f32; EQ_BAND_COUNT], sample_rate: u32) -> f32 {
+    let bands: [EqBand; EQ_BAND_COUNT] = std::array::from_fn(|index| {
+        let mut band = EqBand::new(1);
+        band.set_peaking(
+            bands_db[index],
+            EQ_BAND_FREQUENCIES_HZ[index],
+            sample_rate,
+            EQ_BAND_Q[index],
+        );
+        band
+    });
+    let peak_db = composite_peak_db(&bands, sample_rate);
+    if peak_db > 0.0 {
+        -(peak_db + HEADROOM_MARGIN_DB)
+    } else {
+        0.0
+    }
+}
 
 /// dB → linear amplitude.
 fn db_to_gain(db: f32) -> f32 {
@@ -456,6 +487,27 @@ mod tests {
             (ratio_db + f64::from(HEADROOM_MARGIN_DB)).abs() <= 1.0,
             "compensated 1 kHz gain {ratio_db:.2} dB (want ≈ -{HEADROOM_MARGIN_DB})"
         );
+    }
+
+    #[test]
+    fn headroom_readout_matches_the_chain() {
+        let flat = [0.0f32; EQ_BAND_COUNT];
+        assert_eq!(auto_headroom_db(&flat, RATE), 0.0);
+        for preset in crate::eq::eq_presets() {
+            let (mut dsp, eq, _) = chain();
+            eq.set_enabled(true);
+            for (i, db) in preset.bands_db.iter().enumerate() {
+                eq.set_band_db(i, *db);
+            }
+            dsp.refresh_eq();
+            let chain_db = 20.0 * dsp.auto_gain.log10();
+            let readout = auto_headroom_db(&preset.bands_db, RATE);
+            assert!(
+                (chain_db - readout).abs() < 0.05,
+                "{}: chain {chain_db:.2} dB vs readout {readout:.2} dB",
+                preset.name
+            );
+        }
     }
 
     #[test]

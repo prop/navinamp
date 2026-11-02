@@ -65,6 +65,18 @@ export function eqState(): Promise<EqState> {
   return invoke<EqState>("eq_state");
 }
 
+/**
+ * Automatic headroom attenuation for the given bands, in dB (≤ 0).
+ * Stateless, so the panel's readout matches the curve it is showing without
+ * waiting for the per-band IPC writes to land.
+ */
+export function eqHeadroom(
+  bandsDb: number[],
+  sampleRateHz = 48_000,
+): Promise<number> {
+  return invoke<number>("eq_headroom", { bandsDb, sampleRateHz });
+}
+
 /** Enable / bypass the EQ chain. */
 export function eqSetEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("eq_set_enabled", { enabled });
