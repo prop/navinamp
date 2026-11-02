@@ -184,11 +184,34 @@ pub struct SearchResults {
     pub albums: Vec<AlbumSummary>,
 }
 
+/// Navidrome encodes music-folder ids as JSON numbers (e.g. `1`), while the
+/// Subsonic spec and other servers use strings. Accept both and normalize to
+/// a string (the form the rest of the app persists and sends back).
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        String(String),
+        Signed(i64),
+        Unsigned(u64),
+    }
+
+    Ok(match StringOrNumber::deserialize(deserializer)? {
+        StringOrNumber::String(s) => s,
+        StringOrNumber::Signed(n) => n.to_string(),
+        StringOrNumber::Unsigned(n) => n.to_string(),
+    })
+}
+
 /// One music library (music folder) accessible to the user. Navidrome's
 /// multi-library feature maps each library to one of these.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MusicFolder {
+    #[serde(deserialize_with = "deserialize_string_or_number")]
     pub id: String,
     #[serde(default)]
     pub name: String,

@@ -273,7 +273,7 @@ async fn music_folders_parse_the_multi_library_index() {
         "getMusicFolders",
         ok_response(json!({
             "musicFolders": { "musicFolder": [
-                { "id": "1", "name": "Music" },
+                { "id": 1, "name": "Music" },
                 { "id": "2", "name": "Audiobooks" }
             ]}
         })),
