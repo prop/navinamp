@@ -1,12 +1,12 @@
 # NaVinaMP — current status & next steps
 
 > Handoff note for the next development session. Last updated: 2026-11-02,
-> after v0.6.0.
+> after v0.7.0.
 
 ## State
 
-- All six roadmap milestones shipped. Latest release: **v0.6.0**
-  (dmg on the Releases page; CI builds it automatically on `v*` tags).
+- All six roadmap milestones shipped. Latest release: **v0.7.0**
+  (dmg on the Releases page; see the release-runner gotcha below).
 - Test suites: 25+ green across five crates + frontend. Clippy/fmt clean.
 - Four windows: player (skinned), playlist editor, media library, EQ.
 
@@ -143,6 +143,18 @@
 - `GITHUB_TOKEN`-created tags don't fire CI. After merging a release PR,
   push the tag from a local checkout:
   `git push origin :refs/tags/vX.Y.Z 2>/dev/null; git push origin vX.Y.Z`
+- Deleting/re-pushing a release tag can detach the GitHub Release into an
+  untagged draft. Re-publish it with
+  `gh release edit vX.Y.Z --draft=false --tag vX.Y.Z`.
+- Self-hosted mac-mini release builds: the 2014 2-core/8 GB mini can't
+  sustain a cold tauri release build — rustc starves the runner, its
+  heartbeat stalls for 10+ minutes, GitHub cancels the job (later
+  `CompleteJob` returns "job not found") while local rustc keeps running.
+  `ci.yml` now caches the release target and caps `CARGO_BUILD_JOBS=2`. If a
+  tag job still fails this way, build locally:
+  `CARGO_BUILD_JOBS=2 npm run tauri build -- --bundles app`, package with
+  the workflow's `hdiutil` command, and
+  `gh release upload vX.Y.Z <dmg> --clobber`. v0.7.0's dmg was made this way.
 - Empty-string GitHub secrets reach the Tauri CLI and break signing —
   the release job filters them (see ci.yml "Prepare signing environment").
 - Session resumption: OpenCode sessions live on this machine
