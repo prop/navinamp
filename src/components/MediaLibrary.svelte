@@ -556,12 +556,21 @@
    */
   let selectAllMode = $state(false);
 
+  // macOS ctrl+click IS the right-click: the webview delivers it as
+  // pointerdown(button=0, ctrlKey) followed by contextmenu. Treated as a
+  // selection toggle it would delete the clicked row from the selection
+  // right before openRowMenu() sees it — collapsing a multi-selection to
+  // that one row (#24). Multi-select toggle on macOS stays cmd+click.
+  const IS_MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
+
   function isRowSelected(t: Track): boolean {
     return selectAllMode || selectedIds.has(t.id);
   }
 
   function rowDown(e: PointerEvent, index: number): void {
     if (e.button !== 0) return;
+    // macOS right-click gesture: openRowMenu owns the selection for it.
+    if (IS_MAC && e.ctrlKey) return;
     const id = displayed[index]?.id;
     if (id == null) return;
     selectAllMode = false;
