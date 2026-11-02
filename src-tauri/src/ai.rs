@@ -27,8 +27,12 @@ const MAX_TOOL_CALLS: usize = 4;
 const MAX_CATALOG: usize = 400;
 /// Keep each tool payload small: the UI gets the full release objects, but the
 /// model only needs enough titles to reason and the pagination block.
-const MODEL_RESULTS_PER_CALL: usize = 25;
-const CONTEXT_CHARS: usize = 10_000;
+const MODEL_RESULTS_PER_CALL: usize = 10;
+/// Cap for the library digest (not the whole conversation).
+const LIBRARY_DIGEST_CHARS: usize = 10_000;
+/// Running character budget for the provider request. Older Discogs pages are
+/// pruned, and further lookups stop once the request approaches this size.
+const REQUEST_CHARS_BUDGET: usize = 24_000;
 const USER_AGENT: &str = "NaVinaMP/0.9 (+https://github.com/prop/navinamp)";
 
 /// Persisted AI settings. Plaintext, like `navidrome.json` (a keyring backend
@@ -302,6 +306,21 @@ impl DiscogsRelease {
     }
 }
 
+/// Normalize the model's `kind` (case-insensitive, unknown → release).
+fn normalized_kind(kind: &str) -> &'static str {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "master" => "master",
+        "artist" => "artist",
+        _ => "release",
+    }
+}
+
+/// Stable key for a filter set; page/per_page are deliberately excluded so
+/// paging one query does not create a second catalog-total entry.
+fn query_key(query: &DiscogsQuery) -> String {
+    format!("{}|{}", normalized_kind(&query.kind), query.describe())
+}
+
 /// One tool-call outcome: full catalog entries for the UI and a compact
 /// payload for the model.
 struct DiscogsLookup {
@@ -380,25 +399,26 @@ pub async fn ai_search(
     let mut discogs_error: Option<String> = None;
 
     for _ in 0..MAX_HOPS {
+        trim_tool_messages(&mut messages, REQUEST_CHARS_BUDGET);
         let text = navinamp_llm::chat(&llm, &messages)
             .await
             .map_err(|e| config.scrubbed(e))?;
         match parse_reply(&text) {
             Ok(Reply::Discogs(query)) if tool_calls < MAX_TOOL_CALLS as u32 => {
+                if conversation_chars(&messages) + 2_000 > REQUEST_CHARS_BUDGET {
+                    messages.push(ChatMessage::assistant(text));
+                    messages.push(ChatMessage::user(
+                        "The context budget is reached. Finish now with the final JSON; \
+                         use \"def\": null if this is a catalog-only answer.",
+                    ));
+                    continue;
+                }
                 tool_calls += 1;
                 let described = query.describe();
-                let query_key = format!(
-                    "{}|{}",
-                    match query.kind.as_str() {
-                        "master" => "master",
-                        "artist" => "artist",
-                        _ => "release",
-                    },
-                    described
-                );
+                let key = query_key(&query);
                 match discogs_search(&config, &query).await {
                     Ok(lookup) => {
-                        let entry = catalog_totals.entry(query_key).or_insert(0);
+                        let entry = catalog_totals.entry(key).or_insert(0);
                         *entry = (*entry).max(lookup.total);
                         for release in lookup.releases {
                             if catalog.len() >= MAX_CATALOG {
@@ -420,6 +440,7 @@ pub async fn ai_search(
                              For a catalog-only answer set \"def\": null.",
                             lookup.model_payload
                         )));
+                        trim_tool_messages(&mut messages, REQUEST_CHARS_BUDGET);
                     }
                     Err(e) => {
                         let clean_error = config.scrubbed(e);
@@ -674,6 +695,35 @@ fn with_discogs_note(explanation: String, error: &Option<String>) -> String {
     }
 }
 
+/// Approximate request size in characters (a proxy for tokens).
+fn conversation_chars(messages: &[ChatMessage]) -> usize {
+    messages.iter().map(|m| m.content.chars().count()).sum()
+}
+
+/// Keep the request inside `budget` by replacing older Discogs payloads with
+/// a marker. The newest page stays intact so the model can act on it.
+fn trim_tool_messages(messages: &mut [ChatMessage], budget: usize) {
+    if conversation_chars(messages) <= budget {
+        return;
+    }
+    let tool_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.content.starts_with("Discogs results for"))
+        .map(|(i, _)| i)
+        .collect();
+    for &index in tool_indices
+        .iter()
+        .take(tool_indices.len().saturating_sub(1))
+    {
+        if conversation_chars(messages) <= budget {
+            break;
+        }
+        messages[index].content =
+            "Earlier Discogs page omitted to stay within the context budget.".into();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Prompt construction
 // ---------------------------------------------------------------------------
@@ -801,8 +851,8 @@ fn build_context(
     out.push_str("\nArtists (sampled): ");
     out.push_str(&sample_join(artists, 250));
     out.push('\n');
-    if out.chars().count() > CONTEXT_CHARS {
-        out = out.chars().take(CONTEXT_CHARS).collect();
+    if out.chars().count() > LIBRARY_DIGEST_CHARS {
+        out = out.chars().take(LIBRARY_DIGEST_CHARS).collect();
     }
     out
 }
@@ -1014,11 +1064,7 @@ async fn discogs_search(config: &AiConfig, query: &DiscogsQuery) -> Result<Disco
                 .into(),
         );
     }
-    let kind = match query.kind.as_str() {
-        "master" => "master",
-        "artist" => "artist",
-        _ => "release",
-    };
+    let kind = normalized_kind(&query.kind);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(USER_AGENT)
@@ -1068,8 +1114,8 @@ async fn discogs_search(config: &AiConfig, query: &DiscogsQuery) -> Result<Disco
         parsed.results.len() as u32
     };
     let releases: Vec<DiscogsRelease> = parsed.results.into_iter().map(release_from_item).collect();
-    let shown = releases.len().min(MODEL_RESULTS_PER_CALL);
     let model_results = project_results(&releases, MODEL_RESULTS_PER_CALL);
+    let shown = model_results.len();
     let response_page = if parsed.pagination.page > 0 {
         parsed.pagination.page
     } else {
@@ -1335,5 +1381,41 @@ mod tests {
     fn prompt_reports_discogs_availability() {
         assert!(system_prompt(true).contains("Discogs catalog lookup is configured"));
         assert!(system_prompt(false).contains("NOT configured"));
+    }
+
+    #[test]
+    fn query_key_is_stable_across_pages_and_kind_case() {
+        let query = DiscogsQuery::from_value(&json!({
+            "label": "Nordcore",
+            "format": "Vinyl",
+            "page": 1,
+            "per_page": 100
+        }));
+        let first = query_key(&query);
+        let mut second_page = query.clone();
+        second_page.page = 2;
+        assert_eq!(first, query_key(&second_page));
+
+        let mut uppercase = query.clone();
+        uppercase.kind = "Master".into();
+        let uppercase_key = query_key(&uppercase);
+        uppercase.kind = "master".into();
+        assert_eq!(uppercase_key, query_key(&uppercase));
+
+        let mut different = query;
+        different.label = "Other".into();
+        assert_ne!(first, query_key(&different));
+    }
+
+    #[test]
+    fn older_discogs_payloads_are_pruned_to_the_budget() {
+        let mut messages = vec![
+            ChatMessage::system("system"),
+            ChatMessage::user("Discogs results for a:\nold page"),
+            ChatMessage::user("Discogs results for b:\nnew page"),
+        ];
+        trim_tool_messages(&mut messages, 10);
+        assert!(messages[1].content.contains("omitted"));
+        assert!(messages[2].content.contains("new page"));
     }
 }
