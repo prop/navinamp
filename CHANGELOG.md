@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/prop/navinamp/compare/v0.8.0...v0.9.0) (2026-11-02)
+
+
+### Features
+
+* **eq:** show the automatic headroom readout ([447afca](https://github.com/prop/navinamp/commit/447afca78475037b8d3a4ead38e1f161e30ce687))
+* **search:** backend for advanced and AI search ([94e1541](https://github.com/prop/navinamp/commit/94e1541c267a4fda8b67344bc778f43027664921))
+* **search:** three-mode search UI with AI and Discogs ([3b3effe](https://github.com/prop/navinamp/commit/3b3effef042ef3553870c12d225bcb525b229404))
+
+
+### Bug Fixes
+
+* **player:** wire skin shuffle/repeat toggles to the queue ([#21](https://github.com/prop/navinamp/issues/21)) ([82f0833](https://github.com/prop/navinamp/commit/82f083304e27e603ab438aaaa0f89269c4b4cfdd)), closes [#20](https://github.com/prop/navinamp/issues/20)
+
 ## [0.8.0](https://github.com/prop/navinamp/compare/v0.7.0...v0.8.0) (2026-11-02)
 
 
