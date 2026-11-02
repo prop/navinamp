@@ -95,6 +95,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      # A cold tauri release build on the 8 GB mac mini takes ~60 minutes and
+      # starves the runner (GitHub cancels after ~11 min of missed heartbeats).
+      # Cache the release target so tag builds are incremental.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
       - name: Prepare App Store Connect API key (if configured)
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
@@ -164,6 +171,10 @@ jobs:
         # times out on this headless launchd runner (AppleEvent -1712).
         # Signing/notarization env vars arrive via GITHUB_ENV from the
         # prepare step above — only non-empty values are exported.
+        # Two jobs keeps the 2-core/8 GB mini responsive enough for the
+        # runner's heartbeat while rustc works (4 parallel jobs starve it).
+        env:
+          CARGO_BUILD_JOBS: 2
         run: npm ci && npm run tauri build -- --bundles app
 
       - name: Package dmg (headless-safe hdiutil)
