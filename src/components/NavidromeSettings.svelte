@@ -6,7 +6,7 @@
    *
    * The panel owns its status snapshot: it loads `navidrome_status` on
    * mount, re-reads it whenever `navidrome-synced` fires, and reports its
-   * own mutations (connect/disconnect/set-streaming) through `onchanged`
+   * own mutations (connect/switch/remove/set-streaming) through `onchanged`
    * so the Media Library's SERVER STATUS node can refresh in step.
    *
    * The password field is `type="password"`, cleared right after a
@@ -18,7 +18,6 @@
   import { friendlyIpcError } from "../lib/library/ipc";
   import {
     navidromeConnect,
-    navidromeDisconnect,
     navidromeLibraries,
     navidromeProfiles,
     navidromeRemoveProfile,
@@ -37,7 +36,7 @@
 
   interface Props {
     onclose: () => void;
-    /** Notify the host that status changed (connect/disconnect/prefs). */
+    /** Notify the host that status changed (connect/switch/prefs). */
     onchanged?: () => void;
     onlog?: (line: string) => void;
   }
@@ -61,7 +60,6 @@
   let nameInput = $state("");
   let formError = $state<string | null>(null);
   let connecting = $state(false);
-  let disconnecting = $state(false);
 
   let formatSel = $state<StreamFormat>("original");
   let bitrateRaw = $state("");
@@ -85,9 +83,6 @@
       if (seq !== statusSeq) return;
       status = s;
       statusError = null;
-      // Prefill the form only where the user has not typed anything yet.
-      if (url === "") url = s.url ?? "";
-      if (user === "") user = s.user ?? "";
       if (!prefsHydrated) hydratePrefs(s);
     } catch (e) {
       if (seq !== statusSeq) return;
@@ -121,8 +116,51 @@
     };
   });
 
+  function resetForm(): void {
+    url = "";
+    user = "";
+    password = "";
+    nameInput = "";
+    formError = null;
+  }
+
+  /** Saved profile matching the typed url+user (same normalization as the
+   *  backend: trimmed user, trailing slashes dropped from the url). */
+  const formMatch = $derived.by((): NavidromeProfile | null => {
+    const candidateUrl = url.trim().replace(/\/+$/, "");
+    const candidateUser = user.trim();
+    if (candidateUrl === "" || candidateUser === "") return null;
+    return (
+      profiles.find(
+        (p) => p.url.replace(/\/+$/, "") === candidateUrl && p.user === candidateUser,
+      ) ?? null
+    );
+  });
+
+  const formTitle = $derived(
+    formMatch == null ? "+ ADD SERVER" : formMatch.active ? "RECONNECT" : "UPDATE SERVER",
+  );
+
+  const formCta = $derived(
+    connecting
+      ? "CONNECTING…"
+      : formMatch == null
+        ? "ADD & CONNECT"
+        : formMatch.active
+          ? "RECONNECT"
+          : "UPDATE & RECONNECT",
+  );
+
+  const formHint = $derived(
+    formMatch == null
+      ? "saves the server and switches to it — the current server stays in the list"
+      : formMatch.active
+        ? "reconnects to the active server with these credentials"
+        : "updates this saved server and switches to it; its tracks re-sync",
+  );
+
   async function connect(): Promise<void> {
-    if (connecting || disconnecting) return;
+    if (connecting) return;
     if (url.trim() === "" || user.trim() === "" || password === "") {
       formError = "server URL, user and password are all required";
       return;
@@ -137,8 +175,7 @@
         password,
         nameInput.trim() === "" ? null : nameInput.trim(),
       );
-      password = ""; // never kept around after a successful connect
-      nameInput = "";
+      resetForm(); // the next add starts clean, never from the last server
       if (status.profileId !== previousProfile) hydratePrefs(status);
       await refreshProfiles();
       onchanged?.();
@@ -154,35 +191,15 @@
     }
   }
 
-  async function disconnect(): Promise<void> {
-    if (disconnecting || connecting || status?.configured !== true) return;
-    disconnecting = true;
-    try {
-      status = await navidromeDisconnect();
-      formError = null;
-      prefsHydrated = false;
-      await refreshProfiles();
-      onchanged?.();
-      onlog?.("navidrome: disconnected the active server");
-    } catch (e) {
-      formError = friendlyIpcError("navidrome disconnect", e);
-    } finally {
-      disconnecting = false;
-    }
-  }
-
   async function switchProfile(id: string): Promise<void> {
-    if (switchingId || removingId || connecting || disconnecting) return;
+    if (switchingId || removingId || connecting) return;
     const profile = profiles.find((p) => p.id === id);
     switchingId = id;
     formError = null;
     try {
       status = await navidromeSwitch(id);
-      password = "";
-      nameInput = "";
+      resetForm();
       hydratePrefs(status);
-      if (status.url) url = status.url;
-      if (status.user) user = status.user;
       await refreshProfiles();
       onchanged?.();
       onlog?.(`navidrome: switched to ${profile?.name ?? id}`);
@@ -194,7 +211,8 @@
   }
 
   async function removeProfile(profile: NavidromeProfile): Promise<void> {
-    if (removingId || switchingId || connecting || disconnecting) return;
+    if (removingId || switchingId || connecting) return;
+    const inForm = formMatch?.id === profile.id;
     const question = profile.active
       ? `Remove “${profile.name}” and delete its synced tracks?`
       : `Remove the saved server “${profile.name}”?`;
@@ -206,6 +224,8 @@
       if (renamingId === profile.id) renamingId = null;
       if (profile.active) prefsHydrated = false;
       await refreshProfiles();
+      // The removed server's credentials must not linger in the add form.
+      if (inForm || profile.active) resetForm();
       onchanged?.();
       onlog?.(`navidrome: removed ${profile.name}`);
     } catch (e) {
@@ -351,7 +371,7 @@
         {#if profilesError}
           <div class="errline">{profilesError}</div>
         {:else if profiles.length === 0}
-          <div class="dim">no saved servers — add one below</div>
+          <div class="dim">no saved servers yet — add your first below</div>
         {:else}
           {#each profiles as profile (profile.id)}
             <div class="prow" class:active={profile.active}>
@@ -373,13 +393,15 @@
                 <div class="pinfo">
                   <b>{profile.name}</b>
                   {#if profile.active}<span class="pactive">● ACTIVE</span>{/if}
-                  <span class="purl">{profile.user} · {profile.url}</span>
+                  <span class="purl">
+                    {profile.user} · {profile.url} · last sync {fmtDate(profile.syncedAt)}
+                  </span>
                 </div>
                 <div class="pactions">
                   {#if !profile.active}
                     <button
                       onclick={() => void switchProfile(profile.id)}
-                      disabled={switchingId != null || connecting || disconnecting}>
+                      disabled={switchingId != null || connecting}>
                       {switchingId === profile.id ? "SWITCHING…" : "SWITCH"}
                     </button>
                   {/if}
@@ -396,7 +418,49 @@
             </div>
           {/each}
         {/if}
-        <div class="dim">switching servers re-syncs; only one is active at a time</div>
+        {#if profiles.length > 1}
+          <div class="dim">switching servers re-syncs; only one is active at a time</div>
+        {/if}
+
+        <div class="add">
+          <div class="addhdr">{formTitle}</div>
+          <label class="field">
+            url
+            <input
+              class="txt"
+              type="text"
+              placeholder="https://music.example.com"
+              bind:value={url} />
+          </label>
+          <label class="field">
+            name
+            <input
+              class="txt"
+              type="text"
+              placeholder="optional — defaults to user@host"
+              bind:value={nameInput} />
+          </label>
+          <label class="field">
+            user
+            <input class="txt" type="text" autocomplete="off" bind:value={user} />
+          </label>
+          <label class="field">
+            password
+            <input
+              class="txt"
+              type="password"
+              placeholder={formMatch ? "(re-enter to reconnect)" : ""}
+              autocomplete="new-password"
+              bind:value={password} />
+          </label>
+          <div class="btnrow">
+            <button class="primary" onclick={connect} disabled={connecting}>{formCta}</button>
+          </div>
+          <div class="dim">{formHint}</div>
+          {#if formError}
+            <div class="banner">{formError}</div>
+          {/if}
+        </div>
       </div>
 
       <div class="block">
@@ -406,7 +470,7 @@
         {:else if status == null}
           <div class="dim">loading…</div>
         {:else if !status.configured}
-          <div class="dim">not connected — add a server below</div>
+          <div class="dim">not connected — add or switch to a server above</div>
         {:else}
           <div class="state ok">● CONNECTED</div>
           <div class="kv"><span>profile</span><b>{status.profileLabel ?? status.profileId}</b></div>
@@ -446,43 +510,6 @@
           {#if libError}
             <div class="banner">{libError}</div>
           {/if}
-        {/if}
-      </div>
-
-      <div class="block">
-        <div class="bh">CONNECTION</div>
-        <label class="field">
-          url
-          <input class="txt" type="text" placeholder="https://music.example.com" bind:value={url} />
-        </label>
-        <label class="field">
-          name
-          <input class="txt" type="text" placeholder="optional — defaults to user@host" bind:value={nameInput} />
-        </label>
-        <label class="field">
-          user
-          <input class="txt" type="text" autocomplete="off" bind:value={user} />
-        </label>
-        <label class="field">
-          password
-          <input
-            class="txt"
-            type="password"
-            placeholder={configured ? "(re-enter to reconnect)" : ""}
-            autocomplete="new-password"
-            bind:value={password} />
-        </label>
-        <div class="btnrow">
-          <button class="primary" onclick={connect} disabled={connecting || disconnecting}>
-            {connecting ? "CONNECTING…" : "CONNECT"}
-          </button>
-          <button onclick={disconnect} disabled={!configured || connecting || disconnecting}>
-            {disconnecting ? "DISCONNECTING…" : "DISCONNECT"}
-          </button>
-        </div>
-        <div class="dim">disconnect removes only the active server; the others stay saved</div>
-        {#if formError}
-          <div class="banner">{formError}</div>
         {/if}
       </div>
 
@@ -599,6 +626,21 @@
     padding: 3px 4px;
     border: 1px solid #242424;
     background: #0b0b0b;
+  }
+
+  .add {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 3px;
+    padding-top: 6px;
+    border-top: 1px solid #242424;
+  }
+
+  .addhdr {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: #3ccb4e;
   }
 
   .prow.active {

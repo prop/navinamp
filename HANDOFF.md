@@ -78,6 +78,11 @@
   Publish mappings are keyed per server (`smart_view_playlists.server`), so
   switching back updates the same server playlist instead of duplicating;
   legacy mappings move to the single migrated profile on first boot.
+- Navidrome Settings UX: saved servers and the add form share one SERVERS
+  block. The form starts empty as “+ ADD SERVER” after every completed
+  action; typing a saved `url` + `user` flips it to UPDATE SERVER or
+  RECONNECT with the matching button and consequence hint. Rows show the
+  last sync, and DISCONNECT was folded into REMOVE on the active row.
 - Release-build devtools enabled (tauri `devtools` feature); inspect works in
   packaged builds too.
 - svelte-check is clean (0 errors). The old 14-diagnostic baseline was a
