@@ -25,6 +25,22 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    if !has_column(conn, "smart_view_playlists", "server")? {
+        // Rebuild the single-server mapping table with a composite key;
+        // existing rows survive under the legacy '' server key.
+        conn.execute_batch(
+            "ALTER TABLE smart_view_playlists RENAME TO smart_view_playlists_legacy;
+             CREATE TABLE smart_view_playlists (
+                 server             TEXT NOT NULL DEFAULT '',
+                 smart_view_id      INTEGER NOT NULL REFERENCES smart_views(id) ON DELETE CASCADE,
+                 remote_playlist_id TEXT NOT NULL,
+                 PRIMARY KEY (server, smart_view_id)
+             );
+             INSERT INTO smart_view_playlists (server, smart_view_id, remote_playlist_id)
+                 SELECT '', smart_view_id, remote_playlist_id FROM smart_view_playlists_legacy;
+             DROP TABLE smart_view_playlists_legacy;",
+        )?;
+    }
     Ok(())
 }
 
@@ -117,12 +133,15 @@ CREATE TABLE IF NOT EXISTS smart_views (
     def      TEXT NOT NULL
 );
 
--- Smart views published to Navidrome: the server playlist id remembered so
--- republishing updates the existing playlist instead of creating duplicates.
--- Deleting the view drops the mapping (foreign keys are enabled in open()).
+-- Smart views published to Navidrome: the server playlist id remembered per
+-- server profile so republishing updates the existing playlist instead of
+-- creating duplicates (and switching servers doesn't clobber other servers'
+-- mappings). `server` is the profile id; legacy rows use ''.
 CREATE TABLE IF NOT EXISTS smart_view_playlists (
-    smart_view_id      INTEGER PRIMARY KEY REFERENCES smart_views(id) ON DELETE CASCADE,
-    remote_playlist_id TEXT NOT NULL
+    server             TEXT NOT NULL DEFAULT '',
+    smart_view_id      INTEGER NOT NULL REFERENCES smart_views(id) ON DELETE CASCADE,
+    remote_playlist_id TEXT NOT NULL,
+    PRIMARY KEY (server, smart_view_id)
 );
 COMMIT;
 ";

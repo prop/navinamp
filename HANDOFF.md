@@ -1,11 +1,11 @@
 # NaVinaMP — current status & next steps
 
-> Handoff note for the next development session. Last updated: 2026-11-01,
-> after the v0.5.0 release.
+> Handoff note for the next development session. Last updated: 2026-11-02,
+> after v0.6.0.
 
 ## State
 
-- All six roadmap milestones shipped. Latest release: **v0.5.0**
+- All six roadmap milestones shipped. Latest release: **v0.6.0**
   (dmg on the Releases page; CI builds it automatically on `v*` tags).
 - Test suites: 25+ green across five crates + frontend. Clippy/fmt clean.
 - Four windows: player (skinned), playlist editor, media library, EQ.
@@ -69,6 +69,15 @@
   the selected id (`libraryId`) persists in `navidrome.json` and scopes the
   sync walk via `musicFolderId`; Navidrome Settings has an all-libraries /
   library dropdown that re-syncs (the prune drops rows outside the choice).
+- Multiple Navidrome servers: `navidrome.json` now holds `profiles` +
+  `activeId` (v1 single-server files migrate to one `default` profile).
+  Settings lists saved servers (switch / rename / remove) and the connect
+  form adds one; labels default to `user@host` and are editable. Switching
+  clears the previous server's synced rows, drops the client cache and
+  auto-syncs the new server (one active at a time, syncs must finish first).
+  Publish mappings are keyed per server (`smart_view_playlists.server`), so
+  switching back updates the same server playlist instead of duplicating;
+  legacy mappings move to the single migrated profile on first boot.
 - Release-build devtools enabled (tauri `devtools` feature); inspect works in
   packaged builds too.
 - svelte-check is clean (0 errors). The old 14-diagnostic baseline was a
@@ -81,7 +90,8 @@
 
 ## Next up
 
-1. Multiple Navidrome servers (profiles with one active server first).
+1. True multi-server aggregation (rows from several servers at once; needs a
+   server identity in track paths and per-server routing).
 2. Tree virtualization (deep album/artist scrolling still builds rows).
 3. SELECT ALL by filter (paged views currently select loaded rows only).
 4. AUTO per-track/artist associations (genre matching ships today).
@@ -97,6 +107,14 @@
 - Publishing a smart view only includes `source=navidrome` rows (local
   files have no Subsonic song id); playlist creation uses the
   `[NaVinaMP] ` name prefix, and republishing keeps the server-side name
+- Removing a server profile drops its per-server playlist mappings and
+  its profile id; re-adding the same server later gets a fresh id, so the
+  next publish creates a new `[NaVinaMP]` playlist instead of updating the
+  old one
+- Switching servers while remote tracks are queued/playing is not guarded:
+  the old stream keeps playing, but queue entries resolve against the new
+  server (ids can collide). Stop/clear the queue when switching if this
+  becomes a problem
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
 - Virtualization: the table is windowed; the tree still renders 200-row

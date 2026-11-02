@@ -54,12 +54,16 @@ const SOURCE: &str = "navidrome";
 // persisted config
 // ---------------------------------------------------------------------------
 
-/// Contents of `<app_data_dir>/navidrome.json`. The five credential/pref
-/// keys are the frozen on-disk shape; `syncedAt`/`serverVersion` are our
-/// persisted extras (a superset keeps the file the single source of truth).
+/// One saved Navidrome server. The streaming prefs, library selection and
+/// sync bookkeeping are per server so switching between profiles keeps each
+/// server's setup. `id` is stable for the life of the profile (playlist
+/// mappings are keyed by it); `label` is user-editable (`None` = derive
+/// `user@host`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct StoredConfig {
+struct StoredProfile {
+    id: String,
+    label: Option<String>,
     /// Server base URL (`https://music.example.com` — `/rest` is optional).
     url: String,
     user: String,
@@ -74,10 +78,105 @@ struct StoredConfig {
     library_id: Option<String>,
 }
 
-impl StoredConfig {
+impl StoredProfile {
+    /// The name shown in the UI: the custom label, else `user@host`.
+    fn name(&self) -> String {
+        self.label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{}@{}", self.user, host_of(&self.url)))
+    }
+
     fn stream_format(&self) -> Option<StreamFormat> {
         parse_format(&self.format)
     }
+}
+
+/// Contents of `<app_data_dir>/navidrome.json` (v2): a list of saved servers
+/// and the one currently active. The v1 file was a single [`StoredProfile`]
+/// shape; [`parse_config`] wraps it as one `default` profile so 0.6 installs
+/// keep their credentials and library selection.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct StoredConfig {
+    profiles: Vec<StoredProfile>,
+    active_id: Option<String>,
+}
+
+impl StoredConfig {
+    fn active(&self) -> Option<&StoredProfile> {
+        let id = self.active_id.as_deref()?;
+        self.profiles.iter().find(|profile| profile.id == id)
+    }
+
+    fn active_mut(&mut self) -> Option<&mut StoredProfile> {
+        let id = self.active_id.clone()?;
+        self.profiles.iter_mut().find(|profile| profile.id == id)
+    }
+
+    fn profile(&self, id: &str) -> Option<&StoredProfile> {
+        self.profiles.iter().find(|profile| profile.id == id)
+    }
+
+    /// Fresh, stable profile id. `p1`, `p2`, … (collision-safe if a migrated
+    /// `default` profile or a removed id left gaps).
+    fn next_id(&self) -> String {
+        let mut n = self.profiles.len() + 1;
+        loop {
+            let id = format!("p{n}");
+            if self.profile(&id).is_none() {
+                return id;
+            }
+            n += 1;
+        }
+    }
+}
+
+/// Id assigned to the single server migrated from a pre-profiles config.
+const LEGACY_PROFILE_ID: &str = "default";
+
+/// `host[:port]` of a server URL, for the default profile label.
+fn host_of(url: &str) -> &str {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    rest.split('/').next().unwrap_or(rest)
+}
+
+/// Trimmed custom label; an empty label clears it (fall back to `user@host`).
+fn normalized_label(label: &str) -> Option<String> {
+    let label = label.trim();
+    (!label.is_empty()).then(|| label.to_owned())
+}
+
+/// Parse `navidrome.json`, tolerating the v1 single-server shape (which is
+/// wrapped as one `default` profile and made active).
+fn parse_config(text: &str) -> Option<StoredConfig> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value.get("profiles").is_some() {
+        let mut config: StoredConfig = serde_json::from_value(value).ok()?;
+        config.profiles.retain(|profile| !profile.id.is_empty());
+        if config
+            .active_id
+            .as_deref()
+            .is_some_and(|id| config.profile(id).is_none())
+        {
+            config.active_id = None;
+        }
+        return Some(config);
+    }
+    let mut profile: StoredProfile = serde_json::from_value(value).ok()?;
+    if profile.url.is_empty() {
+        return None;
+    }
+    profile.id = LEGACY_PROFILE_ID.into();
+    Some(StoredConfig {
+        active_id: Some(profile.id.clone()),
+        profiles: vec![profile],
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +185,10 @@ impl StoredConfig {
 
 #[derive(Default)]
 struct Inner {
-    config: Option<StoredConfig>,
-    /// Lazily built on first use (reconnect pings the server once).
+    /// Saved servers + the active one (empty until a profile is added).
+    config: StoredConfig,
+    /// Lazily built on first use (reconnect pings the server once). Always
+    /// belongs to the active profile; every switch clears it.
     client: Option<Arc<SubsonicClient>>,
 }
 
@@ -110,20 +211,40 @@ impl Drop for SyncGuard {
 
 /// Called from the app's `setup` hook: loads `navidrome.json` if present.
 /// The client is not built here — a slow/unreachable server must not stall
-/// app launch; the first command that needs it reconnects.
+/// app launch; the first command that needs it reconnects. Legacy v1 files
+/// are rewritten in the profiles shape, and their single server's playlist
+/// mappings are re-keyed from `''` to that profile id.
 pub fn init(app: &AppHandle) {
     let Ok(path) = config_file(app) else {
         return; // no app data dir: commands surface real errors later
     };
-    let config: StoredConfig = match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => return,
-    };
-    if config.url.is_empty() {
+    let Ok(text) = std::fs::read_to_string(&path) else {
         return;
+    };
+    let Some(config) = parse_config(&text) else {
+        eprintln!(
+            "navinamp navidrome: ignoring unreadable config `{}`",
+            path.display()
+        );
+        return;
+    };
+    // Normalize the on-disk shape (v1 → profiles) on first boot.
+    if let Err(e) = save_config(app, &config) {
+        eprintln!("navinamp navidrome: cannot rewrite config: {e}");
     }
-    let state = app.state::<NavidromeState>();
-    state.inner.lock().unwrap().config = Some(config);
+    if let Some(profile) = config
+        .profiles
+        .first()
+        .filter(|_| config.profiles.len() == 1)
+    {
+        let profile_id = profile.id.clone();
+        let _ = with_library(app, &app.state::<LibraryState>(), |library| {
+            library
+                .remap_smart_view_playlists("", &profile_id)
+                .map_err(|e| e.to_string())
+        });
+    }
+    app.state::<NavidromeState>().inner.lock().unwrap().config = config;
 }
 
 /// `<app_data_dir>/navidrome.json`, with the directory created.
@@ -141,6 +262,54 @@ fn save_config(app: &AppHandle, config: &StoredConfig) -> Result<(), String> {
     let text =
         serde_json::to_string_pretty(config).map_err(|e| format!("cannot encode config: {e}"))?;
     std::fs::write(&path, text).map_err(|e| format!("cannot write `{}`: {e}", path.display()))
+}
+
+/// Persist the profile list; an empty list removes the file (nothing is
+/// configured, same as v1's disconnect).
+fn save_or_remove(app: &AppHandle, config: &StoredConfig) -> Result<(), String> {
+    if config.profiles.is_empty() {
+        if let Ok(path) = config_file(app) {
+            let _ = std::fs::remove_file(path);
+        }
+        Ok(())
+    } else {
+        save_config(app, config)
+    }
+}
+
+/// Profile-scope mutations must not race the sync thread (it captures the
+/// active client/library at start and would write rows for the wrong server).
+fn ensure_not_syncing(state: &NavidromeState) -> Result<(), String> {
+    if state.syncing.load(Ordering::SeqCst) {
+        Err("a navidrome sync is running; try again when it finishes".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Delete every synced remote row. Used on profile switch/removal: the
+/// library table holds one server's rows at a time, and ids can collide
+/// across servers (Navidrome ids are library-path hashes).
+fn clear_remote_rows(app: &AppHandle, library: &LibraryState) -> Result<(), String> {
+    // An empty batch is a "remove everything of this source" sync; local
+    // rows are never touched by it.
+    with_library(app, library, |lib| {
+        lib.sync_remote(Vec::new()).map_err(|e| e.to_string())
+    })?;
+    Ok(())
+}
+
+/// Drop the playlist mappings of a server that is gone (or switched away).
+fn clear_publish_mappings(
+    app: &AppHandle,
+    library: &LibraryState,
+    server: &str,
+) -> Result<(), String> {
+    with_library(app, library, |lib| {
+        lib.clear_smart_view_playlists(server)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +340,25 @@ pub struct Status {
     pub track_count: i64,
     /// Selected library (music folder) id, or `null` for all libraries.
     pub library_id: Option<String>,
+    /// Active server profile id (stable across restarts).
+    pub profile_id: Option<String>,
+    /// Active profile's display name (custom label, else `user@host`).
+    pub profile_label: Option<String>,
+}
+
+/// One saved server, as listed by [`navidrome_profiles`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSummary {
+    pub id: String,
+    /// Effective display name (custom label or `user@host`).
+    pub name: String,
+    /// User-editable label; `null` means "derive from user@host".
+    pub label: Option<String>,
+    pub url: String,
+    pub user: String,
+    pub active: bool,
+    pub synced_at: Option<i64>,
 }
 
 /// Everything the UI needs to know about one completed sync.
@@ -208,23 +396,25 @@ fn format_string(f: StreamFormat) -> &'static str {
 fn current_status(app: &AppHandle, state: &NavidromeState) -> Status {
     let library = app.state::<LibraryState>();
     let guard = state.inner.lock().unwrap();
-    let config = guard.config.as_ref();
+    let profile = guard.config.active();
     Status {
-        configured: config.is_some(),
-        url: config.map(|c| c.url.clone()),
-        user: config.map(|c| c.user.clone()),
+        configured: profile.is_some(),
+        url: profile.map(|p| p.url.clone()),
+        user: profile.map(|p| p.user.clone()),
         streaming: StreamingPrefs {
-            format: config
-                .map(|c| c.format.clone())
+            format: profile
+                .map(|p| p.format.clone())
                 .unwrap_or_else(|| "original".into()),
-            bitrate_kbps: config.and_then(|c| c.bitrate_kbps),
+            bitrate_kbps: profile.and_then(|p| p.bitrate_kbps),
         },
-        synced_at: config.and_then(|c| c.synced_at),
-        server_version: config.and_then(|c| c.server_version.clone()),
-        library_id: config.and_then(|c| c.library_id.clone()),
+        synced_at: profile.and_then(|p| p.synced_at),
+        server_version: profile.and_then(|p| p.server_version.clone()),
+        library_id: profile.and_then(|p| p.library_id.clone()),
+        profile_id: profile.map(|p| p.id.clone()),
+        profile_label: profile.map(StoredProfile::name),
         // Unconfigured → 0; configured → the live count (an unopenable
         // library reads as 0 too — status must never fail).
-        track_count: if config.is_some() {
+        track_count: if profile.is_some() {
             with_library(app, &library, |lib| {
                 lib.track_count(Some(SOURCE)).map_err(|e| e.to_string())
             })
@@ -239,28 +429,27 @@ fn current_status(app: &AppHandle, state: &NavidromeState) -> Status {
 // client cache
 // ---------------------------------------------------------------------------
 
-/// The shared client, (re)connecting with the stored credentials if needed.
-/// Errors are scrubbed of URLs (Subsonic tokens ride in query strings).
+/// The shared client, (re)connecting with the active profile's credentials
+/// if needed. Errors are scrubbed of URLs (Subsonic tokens ride in query
+/// strings).
 async fn ensure_client(state: &NavidromeState) -> Result<Arc<SubsonicClient>, String> {
-    {
+    let (profile_id, url, user, password) = {
         let guard = state.inner.lock().unwrap();
         if let Some(client) = guard.client.as_ref() {
             return Ok(Arc::clone(client));
         }
-        if guard.config.is_none() {
-            return Err("not connected".into());
-        }
-    }
-
-    let (url, user, password) = {
-        let guard = state.inner.lock().unwrap();
-        let config = guard.config.as_ref().expect("checked above");
+        let profile = guard
+            .config
+            .active()
+            .ok_or_else(|| "not connected".to_string())?;
         (
-            config.url.clone(),
-            config.user.clone(),
-            config.password.clone(),
+            profile.id.clone(),
+            profile.url.clone(),
+            profile.user.clone(),
+            profile.password.clone(),
         )
     };
+
     let client = Arc::new(
         SubsonicClient::connect(&url, &user, &password)
             .await
@@ -268,18 +457,26 @@ async fn ensure_client(state: &NavidromeState) -> Result<Arc<SubsonicClient>, St
     );
 
     let mut guard = state.inner.lock().unwrap();
-    // Disconnected while we were connecting: drop the client, honor the
-    // user's intent.
-    let Some(config) = guard.config.as_mut() else {
-        return Err("not connected".into());
-    };
-    if config.server_version.is_none() {
-        config.server_version = client.server_version().map(str::to_owned);
+    {
+        let profile = guard
+            .config
+            .active_mut()
+            .ok_or_else(|| "not connected".to_string())?;
+        // Switched while we were connecting: drop the stale client, honor
+        // the user's intent (the next call connects to the new profile).
+        if profile.id != profile_id {
+            return Err("server profile changed while connecting".into());
+        }
+        if profile.server_version.is_none() {
+            profile.server_version = client.server_version().map(str::to_owned);
+        }
     }
-    Ok(guard
-        .client
-        .get_or_insert_with(|| Arc::clone(&client))
-        .clone())
+    // Two concurrent callers may have connected; share the first one.
+    if let Some(existing) = guard.client.as_ref() {
+        return Ok(Arc::clone(existing));
+    }
+    guard.client = Some(Arc::clone(&client));
+    Ok(client)
 }
 
 // ---------------------------------------------------------------------------
@@ -292,79 +489,222 @@ pub fn navidrome_status(app: AppHandle, state: State<'_, NavidromeState>) -> Sta
     current_status(&app, &state)
 }
 
-/// Ping + save credentials on success; returns the new status.
+/// Saved servers (in creation order) with the active one flagged.
+#[tauri::command]
+pub fn navidrome_profiles(state: State<'_, NavidromeState>) -> Vec<ProfileSummary> {
+    let guard = state.inner.lock().unwrap();
+    let active = guard.config.active_id.as_deref();
+    guard
+        .config
+        .profiles
+        .iter()
+        .map(|profile| ProfileSummary {
+            id: profile.id.clone(),
+            name: profile.name(),
+            label: profile.label.clone(),
+            url: profile.url.clone(),
+            user: profile.user.clone(),
+            active: active == Some(profile.id.as_str()),
+            synced_at: profile.synced_at,
+        })
+        .collect()
+}
+
+/// Ping + save credentials on success. Connecting to a known `url` + `user`
+/// updates that profile (password, version, optional label); a new pair
+/// appends a profile. The profile becomes active; when that differs from the
+/// previous active server its synced rows are cleared first so one server's
+/// rows never masquerade as another's.
 #[tauri::command]
 pub async fn navidrome_connect(
     app: AppHandle,
     state: State<'_, NavidromeState>,
+    library: State<'_, LibraryState>,
     url: String,
     user: String,
     password: String,
+    label: Option<String>,
 ) -> Result<Status, String> {
     let url = url.trim().trim_end_matches('/').to_owned();
     let user = user.trim().to_owned();
     if url.is_empty() || user.is_empty() {
         return Err("url and user are required".into());
     }
+    ensure_not_syncing(&state)?;
 
     // Ping first: nothing is persisted for a server that rejects us.
     let client = SubsonicClient::connect(&url, &user, &password)
         .await
         .map_err(|e| scrub_urls(&e.to_string()))?;
+    // A sync may have started while the ping ran; re-check before mutating.
+    ensure_not_syncing(&state)?;
 
-    let mut guard = state.inner.lock().unwrap();
-    // Keep the previous streaming prefs across a reconnect; a fresh
-    // configuration starts at `original` / unlimited. The library selection
-    // survives only when reconnecting to the same server/user.
-    let (format, bitrate_kbps) = guard
-        .config
-        .as_ref()
-        .map(|c| (c.format.clone(), c.bitrate_kbps))
-        .unwrap_or_else(|| ("original".into(), None));
-    let previous_library = guard
-        .config
-        .as_ref()
-        .filter(|c| c.url == url && c.user == user)
-        .and_then(|c| c.library_id.clone());
-    let config = StoredConfig {
-        url,
-        user,
-        password,
-        format,
-        bitrate_kbps,
-        synced_at: None,
-        server_version: client.server_version().map(str::to_owned),
-        library_id: previous_library,
+    let server_version = client.server_version().map(str::to_owned);
+    let (config, previous_active, profile_id) = {
+        let guard = state.inner.lock().unwrap();
+        let mut config = guard.config.clone();
+        let previous_active = config.active_id.clone();
+        let profile_id = match config
+            .profiles
+            .iter_mut()
+            .find(|p| p.url == url && p.user == user)
+        {
+            Some(profile) => {
+                profile.password = password;
+                if let Some(label) = label.as_deref() {
+                    profile.label = normalized_label(label);
+                }
+                if server_version.is_some() {
+                    profile.server_version = server_version.clone();
+                }
+                profile.id.clone()
+            }
+            None => {
+                let profile = StoredProfile {
+                    id: config.next_id(),
+                    label: label.as_deref().and_then(normalized_label),
+                    url: url.clone(),
+                    user: user.clone(),
+                    password,
+                    format: "original".into(),
+                    bitrate_kbps: None,
+                    synced_at: None,
+                    server_version: server_version.clone(),
+                    library_id: None,
+                };
+                let id = profile.id.clone();
+                config.profiles.push(profile);
+                id
+            }
+        };
+        config.active_id = Some(profile_id.clone());
+        (config, previous_active, profile_id)
     };
+
+    if previous_active.as_deref() != Some(profile_id.as_str()) {
+        clear_remote_rows(&app, &library)?;
+    }
     save_config(&app, &config)?;
-    *guard = Inner {
-        config: Some(config),
+    *state.inner.lock().unwrap() = Inner {
+        config,
         client: Some(Arc::new(client)),
     };
-    drop(guard);
     Ok(current_status(&app, &state))
 }
 
-/// Forgets the credentials (file + memory) and deletes every synced row.
+/// Forgets the active profile (credentials + its synced rows) and leaves
+/// every other saved server in place, none active. Playlist mappings are
+/// per server, so the removed profile's mappings are dropped too.
 #[tauri::command]
 pub async fn navidrome_disconnect(
     app: AppHandle,
     state: State<'_, NavidromeState>,
     library: State<'_, LibraryState>,
 ) -> Result<Status, String> {
-    {
-        let mut guard = state.inner.lock().unwrap();
-        guard.config = None;
+    let active = state.inner.lock().unwrap().config.active_id.clone();
+    match active {
+        Some(id) => navidrome_remove_profile(app, state, library, id).await,
+        None => Ok(current_status(&app, &state)),
+    }
+}
+
+/// Switch the active server. The previous server's synced rows are cleared
+/// (the library holds one server at a time), the client cache is dropped and
+/// the caller re-syncs; playlist mappings are keyed per server so they
+/// survive the round-trip.
+#[tauri::command]
+pub async fn navidrome_switch(
+    app: AppHandle,
+    state: State<'_, NavidromeState>,
+    library: State<'_, LibraryState>,
+    id: String,
+) -> Result<Status, String> {
+    ensure_not_syncing(&state)?;
+    let (config, changed) = {
+        let guard = state.inner.lock().unwrap();
+        let mut config = guard.config.clone();
+        if config.profile(&id).is_none() {
+            return Err(format!("unknown server profile `{id}`"));
+        }
+        let changed = config.active_id.as_deref() != Some(id.as_str());
+        config.active_id = Some(id);
+        (config, changed)
+    };
+    if changed {
+        clear_remote_rows(&app, &library)?;
+    }
+    save_config(&app, &config)?;
+    let mut guard = state.inner.lock().unwrap();
+    guard.config = config;
+    if changed {
         guard.client = None;
     }
-    if let Ok(path) = config_file(&app) {
-        let _ = std::fs::remove_file(path);
+    drop(guard);
+    Ok(current_status(&app, &state))
+}
+
+/// Remove one saved server. Removing the active server clears its synced
+/// rows and leaves no active profile; removing an inactive one only forgets
+/// its credentials and playlist mappings.
+#[tauri::command]
+pub async fn navidrome_remove_profile(
+    app: AppHandle,
+    state: State<'_, NavidromeState>,
+    library: State<'_, LibraryState>,
+    id: String,
+) -> Result<Status, String> {
+    let (config, was_active) = {
+        let guard = state.inner.lock().unwrap();
+        if guard.config.profile(&id).is_none() {
+            drop(guard);
+            return Ok(current_status(&app, &state));
+        }
+        let was_active = guard.config.active_id.as_deref() == Some(id.as_str());
+        if was_active {
+            ensure_not_syncing(&state)?;
+        }
+        let mut config = guard.config.clone();
+        config.profiles.retain(|profile| profile.id != id);
+        if was_active {
+            config.active_id = None;
+        }
+        (config, was_active)
+    };
+    if was_active {
+        clear_remote_rows(&app, &library)?;
     }
-    // An empty batch is a "remove everything of this source" sync; local
-    // rows are never touched by it.
-    with_library(&app, &library, |lib| {
-        lib.sync_remote(Vec::new()).map_err(|e| e.to_string())
-    })?;
+    clear_publish_mappings(&app, &library, &id)?;
+    save_or_remove(&app, &config)?;
+    let mut guard = state.inner.lock().unwrap();
+    if was_active {
+        guard.client = None;
+    }
+    guard.config = config;
+    drop(guard);
+    Ok(current_status(&app, &state))
+}
+
+/// Rename a saved server (`null`/blank label = fall back to `user@host`).
+#[tauri::command]
+pub fn navidrome_rename_profile(
+    app: AppHandle,
+    state: State<'_, NavidromeState>,
+    id: String,
+    label: Option<String>,
+) -> Result<Status, String> {
+    let config = {
+        let guard = state.inner.lock().unwrap();
+        let mut config = guard.config.clone();
+        let profile = config
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| format!("unknown server profile `{id}`"))?;
+        profile.label = label.as_deref().and_then(normalized_label);
+        config
+    };
+    save_config(&app, &config)?;
+    state.inner.lock().unwrap().config = config;
     Ok(current_status(&app, &state))
 }
 
@@ -377,10 +717,10 @@ pub async fn navidrome_stream_url(
     let client = ensure_client(&state).await?;
     let (format, bitrate) = {
         let guard = state.inner.lock().unwrap();
-        let config = guard.config.as_ref().ok_or("not connected")?;
+        let profile = guard.config.active().ok_or("not connected")?;
         (
-            config.stream_format().unwrap_or(StreamFormat::Original),
-            config.bitrate_kbps,
+            profile.stream_format().unwrap_or(StreamFormat::Original),
+            profile.bitrate_kbps,
         )
     };
     Ok(client.stream_url(&remote_id, format, bitrate).to_string())
@@ -486,6 +826,7 @@ pub async fn navidrome_set_library(
     library_id: Option<String>,
 ) -> Result<Status, String> {
     let client = ensure_client(&state).await?;
+    ensure_not_syncing(&state)?;
     let library_id = match library_id
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
@@ -502,12 +843,15 @@ pub async fn navidrome_set_library(
         }
         None => None,
     };
-    {
-        let mut guard = state.inner.lock().unwrap();
-        let config = guard.config.as_mut().ok_or("not connected")?;
-        config.library_id = library_id;
-        save_config(&app, config)?;
-    }
+    let config = {
+        let guard = state.inner.lock().unwrap();
+        let mut config = guard.config.clone();
+        let profile = config.active_mut().ok_or("not connected")?;
+        profile.library_id = library_id;
+        config
+    };
+    save_config(&app, &config)?;
+    state.inner.lock().unwrap().config = config;
     Ok(current_status(&app, &state))
 }
 
@@ -624,8 +968,16 @@ pub async fn navidrome_publish_smart_view(
     }
 
     let name = format!("{SMART_PLAYLIST_PREFIX}{}", view.def.name);
+    let server = state
+        .inner
+        .lock()
+        .unwrap()
+        .config
+        .active()
+        .map(|profile| profile.id.clone())
+        .ok_or("not connected")?;
     let mapped = library
-        .smart_view_playlist_id(id)
+        .smart_view_playlist_id(&server, id)
         .map_err(|e| e.to_string())?;
     let (playlist_id, created) = match mapped {
         Some(pid) => {
@@ -659,7 +1011,7 @@ pub async fn navidrome_publish_smart_view(
         }
     };
     library
-        .set_smart_view_playlist_id(id, &playlist_id)
+        .set_smart_view_playlist_id(&server, id, &playlist_id)
         .map_err(|e| e.to_string())?;
 
     Ok(PublishReport {
@@ -691,12 +1043,16 @@ pub fn navidrome_set_streaming(
         .then_some(bitrate)
         .flatten();
 
-    let mut guard = state.inner.lock().unwrap();
-    let config = guard.config.as_mut().ok_or("not connected")?;
-    config.format = format_string(parsed).into();
-    config.bitrate_kbps = bitrate;
-    save_config(&app, config)?;
-    drop(guard);
+    let config = {
+        let guard = state.inner.lock().unwrap();
+        let mut config = guard.config.clone();
+        let profile = config.active_mut().ok_or("not connected")?;
+        profile.format = format_string(parsed).into();
+        profile.bitrate_kbps = bitrate;
+        config
+    };
+    save_config(&app, &config)?;
+    state.inner.lock().unwrap().config = config;
     Ok(current_status(&app, &state))
 }
 
@@ -709,9 +1065,11 @@ pub async fn navidrome_sync(
     app: AppHandle,
     state: State<'_, NavidromeState>,
 ) -> Result<SyncReport, String> {
-    if state.inner.lock().unwrap().config.is_none() {
-        return Err("not connected".into());
-    }
+    let (profile_id, selected_library) = {
+        let guard = state.inner.lock().unwrap();
+        let profile = guard.config.active().ok_or("not connected")?;
+        (profile.id.clone(), profile.library_id.clone())
+    };
     if state.syncing.swap(true, Ordering::SeqCst) {
         return Err("a navidrome sync is already running".into());
     }
@@ -727,13 +1085,6 @@ pub async fn navidrome_sync(
         state.syncing.store(false, Ordering::SeqCst);
         format!("cannot open library: {e}")
     })?;
-    let selected_library = state
-        .inner
-        .lock()
-        .unwrap()
-        .config
-        .as_ref()
-        .and_then(|config| config.library_id.clone());
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<SyncReport, String>>();
     let emitter = app.clone();
@@ -747,17 +1098,23 @@ pub async fn navidrome_sync(
             let result = run_sync(&emitter, &client, &library, selected_library.as_deref());
             match &result {
                 Ok(report) => {
-                    // Persist the timestamp while we still own the app handle.
+                    // Persist the timestamp on the profile that was synced,
+                    // while we still own the app handle.
                     let mut guard = inner.lock().unwrap();
-                    if let Some(config) = guard.config.as_mut() {
-                        config.synced_at = Some(
+                    if let Some(profile) = guard
+                        .config
+                        .profiles
+                        .iter_mut()
+                        .find(|profile| profile.id == profile_id)
+                    {
+                        profile.synced_at = Some(
                             std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_secs() as i64)
                                 .unwrap_or(0),
                         );
-                        let _ = save_config(&emitter, config);
                     }
+                    let _ = save_config(&emitter, &guard.config);
                     let _ = emitter.emit(SYNCED_EVENT, report);
                 }
                 Err(e) => {
@@ -988,30 +1345,98 @@ mod tests {
     }
 
     #[test]
-    fn stored_config_parses_the_frozen_shape() {
-        let config: StoredConfig = serde_json::from_str(
+    fn legacy_single_server_config_migrates_to_one_profile() {
+        let config = parse_config(
             r#"{ "url": "https://n.example", "user": "me", "password": "p",
-                "format": "mp3", "bitrateKbps": 192 }"#,
+                "format": "mp3", "bitrateKbps": 192, "libraryId": "lib-2" }"#,
         )
-        .unwrap();
-        assert_eq!(config.url, "https://n.example");
-        assert_eq!(config.bitrate_kbps, Some(192));
-        assert_eq!(config.synced_at, None);
-        // And the camelCase keys we write are the same shape.
-        let text = serde_json::to_string(&StoredConfig {
-            url: "u".into(),
-            user: "me".into(),
-            password: "p".into(),
-            format: "opus".into(),
-            bitrate_kbps: Some(128),
-            synced_at: Some(1),
-            server_version: Some("0.5x".into()),
-            library_id: Some("lib-2".into()),
-        })
-        .unwrap();
+        .expect("legacy config parses");
+        assert_eq!(config.active_id.as_deref(), Some(LEGACY_PROFILE_ID));
+        assert_eq!(config.profiles.len(), 1);
+        let profile = &config.profiles[0];
+        assert_eq!(profile.id, LEGACY_PROFILE_ID);
+        assert_eq!(profile.url, "https://n.example");
+        assert_eq!(profile.bitrate_kbps, Some(192));
+        assert_eq!(profile.synced_at, None);
+        assert_eq!(profile.library_id.as_deref(), Some("lib-2"));
+        assert_eq!(profile.name(), "me@n.example");
+    }
+
+    #[test]
+    fn profiles_config_round_trips_with_camel_case() {
+        let config = StoredConfig {
+            active_id: Some("p2".into()),
+            profiles: vec![
+                StoredProfile {
+                    id: "p2".into(),
+                    label: Some("Home".into()),
+                    url: "https://nd.example".into(),
+                    user: "me".into(),
+                    password: "p".into(),
+                    format: "opus".into(),
+                    bitrate_kbps: Some(128),
+                    synced_at: Some(1),
+                    server_version: Some("0.5x".into()),
+                    library_id: Some("lib-2".into()),
+                },
+                StoredProfile {
+                    id: "p3".into(),
+                    url: "http://other.example:4533/music".into(),
+                    user: "you".into(),
+                    format: "original".into(),
+                    ..StoredProfile::default()
+                },
+            ],
+        };
+        let text = serde_json::to_string(&config).unwrap();
+        assert!(text.contains("\"activeId\":\"p2\""), "{text}");
+        assert!(text.contains("\"label\":\"Home\""), "{text}");
         assert!(text.contains("\"bitrateKbps\":128"), "{text}");
         assert!(text.contains("\"libraryId\":\"lib-2\""), "{text}");
-        assert!(text.contains("\"syncedAt\":1"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), config);
+
+        // A missing active id (or one that no longer exists) reads as none.
+        let mut orphan = config.clone();
+        orphan.active_id = Some("gone".into());
+        assert!(
+            parse_config(&serde_json::to_string(&orphan).unwrap())
+                .unwrap()
+                .active()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn profile_ids_are_fresh_and_collision_safe() {
+        let mut config = StoredConfig::default();
+        assert_eq!(config.next_id(), "p1");
+        config.profiles.push(StoredProfile {
+            id: "p1".into(),
+            ..StoredProfile::default()
+        });
+        assert_eq!(config.next_id(), "p2");
+        // A gap/odd id must not make the generated id collide.
+        config.profiles.push(StoredProfile {
+            id: "p3".into(),
+            ..StoredProfile::default()
+        });
+        assert_eq!(config.next_id(), "p4");
+    }
+
+    #[test]
+    fn labels_fall_back_to_user_at_host() {
+        let mut profile = StoredProfile {
+            url: "https://music.example.com/".into(),
+            user: "me".into(),
+            ..StoredProfile::default()
+        };
+        assert_eq!(profile.name(), "me@music.example.com");
+        profile.label = Some("  ".into());
+        assert_eq!(profile.name(), "me@music.example.com");
+        profile.label = Some(" Home ".into());
+        assert_eq!(profile.name(), "Home");
+        assert_eq!(normalized_label(" Home ").as_deref(), Some("Home"));
+        assert_eq!(normalized_label("   "), None);
     }
 
     fn song(id: &str) -> SongSummary {

@@ -1361,24 +1361,137 @@ fn published_playlist_mapping_round_trips_and_cascades() {
         ),
     );
     let id = c.library.smart_view_save(None, &def).unwrap();
-    assert_eq!(c.library.smart_view_playlist_id(id).unwrap(), None);
+    assert_eq!(c.library.smart_view_playlist_id("p1", id).unwrap(), None);
 
-    c.library.set_smart_view_playlist_id(id, "pl-1").unwrap();
+    c.library
+        .set_smart_view_playlist_id("p1", id, "pl-1")
+        .unwrap();
     assert_eq!(
-        c.library.smart_view_playlist_id(id).unwrap().as_deref(),
+        c.library
+            .smart_view_playlist_id("p1", id)
+            .unwrap()
+            .as_deref(),
         Some("pl-1")
     );
+    // A second server maps the same view independently.
+    assert_eq!(c.library.smart_view_playlist_id("p2", id).unwrap(), None);
+    c.library
+        .set_smart_view_playlist_id("p2", id, "pl-other")
+        .unwrap();
 
     // Re-publishing replaces the remembered id (upsert, not a second row).
-    c.library.set_smart_view_playlist_id(id, "pl-2").unwrap();
+    c.library
+        .set_smart_view_playlist_id("p1", id, "pl-2")
+        .unwrap();
     assert_eq!(
-        c.library.smart_view_playlist_id(id).unwrap().as_deref(),
+        c.library
+            .smart_view_playlist_id("p1", id)
+            .unwrap()
+            .as_deref(),
         Some("pl-2")
     );
+    assert_eq!(
+        c.library
+            .smart_view_playlist_id("p2", id)
+            .unwrap()
+            .as_deref(),
+        Some("pl-other")
+    );
 
-    // Deleting the view drops the mapping with it.
+    // Deleting the view drops every server's mapping with it.
     c.library.smart_view_delete(id).unwrap();
-    assert_eq!(c.library.smart_view_playlist_id(id).unwrap(), None);
+    assert_eq!(c.library.smart_view_playlist_id("p1", id).unwrap(), None);
+    assert_eq!(c.library.smart_view_playlist_id("p2", id).unwrap(), None);
+}
+
+#[test]
+fn legacy_playlist_mappings_remap_to_a_server() {
+    let c = rule_fixture("publish-remap");
+    let def = view(
+        "Mix",
+        group(
+            MatchMode::All,
+            vec![rule(Field::Artist, Op::Is, s("Björk"))],
+        ),
+    );
+    let id = c.library.smart_view_save(None, &def).unwrap();
+    c.library
+        .set_smart_view_playlist_id("", id, "pl-legacy")
+        .unwrap();
+
+    assert_eq!(
+        c.library.remap_smart_view_playlists("", "default").unwrap(),
+        1
+    );
+    assert_eq!(c.library.smart_view_playlist_id("", id).unwrap(), None);
+    assert_eq!(
+        c.library
+            .smart_view_playlist_id("default", id)
+            .unwrap()
+            .as_deref(),
+        Some("pl-legacy")
+    );
+
+    // Clearing one server never touches another's mapping.
+    c.library
+        .set_smart_view_playlist_id("other", id, "pl-other")
+        .unwrap();
+    assert_eq!(c.library.clear_smart_view_playlists("default").unwrap(), 1);
+    assert_eq!(
+        c.library
+            .smart_view_playlist_id("other", id)
+            .unwrap()
+            .as_deref(),
+        Some("pl-other")
+    );
+}
+
+#[test]
+fn open_migrates_a_single_server_playlist_mapping_table() {
+    let scratch = Scratch::new("publish-schema-migration");
+    let library = Library::open(scratch.db()).unwrap();
+    let def = view(
+        "Mix",
+        group(
+            MatchMode::All,
+            vec![rule(Field::Artist, Op::Is, s("Björk"))],
+        ),
+    );
+    let id = library.smart_view_save(None, &def).unwrap();
+    library
+        .set_smart_view_playlist_id("", id, "pl-legacy")
+        .unwrap();
+    drop(library);
+
+    // Recreate the pre-profiles table (single primary key, no `server`).
+    {
+        let raw = Connection::open(scratch.db()).unwrap();
+        let sql = format!(
+            "DROP TABLE smart_view_playlists;
+             CREATE TABLE smart_view_playlists (
+                 smart_view_id      INTEGER PRIMARY KEY
+                     REFERENCES smart_views(id) ON DELETE CASCADE,
+                 remote_playlist_id TEXT NOT NULL
+             );
+             INSERT INTO smart_view_playlists (smart_view_id, remote_playlist_id)
+                 VALUES ({id}, 'pl-legacy');"
+        );
+        raw.execute_batch(&sql).unwrap();
+    }
+
+    let library = Library::open(scratch.db()).unwrap();
+    // The rebuilt table keeps the legacy row under the placeholder server.
+    assert_eq!(
+        library.smart_view_playlist_id("", id).unwrap().as_deref(),
+        Some("pl-legacy")
+    );
+    library
+        .set_smart_view_playlist_id("p1", id, "pl-new")
+        .unwrap();
+    assert_eq!(
+        library.smart_view_playlist_id("p1", id).unwrap().as_deref(),
+        Some("pl-new")
+    );
 }
 
 // ---------------------------------------------------------------------------

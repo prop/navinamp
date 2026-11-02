@@ -668,30 +668,67 @@ pub(super) fn delete_view(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// The Navidrome playlist this view was last published to, if any.
-pub(super) fn remote_playlist_id(conn: &Connection, id: i64) -> Result<Option<String>> {
+/// The Navidrome playlist this view was last published to on `server` (a
+/// Navidrome profile id), if any.
+pub(super) fn remote_playlist_id(
+    conn: &Connection,
+    server: &str,
+    id: i64,
+) -> Result<Option<String>> {
     Ok(conn
         .query_row(
-            "SELECT remote_playlist_id FROM smart_view_playlists WHERE smart_view_id = ?1",
-            [id],
+            "SELECT remote_playlist_id FROM smart_view_playlists
+             WHERE server = ?1 AND smart_view_id = ?2",
+            rusqlite::params![server, id],
             |row| row.get(0),
         )
         .optional()?)
 }
 
-/// Remembers the server playlist a view was published to (upsert).
+/// Remembers the server playlist a view was published to (upsert, scoped to
+/// one profile so the same view can map to a different playlist per server).
 pub(super) fn set_remote_playlist_id(
     conn: &Connection,
+    server: &str,
     id: i64,
     remote_playlist_id: &str,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO smart_view_playlists (smart_view_id, remote_playlist_id)
-         VALUES (?1, ?2)
-         ON CONFLICT(smart_view_id) DO UPDATE SET remote_playlist_id = excluded.remote_playlist_id",
-        rusqlite::params![id, remote_playlist_id],
+        "INSERT INTO smart_view_playlists (server, smart_view_id, remote_playlist_id)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(server, smart_view_id)
+         DO UPDATE SET remote_playlist_id = excluded.remote_playlist_id",
+        rusqlite::params![server, id, remote_playlist_id],
     )?;
     Ok(())
+}
+
+/// Moves playlist mappings from one server key to another (the `''` →
+/// profile-id migration for databases created before server profiles).
+/// Existing rows under `to` win; duplicates from `from` are dropped.
+/// Returns the number of mappings moved.
+pub(super) fn remap_server(conn: &Connection, from: &str, to: &str) -> Result<u64> {
+    if from == to {
+        return Ok(0);
+    }
+    let moved = conn.execute(
+        "INSERT INTO smart_view_playlists (server, smart_view_id, remote_playlist_id)
+         SELECT ?2, smart_view_id, remote_playlist_id
+         FROM smart_view_playlists WHERE server = ?1
+         ON CONFLICT(server, smart_view_id) DO NOTHING",
+        rusqlite::params![from, to],
+    )? as u64;
+    conn.execute("DELETE FROM smart_view_playlists WHERE server = ?1", [from])?;
+    Ok(moved)
+}
+
+/// Forgets every playlist mapping belonging to `server` (used when a
+/// profile is removed). Returns the number of mappings dropped.
+pub(super) fn clear_server(conn: &Connection, server: &str) -> Result<u64> {
+    Ok(conn.execute(
+        "DELETE FROM smart_view_playlists WHERE server = ?1",
+        [server],
+    )? as u64)
 }
 
 /// Loads, revalidates and runs a saved view. Unknown id →

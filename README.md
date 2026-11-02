@@ -29,11 +29,12 @@ sign-in needed to download).
 ## Navidrome (M5)
 
 Remote servers connect via the Media Library (`navidrome_*` commands).
-Credentials and streaming preferences are stored **in plaintext** at
-`<app_data_dir>/navidrome.json` (v1 — a keyring backend is planned); treat
-the file like a password. Stream URLs carry Subsonic auth tokens in the
-query string: the app never logs them and scrubs them from surfaced
-errors — don't paste them anywhere either.
+Multiple servers can be saved, with one active at a time; credentials,
+streaming preferences and the selected library are stored per server,
+**in plaintext**, at `<app_data_dir>/navidrome.json` (a keyring backend is
+planned); treat the file like a password. Stream URLs carry Subsonic auth
+tokens in the query string: the app never logs them and scrubs them from
+surfaced errors — don't paste them anywhere either.
 
 ## Run
 

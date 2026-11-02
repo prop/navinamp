@@ -310,15 +310,32 @@ impl Library {
         smart::delete_view(&self.conn, id)
     }
 
-    /// The Navidrome playlist a smart view was last published to, if any.
-    pub fn smart_view_playlist_id(&self, id: i64) -> Result<Option<String>> {
-        smart::remote_playlist_id(&self.conn, id)
+    /// The Navidrome playlist a smart view was last published to on
+    /// `server` (a profile id), if any.
+    pub fn smart_view_playlist_id(&self, server: &str, id: i64) -> Result<Option<String>> {
+        smart::remote_playlist_id(&self.conn, server, id)
     }
 
-    /// Remembers the Navidrome playlist a smart view was published to (so
-    /// republishing updates it instead of creating duplicates).
-    pub fn set_smart_view_playlist_id(&self, id: i64, remote_playlist_id: &str) -> Result<()> {
-        smart::set_remote_playlist_id(&self.conn, id, remote_playlist_id)
+    /// Remembers the Navidrome playlist a smart view was published to on
+    /// `server` (so republishing updates it instead of creating duplicates).
+    pub fn set_smart_view_playlist_id(
+        &self,
+        server: &str,
+        id: i64,
+        remote_playlist_id: &str,
+    ) -> Result<()> {
+        smart::set_remote_playlist_id(&self.conn, server, id, remote_playlist_id)
+    }
+
+    /// Re-keys legacy (`''`) playlist mappings under a server profile id.
+    /// Returns the number of mappings moved.
+    pub fn remap_smart_view_playlists(&self, from: &str, to: &str) -> Result<u64> {
+        smart::remap_server(&self.conn, from, to)
+    }
+
+    /// Drops every playlist mapping belonging to a server profile.
+    pub fn clear_smart_view_playlists(&self, server: &str) -> Result<u64> {
+        smart::clear_server(&self.conn, server)
     }
 
     /// Runs a saved view by id. Fails with [`Error::SmartViewNotFound`]

@@ -39,6 +39,24 @@ export interface NavidromeStatus {
   trackCount: number;
   /** Selected library (music folder) id; null = all accessible libraries. */
   libraryId: string | null;
+  /** Active server profile id (stable across restarts), or null when none. */
+  profileId: string | null;
+  /** Active profile's display name (custom label, else `user@host`). */
+  profileLabel: string | null;
+}
+
+/** One saved Navidrome server (one active at a time). */
+export interface NavidromeProfile {
+  id: string;
+  /** Effective display name (custom label or `user@host`). */
+  name: string;
+  /** User-editable label; null = derive from `user@host`. */
+  label: string | null;
+  url: string;
+  user: string;
+  active: boolean;
+  /** Unix **seconds** of this server's last completed sync, if any. */
+  syncedAt: number | null;
 }
 
 /** One music library (music folder) on the server. */
@@ -66,18 +84,53 @@ export function navidromeStatus(): Promise<NavidromeStatus> {
   return invoke<NavidromeStatus>("navidrome_status");
 }
 
-/** Verify credentials (ping) and persist them; throws on auth failure. */
+/** Every saved server (creation order) with the active one flagged. */
+export function navidromeProfiles(): Promise<NavidromeProfile[]> {
+  return invoke<NavidromeProfile[]>("navidrome_profiles");
+}
+
+/**
+ * Verify credentials (ping) and save them. Connecting to a known url+user
+ * updates that profile; a new pair adds one. The profile becomes active and,
+ * when that changes the server, the previous server's synced rows are
+ * cleared (caller should re-sync). `label` is the optional display name.
+ */
 export function navidromeConnect(
   url: string,
   user: string,
   password: string,
+  label: string | null = null,
 ): Promise<NavidromeStatus> {
-  return invoke<NavidromeStatus>("navidrome_connect", { url, user, password });
+  return invoke<NavidromeStatus>("navidrome_connect", { url, user, password, label });
 }
 
 /** Forget the stored credentials; returns the (now unconfigured) status. */
 export function navidromeDisconnect(): Promise<NavidromeStatus> {
   return invoke<NavidromeStatus>("navidrome_disconnect");
+}
+
+/**
+ * Make a saved server active. Clears the previous server's synced rows;
+ * the caller re-syncs the new one.
+ */
+export function navidromeSwitch(id: string): Promise<NavidromeStatus> {
+  return invoke<NavidromeStatus>("navidrome_switch", { id });
+}
+
+/**
+ * Remove one saved server. Removing the active server also clears its synced
+ * rows and leaves no active profile; inactive removals are credential-only.
+ */
+export function navidromeRemoveProfile(id: string): Promise<NavidromeStatus> {
+  return invoke<NavidromeStatus>("navidrome_remove_profile", { id });
+}
+
+/** Rename a saved server; null/blank clears back to `user@host`. */
+export function navidromeRenameProfile(
+  id: string,
+  label: string | null,
+): Promise<NavidromeStatus> {
+  return invoke<NavidromeStatus>("navidrome_rename_profile", { id, label });
 }
 
 /**

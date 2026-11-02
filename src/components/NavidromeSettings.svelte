@@ -20,12 +20,17 @@
     navidromeConnect,
     navidromeDisconnect,
     navidromeLibraries,
+    navidromeProfiles,
+    navidromeRemoveProfile,
+    navidromeRenameProfile,
     navidromeSetLibrary,
     navidromeSetStreaming,
     navidromeStatus,
+    navidromeSwitch,
     navidromeSync,
     onNavidromeSynced,
     type MusicFolder,
+    type NavidromeProfile,
     type NavidromeStatus,
     type StreamFormat,
   } from "../lib/navidrome/ipc";
@@ -42,9 +47,18 @@
   let status = $state.raw<NavidromeStatus | null>(null);
   let statusError = $state<string | null>(null);
 
+  let profiles = $state.raw<NavidromeProfile[]>([]);
+  let profilesError = $state<string | null>(null);
+  let switchingId = $state<string | null>(null);
+  let removingId = $state<string | null>(null);
+  let renamingId = $state<string | null>(null);
+  let renameValue = $state("");
+
   let url = $state("");
   let user = $state("");
   let password = $state("");
+  /** Optional display name for the server being added/updated. */
+  let nameInput = $state("");
   let formError = $state<string | null>(null);
   let connecting = $state(false);
   let disconnecting = $state(false);
@@ -58,6 +72,12 @@
 
   let statusSeq = 0;
 
+  function hydratePrefs(s: NavidromeStatus): void {
+    formatSel = s.streaming.format;
+    bitrateRaw = s.streaming.bitrateKbps == null ? "" : String(s.streaming.bitrateKbps);
+    prefsHydrated = true;
+  }
+
   async function refreshStatus(): Promise<void> {
     const seq = ++statusSeq;
     try {
@@ -68,11 +88,7 @@
       // Prefill the form only where the user has not typed anything yet.
       if (url === "") url = s.url ?? "";
       if (user === "") user = s.user ?? "";
-      if (!prefsHydrated) {
-        prefsHydrated = true;
-        formatSel = s.streaming.format;
-        bitrateRaw = s.streaming.bitrateKbps == null ? "" : String(s.streaming.bitrateKbps);
-      }
+      if (!prefsHydrated) hydratePrefs(s);
     } catch (e) {
       if (seq !== statusSeq) return;
       status = null;
@@ -80,11 +96,26 @@
     }
   }
 
+  async function refreshProfiles(): Promise<void> {
+    try {
+      profiles = await navidromeProfiles();
+      profilesError = null;
+    } catch (e) {
+      profiles = [];
+      profilesError = friendlyIpcError("navidrome profiles", e);
+    }
+  }
+
+  async function refreshAll(): Promise<void> {
+    await refreshStatus();
+    await refreshProfiles();
+  }
+
   $effect(() => {
-    void refreshStatus();
+    void refreshAll();
     // A sync (usually started from the SERVER STATUS node) updates
     // syncedAt/trackCount/serverVersion — keep the snapshot current.
-    const us = onNavidromeSynced(() => void refreshStatus());
+    const us = onNavidromeSynced(() => void refreshAll());
     return () => {
       void us.then((f) => f());
     };
@@ -99,11 +130,21 @@
     formError = null;
     connecting = true;
     try {
-      status = await navidromeConnect(url.trim(), user.trim(), password);
+      const previousProfile = status?.profileId ?? null;
+      status = await navidromeConnect(
+        url.trim(),
+        user.trim(),
+        password,
+        nameInput.trim() === "" ? null : nameInput.trim(),
+      );
       password = ""; // never kept around after a successful connect
+      nameInput = "";
+      if (status.profileId !== previousProfile) hydratePrefs(status);
+      await refreshProfiles();
       onchanged?.();
       onlog?.(
-        `navidrome: connected${status.serverVersion ? ` (server ${status.serverVersion})` : ""}`,
+        `navidrome: connected to ${status.profileLabel ?? status.url}` +
+          `${status.serverVersion ? ` (server ${status.serverVersion})` : ""}`,
       );
     } catch (e) {
       // Auth failures arrive as the backend's ping error — shown inline.
@@ -119,12 +160,79 @@
     try {
       status = await navidromeDisconnect();
       formError = null;
+      prefsHydrated = false;
+      await refreshProfiles();
       onchanged?.();
-      onlog?.("navidrome: disconnected");
+      onlog?.("navidrome: disconnected the active server");
     } catch (e) {
       formError = friendlyIpcError("navidrome disconnect", e);
     } finally {
       disconnecting = false;
+    }
+  }
+
+  async function switchProfile(id: string): Promise<void> {
+    if (switchingId || removingId || connecting || disconnecting) return;
+    const profile = profiles.find((p) => p.id === id);
+    switchingId = id;
+    formError = null;
+    try {
+      status = await navidromeSwitch(id);
+      password = "";
+      nameInput = "";
+      hydratePrefs(status);
+      if (status.url) url = status.url;
+      if (status.user) user = status.user;
+      await refreshProfiles();
+      onchanged?.();
+      onlog?.(`navidrome: switched to ${profile?.name ?? id}`);
+    } catch (e) {
+      formError = friendlyIpcError("server switch", e);
+    } finally {
+      switchingId = null;
+    }
+  }
+
+  async function removeProfile(profile: NavidromeProfile): Promise<void> {
+    if (removingId || switchingId || connecting || disconnecting) return;
+    const question = profile.active
+      ? `Remove “${profile.name}” and delete its synced tracks?`
+      : `Remove the saved server “${profile.name}”?`;
+    if (!window.confirm(question)) return;
+    removingId = profile.id;
+    formError = null;
+    try {
+      status = await navidromeRemoveProfile(profile.id);
+      if (renamingId === profile.id) renamingId = null;
+      if (profile.active) prefsHydrated = false;
+      await refreshProfiles();
+      onchanged?.();
+      onlog?.(`navidrome: removed ${profile.name}`);
+    } catch (e) {
+      formError = friendlyIpcError("server removal", e);
+    } finally {
+      removingId = null;
+    }
+  }
+
+  function startRename(profile: NavidromeProfile): void {
+    renamingId = profile.id;
+    renameValue = profile.label ?? "";
+    formError = null;
+  }
+
+  async function applyRename(): Promise<void> {
+    if (renamingId == null) return;
+    const id = renamingId;
+    const label = renameValue.trim() === "" ? null : renameValue.trim();
+    try {
+      status = await navidromeRenameProfile(id, label);
+      renamingId = null;
+      await refreshProfiles();
+      onchanged?.();
+      onlog?.(`navidrome: renamed server to ${label ?? "(automatic)"}`);
+    } catch (e) {
+      formError = friendlyIpcError("server rename", e);
     }
   }
 
@@ -203,6 +311,7 @@
 
   $effect(() => {
     void status?.configured;
+    void status?.profileId;
     void status?.libraryId;
     void refreshLibraries();
   });
@@ -238,15 +347,69 @@
 
     <div class="pbody">
       <div class="block">
+        <div class="bh">SERVERS</div>
+        {#if profilesError}
+          <div class="errline">{profilesError}</div>
+        {:else if profiles.length === 0}
+          <div class="dim">no saved servers — add one below</div>
+        {:else}
+          {#each profiles as profile (profile.id)}
+            <div class="prow" class:active={profile.active}>
+              {#if renamingId === profile.id}
+                <input
+                  class="txt"
+                  type="text"
+                  placeholder={`${profile.user}@…`}
+                  bind:value={renameValue}
+                  onkeydown={(e) => {
+                    if (e.key === "Enter") void applyRename();
+                    if (e.key === "Escape") renamingId = null;
+                  }} />
+                <div class="pactions">
+                  <button onclick={() => void applyRename()}>SAVE</button>
+                  <button onclick={() => (renamingId = null)}>CANCEL</button>
+                </div>
+              {:else}
+                <div class="pinfo">
+                  <b>{profile.name}</b>
+                  {#if profile.active}<span class="pactive">● ACTIVE</span>{/if}
+                  <span class="purl">{profile.user} · {profile.url}</span>
+                </div>
+                <div class="pactions">
+                  {#if !profile.active}
+                    <button
+                      onclick={() => void switchProfile(profile.id)}
+                      disabled={switchingId != null || connecting || disconnecting}>
+                      {switchingId === profile.id ? "SWITCHING…" : "SWITCH"}
+                    </button>
+                  {/if}
+                  <button onclick={() => startRename(profile)} disabled={removingId != null}>
+                    RENAME
+                  </button>
+                  <button
+                    onclick={() => void removeProfile(profile)}
+                    disabled={removingId != null}>
+                    {removingId === profile.id ? "REMOVING…" : "REMOVE"}
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+        <div class="dim">switching servers re-syncs; only one is active at a time</div>
+      </div>
+
+      <div class="block">
         <div class="bh">SERVER</div>
         {#if statusError}
           <div class="errline">{statusError}</div>
         {:else if status == null}
           <div class="dim">loading…</div>
         {:else if !status.configured}
-          <div class="dim">not connected — enter a server URL and credentials below</div>
+          <div class="dim">not connected — add a server below</div>
         {:else}
           <div class="state ok">● CONNECTED</div>
+          <div class="kv"><span>profile</span><b>{status.profileLabel ?? status.profileId}</b></div>
           <div class="kv"><span>url</span><b>{status.url}</b></div>
           <div class="kv"><span>user</span><b>{status.user}</b></div>
           <div class="kv"><span>server version</span><b>{status.serverVersion ?? "—"}</b></div>
@@ -293,6 +456,10 @@
           <input class="txt" type="text" placeholder="https://music.example.com" bind:value={url} />
         </label>
         <label class="field">
+          name
+          <input class="txt" type="text" placeholder="optional — defaults to user@host" bind:value={nameInput} />
+        </label>
+        <label class="field">
           user
           <input class="txt" type="text" autocomplete="off" bind:value={user} />
         </label>
@@ -313,6 +480,7 @@
             {disconnecting ? "DISCONNECTING…" : "DISCONNECT"}
           </button>
         </div>
+        <div class="dim">disconnect removes only the active server; the others stay saved</div>
         {#if formError}
           <div class="banner">{formError}</div>
         {/if}
@@ -422,6 +590,82 @@
     font-size: 10px;
     letter-spacing: 0.12em;
     color: #707070;
+  }
+
+  .prow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border: 1px solid #242424;
+    background: #0b0b0b;
+  }
+
+  .prow.active {
+    border-color: #2f4f33;
+    background: #0d130d;
+  }
+
+  .pinfo {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+  }
+
+  .pinfo b {
+    color: #3ccb4e;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pactive {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    color: #3ccb4e;
+  }
+
+  .purl {
+    flex-basis: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    color: #4f4f4f;
+  }
+
+  .pactions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+  }
+
+  .pactions button {
+    background: #1c1c1c;
+    color: #9a9a9a;
+    border: 1px solid #3a3a3a;
+    border-radius: 2px;
+    padding: 1px 5px;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+
+  .pactions button:hover:not(:disabled) {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+  }
+
+  .pactions button:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 
   .kv {

@@ -838,7 +838,7 @@
   async function onNavChanged(): Promise<void> {
     await refreshNavStatus();
     if (navStatus?.configured === true && navStatus.trackCount === 0 && !navSyncing) {
-      onlog("navidrome: connected — starting the first library sync");
+      onlog("navidrome: no remote tracks — starting a library sync");
       void syncNow();
     }
   }
@@ -1418,6 +1418,7 @@
             <p class="dim">connect a server first — open SETTINGS… below</p>
           {:else}
             <p class="state ok">● CONNECTED</p>
+            <div class="kv"><span>profile</span><b>{navStatus.profileLabel ?? navStatus.profileId ?? "—"}</b></div>
             <div class="kv"><span>url</span><b>{navStatus.url}</b></div>
             <div class="kv"><span>user</span><b>{navStatus.user}</b></div>
             <div class="kv"><span>version</span><b>{navStatus.serverVersion ?? "—"}</b></div>
