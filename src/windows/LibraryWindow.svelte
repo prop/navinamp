@@ -143,7 +143,7 @@
     return () => clearInterval(timer);
   });
 
-  async function devCmd(name: string, args?: object): Promise<void> {
+  async function devCmd(name: string, args?: Record<string, unknown>): Promise<void> {
     try {
       await invoke(name, args);
     } catch (e) {

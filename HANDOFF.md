@@ -65,6 +65,11 @@
 - EQ AUTO works: each track change auto-applies a preset named after the
   track's genre (built-in curves or user saves); the flag persists in
   localStorage. Per-track/artist associations remain a future refinement.
+- Release-build devtools enabled (tauri `devtools` feature); inspect works in
+  packaged builds too.
+- svelte-check is clean (0 errors). The old 14-diagnostic baseline was a
+  variable named `state` colliding with the `$state` rune (parsed as a store
+  subscription); renamed to `audio`, plus InvokeArgs typings.
 - Paged views: SELECT ALL selects the loaded rows only; shift-range
   selection is limited to loaded rows (a select-all-by-filter command is a
   future addition). The tree renders 200-row slices but is not virtualized,
@@ -72,7 +77,9 @@
 
 ## Next up
 
-1. Release-build devtools, tree virtualization, svelte-check/TS7 cleanup.
+1. Tree virtualization (deep album/artist scrolling still builds rows).
+2. SELECT ALL by filter (paged views currently select loaded rows only).
+3. AUTO per-track/artist associations (genre matching ships today).
 
 ## Known follow-ups / deferred
 
@@ -87,8 +94,8 @@
   `[NaVinaMP] ` name prefix, and republishing keeps the server-side name
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
-- Devtools in release builds (needs the tauri `devtools` feature)
-- Chunked virtualization for 100k-row lists; svelte-check/TS7 baseline
+- Virtualization: the table is windowed; the tree still renders 200-row
+  slices (deep scrolls build DOM rows)
 - Signing ($99/yr) for prompt-free installs; auto-updater after that
 - Deferred by decision: multi-platform CI releases, MAKI runtime,
   video window, Shoutcast

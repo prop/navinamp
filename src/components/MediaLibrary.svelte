@@ -610,7 +610,7 @@
 
   async function refreshAll(): Promise<void> {
     const seq = ++loadSeq;
-    const live = <T,>(set: (v: T) => void, err?: (msg: string) => void) => (v: T) => {
+    const live = <T,>(set: (v: T) => void) => (v: T) => {
       if (seq === loadSeq) set(v);
     };
     // Startup only loads cheap counts/metadata. The table pages itself and

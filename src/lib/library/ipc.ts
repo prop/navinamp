@@ -231,7 +231,7 @@ export function libraryAlbumTracks(albumKey: string): Promise<Track[]> {
 
 /** Tracks filtered by optional artist/genre with limit/offset paging. */
 export function libraryTracks(query: TrackQuery = {}): Promise<Track[]> {
-  return invoke<Track[]>("library_tracks", query);
+  return invoke<Track[]>("library_tracks", { ...query } as Record<string, unknown>);
 }
 
 /** Library counters (`lastScan` is null until the first scan). */

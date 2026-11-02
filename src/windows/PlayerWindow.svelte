@@ -30,7 +30,7 @@
   import { resolveLayout } from "../lib/skin/resolver";
   import { formatWarning } from "../lib/skin/wasabi";
   import { dragRects } from "../lib/skin/titlebar";
-  import type { SkinPayload } from "../lib/skin/types";
+  import type { SkinPayload, Warning } from "../lib/skin/types";
   import {
     playerLayoutMode,
     publishSkinTheme,
@@ -53,7 +53,7 @@
     channels: number | null;
   };
 
-  let state = $state<AudioState>({
+  let audio = $state<AudioState>({
     status: "stopped",
     positionSecs: 0,
     durationSecs: null,
@@ -72,7 +72,7 @@
 
   async function refresh() {
     try {
-      state = await invoke<AudioState>("audio_state");
+      audio = await invoke<AudioState>("audio_state");
     } catch {
       // backend without audio_state — keep the last state
     }
@@ -113,7 +113,10 @@
 
   async function cmd(name: string, ...args: unknown[]) {
     try {
-      await invoke(name, args.length > 0 ? (args[0] as object) : undefined);
+      await invoke(
+        name,
+        args.length > 0 ? (args[0] as Record<string, unknown>) : undefined,
+      );
     } catch (e) {
       console.warn(`[navinamp] ${name} error: ${e}`);
     }
@@ -146,15 +149,9 @@
     if (wasUnloaded) queue.play(first);
   }
 
-  const fmt = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${String(s).padStart(2, "0")}`;
-  };
-
-  const duration = $derived(state.durationSecs ?? 0);
+  const duration = $derived(audio.durationSecs ?? 0);
   const position = $derived(
-    Math.min(seeking ?? state.positionSecs, duration || Infinity),
+    Math.min(seeking ?? audio.positionSecs, duration || Infinity),
   );
 
   // Songticker content: "Artist - Title" of the current queue item.
@@ -205,15 +202,15 @@
 
   let warningsOpen = $state(false);
   const skinWarnings = $derived(
-    (skin?.warnings ?? []).map((w) => formatWarning(w)),
+    (skin?.warnings ?? []).map((w: Warning) => formatWarning(w)),
   );
-  const resolveWarnings = $derived(playerLayout?.warnings ?? []);
-  const allWarnings = $derived([...skinWarnings, ...resolveWarnings]);
 
   // ── layout: follows the window manager's mode (normal/shade) ────────────
 
   const layoutMode = $derived(playerLayoutMode());
   const playerLayout = $derived(skin ? resolveLayout(skin, "main", layoutMode) : null);
+  const resolveWarnings = $derived(playerLayout?.warnings ?? []);
+  const allWarnings = $derived([...skinWarnings, ...resolveWarnings]);
   const dragStrips = $derived.by(() =>
     skin && playerLayout ? dragRects(skin.skin, playerLayout) : [],
   );
@@ -258,14 +255,14 @@
   function skinAction(action: string) {
     switch (action) {
       case "PLAY":
-        if (state.status === "paused") void cmd("audio_resume");
-        else if (state.status === "stopped" && queue.items.length > 0) {
+        if (audio.status === "paused") void cmd("audio_resume");
+        else if (audio.status === "stopped" && queue.items.length > 0) {
           queue.play(queue.currentIndex ?? 0);
         }
         break;
       case "PAUSE":
-        if (state.status === "playing") void cmd("audio_pause");
-        else if (state.status === "paused") void cmd("audio_resume");
+        if (audio.status === "playing") void cmd("audio_pause");
+        else if (audio.status === "paused") void cmd("audio_resume");
         break;
       case "STOP":
         stopEngine();
@@ -325,14 +322,14 @@
   }
 
   function pushMediaMetadata(force = false): void {
-    const playing = state.status === "playing";
+    const playing = audio.status === "playing";
     if (playing !== lastPlaying) {
       lastPlaying = playing;
       invoke("media_playback", { playing }).catch(mediaWarn);
     }
     const item = queue.currentItem;
     if (!item) return;
-    const pos = Math.floor(state.positionSecs);
+    const pos = Math.floor(audio.positionSecs);
     const key = `${item.id}:${item.durationSecs ?? "?"}:${pos}`;
     if (!force && key === lastMetaKey) return;
     lastMetaKey = key;
@@ -360,18 +357,18 @@
     <SkinSurface
       layout={playerLayout}
       {scale}
-      status={state.status}
+      status={audio.status}
       {position}
       {duration}
-      volume={state.volume}
+      volume={audio.volume}
       {ticker}
       playlistVisible={windowIsVisible("playlist")}
       libraryVisible={windowIsVisible("library")}
       eqVisible={windowIsVisible("eq")}
       shadeActive={layoutMode === "shade"}
-      bitrateKbps={state.bitrateKbps}
-      sampleRateHz={state.sampleRateHz}
-      channels={state.channels}
+      bitrateKbps={audio.bitrateKbps}
+      sampleRateHz={audio.sampleRateHz}
+      channels={audio.channels}
       onaction={skinAction}
       onseek={(secs) => cmd("audio_seek", { secs })}
       onvolume={(v) => cmd("audio_set_volume", { volume: v })}
