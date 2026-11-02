@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/prop/navinamp/compare/v0.7.0...v0.8.0) (2026-11-02)
+
+
+### Features
+
+* **eq:** add a Bass Boost preset ([e38e80d](https://github.com/prop/navinamp/commit/e38e80d8564872dbdcd0a31e66301dbe24af36e6))
+* **eq:** add an AUTO curve manager ([f701f46](https://github.com/prop/navinamp/commit/f701f465314d1a087c48bc0f4b0b299e2a49a52b))
+* **library:** add A–Z jump rails to the long tree groups ([8446a7f](https://github.com/prop/navinamp/commit/8446a7f5bc41b5ee25ab59b2d64ac434000bd2ad))
+* **navidrome:** per-server playlists and publish target ([995ad3f](https://github.com/prop/navinamp/commit/995ad3fd80b5472faa500f4ebf900d65db07a155))
+
+
+### Bug Fixes
+
+* **eq:** stop presets from clipping the output ([8d5d946](https://github.com/prop/navinamp/commit/8d5d946f4701ab9c20d6aad34f48284fb4744b70))
+* **ui:** selection-aware row menus and a global Always on Top ([e6dc7e1](https://github.com/prop/navinamp/commit/e6dc7e18add69ae9072cfeb28a95f4a40137432c))
+
 ## [0.7.0](https://github.com/prop/navinamp/compare/v0.6.0...v0.7.0) (2026-11-02)
 
 
