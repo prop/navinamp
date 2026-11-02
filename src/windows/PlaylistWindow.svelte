@@ -13,6 +13,7 @@
 
   import PlaylistEditor from "../components/PlaylistEditor.svelte";
   import { expandAudioPaths } from "../lib/library/ipc";
+  import { formatTime } from "../lib/player/queue.svelte";
   import {
     layoutMode,
     queueIntent,
@@ -33,6 +34,20 @@
   const currentIndex = $derived(snap?.currentIndex ?? null);
   const shuffle = $derived(snap?.shuffle ?? false);
   const repeat = $derived(snap?.repeat ?? "off");
+
+  // Folded strip: classic windowshade shows the playing track and its length.
+  const stripTitle = $derived.by(() => {
+    if (mode !== "shade" || currentIndex == null) return "PLAYLIST EDITOR";
+    const item = items[currentIndex];
+    if (!item) return "PLAYLIST EDITOR";
+    const label = item.artist ? `${item.artist} - ${item.title}` : item.title;
+    return `${currentIndex + 1}. ${label}`;
+  });
+  const stripNote = $derived.by(() => {
+    if (mode !== "shade" || currentIndex == null) return undefined;
+    const secs = items[currentIndex]?.durationSecs;
+    return secs != null ? formatTime(secs) : undefined;
+  });
   // pledit.txt colors of the loaded classic skin (classic-green default).
   const theme = $derived(skinTheme.value);
 
@@ -105,7 +120,8 @@
        editor body repeats neither anymore. Double-clicking the strip folds
        the window to the strip, classic windowshade style. -->
   <TitleStrip
-    title="PLAYLIST EDITOR"
+    title={stripTitle}
+    note={stripNote}
     onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
   />
 

@@ -275,12 +275,13 @@ fn classic_skin_synthesizes_windowshade_layouts() {
         "complete fixture must synthesize warning-free: {warnings:?}"
     );
 
-    // Main: strip + mini clock + mini seek + 6 transport hit areas + 4
-    // window buttons.
+    // Main: strip + mini clock + mini analyzer + mini seek + 6 transport hit
+    // areas + 4 window buttons.
     let main = layout_of(&skin, "main", "shade");
     assert_eq!((main.rect.w, main.rect.h), (Some(275), Some(14)));
     assert_eq!(of_kind(main, "layer").len(), 1);
     assert_eq!(of_kind(main, "text").len(), 1);
+    assert_eq!(of_kind(main, "vis").len(), 1);
     assert_eq!(of_kind(main, "slider").len(), 1);
     assert_eq!(of_kind(main, "button").len(), 6 + 4);
     assert!(with_action(main, "TOGGLE_SHADE").is_some());

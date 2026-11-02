@@ -66,7 +66,9 @@ export const CLASSIC_TEXT_SPEC: BmFontSpec = {
   strideY: 6,
   cols: 31,
   // Row 0: a–z, `"`, `@`, two empty cells, space.
-  // Row 1: digits, `…` (U+2026), then punctuation.
+  // Row 1: digits, `…` (U+2026), then punctuation — exact Webamp
+  // `FONT_LOOKUP` order (`.:()-'!_+…,=$#`); a wrong order makes `:`
+  // render as `-` in the windowshade clock.
   // Row 2: Å Ö Ä ? * (the only localized glyphs the classic font has).
   // `<` `>` `{` `}` share the bracket cells (Webamp does the same).
   charmap:
@@ -74,7 +76,7 @@ export const CLASSIC_TEXT_SPEC: BmFontSpec = {
     EMPTY +
     EMPTY +
     " " +
-    "0123456789\u2026.,():-'!_+\\/[]^&%,$#" +
+    "0123456789\u2026.:()-'!_+\\/[]^&%,=$#" +
     "\u00c5\u00d6\u00c4?*" +
     EMPTY.repeat(26),
   aliases: { "<": "[", ">": "]", "{": "[", "}": "]" },
