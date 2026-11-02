@@ -151,7 +151,9 @@ jobs:
         run: |
           VER="${GITHUB_REF_NAME#v}"
           echo "building version $VER"
-          npm version "$VER" --no-git-tag-version
+          # The release PR already stamps package.json; npm errors on a
+          # same-version bump unless explicitly allowed.
+          npm version "$VER" --no-git-tag-version --allow-same-version
           sed -i '' "s/^version = \".*\"/version = \"$VER\"/" Cargo.toml
           grep -q "^version = \"$VER\"" Cargo.toml || { echo "version stamp failed"; exit 1; }
           # sync Cargo.lock member versions (no dependency upgrades)
