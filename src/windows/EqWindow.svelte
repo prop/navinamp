@@ -41,8 +41,16 @@
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
   import { dragRects } from "../lib/skin/titlebar";
+  import { dragWindow } from "../lib/window/drag";
   import type { SkinPayload } from "../lib/skin/types";
-  import { windowIsVisible, windowSetSize, queueSnapshot } from "../lib/window/bus.svelte";
+  import {
+    layoutMode,
+    queueSnapshot,
+    windowIsVisible,
+    windowSetSize,
+    windowSetVisible,
+    windowToggleLayout,
+  } from "../lib/window/bus.svelte";
   import { libraryTrack, type Track } from "../lib/library/ipc";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
@@ -78,11 +86,13 @@
 
   // The `eq` container must exist explicitly: resolveLayout alone would
   // silently fall back to the skin's FIRST container (the player window).
+  // The layout follows the window manager's normal/shade mode (windowshade).
+  const eqMode = $derived(layoutMode(LABEL));
   const hasEqContainer = $derived(
     skin?.skin.containers.some((c) => c.id === "eq" && c.layouts.length > 0) ?? false,
   );
   const eqLayout = $derived(
-    hasEqContainer && skin ? resolveLayout(skin, "eq", "normal") : null,
+    hasEqContainer && skin ? resolveLayout(skin, "eq", eqMode) : null,
   );
   const dragStrips = $derived.by(() =>
     skin && eqLayout ? dragRects(skin.skin, eqLayout) : [],
@@ -324,6 +334,12 @@
       case "PRESETS":
         cyclePreset();
         break;
+      case "TOGGLE_SHADE":
+        windowToggleLayout(LABEL).catch(() => undefined);
+        break;
+      case "CLOSE":
+        windowSetVisible(LABEL, false).catch(() => undefined);
+        break;
     }
   }
 
@@ -375,20 +391,29 @@
     />
     <div class="drag-layer" aria-hidden="true">
       {#each dragStrips as r (r.x)}
-        <!-- OS drag region (Tauri handles mousedown via the attribute). No
-             shade toggle here — the EQ window has no shade layout. -->
+        <!-- OS drag region (Tauri handles mousedown via the attribute); the
+             dblclick toggles the skin's shade layout, like the player. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="drag"
-          data-tauri-drag-region
+          use:dragWindow
+          title="Drag to move — double-click toggles shade"
           style="left:{r.x * scale}px; top:{r.y * scale}px; width:{r.w * scale}px; height:{r.h * scale}px;"
+          ondblclick={() => windowToggleLayout(LABEL).catch(() => undefined)}
         ></div>
       {/each}
     </div>
   {:else}
-    <!-- No skin / no eq container: the HTML panel (same IPC wiring). -->
+    <!-- No skin / no eq container: the HTML panel (same IPC wiring).
+         Double-clicking the strip folds it to the strip (no skin art). -->
     <div class="fallback">
-      <TitleStrip title="EQUALIZER" />
-      <EqPanel />
+      <TitleStrip
+        title="EQUALIZER"
+        onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
+      />
+      {#if eqMode === "normal"}
+        <EqPanel />
+      {/if}
     </div>
   {/if}
 </div>

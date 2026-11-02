@@ -218,9 +218,14 @@ export function windowIsVisible(label: WindowLabel): boolean {
   return winInfo(label)?.visible ?? true;
 }
 
+/** A window's current layout (defaults to "normal"). */
+export function layoutMode(label: WindowLabel): "normal" | "shade" {
+  return winInfo(label)?.layout ?? "normal";
+}
+
 /** The player window's current layout (defaults to "normal"). */
 export function playerLayoutMode(): "normal" | "shade" {
-  return winInfo("main")?.layout ?? "normal";
+  return layoutMode("main");
 }
 
 // ── media commands (media keys / DEV transport) ────────────────────────────

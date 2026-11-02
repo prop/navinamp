@@ -13,10 +13,11 @@
    * the resolver), and the OS window is sized to the layout rect × scale —
    * which is also how a shade toggle resizes the window.
    *
-   * Dragging: the skin draws its own titlebar, so a transparent
-   * `data-tauri-drag-region` layer overlays the titlebar band discovered
-   * from the skin (lib/skin/titlebar), with holes punched around the
-   * interactive objects. Double-clicking the band toggles shade (classic).
+   * Dragging: the skin draws its own titlebar, so a transparent layer
+   * overlays the titlebar band discovered from the skin (lib/skin/titlebar),
+   * with holes punched around the interactive objects. The layer starts the
+   * OS drag only after the pointer moves (lib/window/drag), leaving the
+   * double-click to toggle shade (classic).
    */
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
@@ -30,6 +31,7 @@
   import { resolveLayout } from "../lib/skin/resolver";
   import { formatWarning } from "../lib/skin/wasabi";
   import { dragRects } from "../lib/skin/titlebar";
+  import { dragWindow } from "../lib/window/drag";
   import type { SkinPayload, Warning } from "../lib/skin/types";
   import {
     playerLayoutMode,
@@ -384,11 +386,11 @@
     <div class="drag-layer" aria-hidden="true">
       {#each dragStrips as r (r.x)}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <!-- OS drag region (Tauri handles mousedown via the attribute); the
-             dblclick is a classic shade toggle, not a DOM interaction. -->
+        <!-- Threshold drag keeps the double-click for the classic shade
+             toggle (a Tauri drag region would maximize the window). -->
         <div
           class="drag"
-          data-tauri-drag-region
+          use:dragWindow
           style="left:{r.x * scale}px; top:{r.y * scale}px; width:{r.w * scale}px; height:{r.h * scale}px;"
           title="Drag to move — double-click toggles shade"
           ondblclick={() => windowToggleLayout("main").catch(warnIpc)}

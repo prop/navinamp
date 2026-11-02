@@ -114,12 +114,13 @@ with the existing pipeline. The full coordinate table lives in the
 | `text.bmp` | `bitmapfont` `wsz.font.text` (5×6 glyphs, 31-column grid) + whole-file bitmap `wsz.font.text.image` | songticker (111,27), bitrate (111,43, `display="bitrate"`), kHz (156,43, `display="khz"`) text objects with `params` `font`/`charset=classic-text`; glyph *rendering* is the renderer's job (src/lib/skin/bmfont.ts) |
 | `numbers.bmp` | `bitmapfont` `wsz.font.numbers` (9×13 glyphs, 11 cells) + whole-file bitmap `wsz.font.numbers.image` | one `display="time"` text object over the digit region (36..111, y=26) with `params` `charset=classic-numbers` and `digitoffsets` (the `:` colon is baked into main.bmp) |
 | `num0.bmp`…`num9.bmp` | silent whole-file bitmaps `wsz.num.0…9` | wired via `params["numbitmaps"]` on the time object (older dialect) |
-| `titlebar.bmp` | glyph grid + strips | `SYSMENU`/`MINIMIZE`/`TOGGLE_SHADE`/`CLOSE` buttons at y=3, clutter-bar layer (10,22); strips feed EQ/playlist titlebars |
+| `titlebar.bmp` | glyph grid + strips | `SYSMENU`/`MINIMIZE`/`TOGGLE_SHADE`/`CLOSE` buttons at y=3, clutter-bar layer (10,22); strips feed EQ/playlist titlebars; main shade row (27,29) + mini seek (0/20,36) + transport hit areas feed the `main` `shade` layout |
 | `viscolor.txt` | up to 24 `R,G,B` lines (comments tolerated) | `vis` object at 24,43, `params["viscolors"]` = `r,g,b;…` (semicolon-joined) |
 | `pledit.txt` | modern `[Text]`+`Normal=#RRGGBB` **and** ancient bare `R,G,B`-line dialects | `Skin::params`: `pledit.colors` (comma-joined), `pledit.color.{normal,current,normalbg,oldbg,selectedbg,selected}`, `pledit.font` |
-| `eqmain.bmp` | bg (0,0), titlebar (0,134/149), ON/AUTO/PRESETS cells (y=119/164/176), graph (0,294), shared trough (13,229) + thumb (0,164/176) | eq container (275×116): `EQ_TOGGLE`/`EQ_AUTO` toggles, `EQ_PRESETS` button, graph layer, 11 vertical `EQ_SET` sliders (preamp index=0 at x=21; bands 1–10 at 78+18i with `params["band"]` = 60…16000 Hz, matching NaVinaMP's EQ) |
+| `eqmain.bmp` | bg (0,0), titlebar (0,134/149), ON/AUTO/PRESETS cells (y=119/164/176), graph (0,294), shared trough (13,229) + thumb (0,164/176) | eq container (275×116): `EQ_TOGGLE`/`EQ_AUTO` toggles, `EQ_PRESETS` button, graph layer, 11 vertical `EQ_SET` sliders (preamp index=0 at x=21; bands 1–10 at 78+18i with `params["band"]` = 60…16000 Hz, matching NaVinaMP's EQ); its titlebar is the `shade` fallback strip when `eq_ex.bmp` is absent |
 | `pledit.bmp` | 3×3 stretchable tile grid | playlist container (275×232) tile layers with `relatx`/`relatw`/… params; the list body is a solid fill from `pledit.color.normalbg` |
-| `eq_ex.bmp`, `gen.bmp`, `genex.bmp`, `mb.bmp`, `video.bmp` | not consumed (shade modes / generic plugin frames / minibrowser / video) | documented limitation |
+| `eq_ex.bmp` | shade strips (0,0 selected / 0,15 normal) | eq `shade` layout background (275×14); probed silently — absence falls back to the eqmain titlebar strip |
+| `gen.bmp`, `genex.bmp`, `mb.bmp`, `video.bmp` | not consumed (generic plugin frames / minibrowser / video) | documented limitation |
 | `REGION.txt` | ignored (window click masks — windows stay rectangular) | documented limitation |
 
 Warning policy: a missing optional file yields exactly **one**

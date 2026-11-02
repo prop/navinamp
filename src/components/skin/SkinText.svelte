@@ -220,6 +220,20 @@
         ctx.clearRect(0, 0, w, h);
         return;
       }
+      // The windowshade clock uses text.bmp's 5×6 glyphs, which include a
+      // colon cell (numbers.bmp has none — its colon is baked into main.bmp).
+      // Clip to the object rect so a hostile/odd skin cannot overdraw the
+      // strip (the glyph run can exceed the box on long times).
+      if (charset === "classic-text") {
+        ctx.clearRect(0, 0, w, h);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, w, h);
+        ctx.clip();
+        f.drawText(ctx, text, 0, 0);
+        ctx.restore();
+        return;
+      }
       const digits = text.replace(":", "");
       const advance = f.spec.advance ?? f.spec.cellW;
       const offsets = digitOffsets ?? [...digits].map((_, i) => i * advance);

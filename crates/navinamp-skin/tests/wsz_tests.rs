@@ -120,16 +120,21 @@ fn parse_classic(bytes: Vec<u8>) -> (SkinArchive, Skin, Vec<Warning>) {
     (archive, skin, warnings)
 }
 
-/// The `normal` layout of one container.
-fn normal_layout<'a>(skin: &'a Skin, container: &str) -> &'a Layout {
+/// One layout of one container.
+fn layout_of<'a>(skin: &'a Skin, container: &str, layout: &str) -> &'a Layout {
     skin.containers
         .iter()
         .find(|c| c.id == container)
         .unwrap_or_else(|| panic!("container `{container}`"))
         .layouts
         .iter()
-        .find(|l| l.id == "normal")
-        .unwrap_or_else(|| panic!("layout `normal` of `{container}`"))
+        .find(|l| l.id == layout)
+        .unwrap_or_else(|| panic!("layout `{layout}` of `{container}`"))
+}
+
+/// The `normal` layout of one container.
+fn normal_layout<'a>(skin: &'a Skin, container: &str) -> &'a Layout {
+    layout_of(skin, container, "normal")
 }
 
 /// All objects of one Wasabi tag kind inside a layout.
@@ -260,6 +265,67 @@ fn full_classic_skin_synthesizes_three_containers() {
 
     // playlist: pledit.bmp tiles
     assert_eq!(of_kind(playlist, "layer").len(), 9);
+}
+
+#[test]
+fn classic_skin_synthesizes_windowshade_layouts() {
+    let (_archive, skin, warnings) = parse_classic(full_classic_skin());
+    assert!(
+        warnings.is_empty(),
+        "complete fixture must synthesize warning-free: {warnings:?}"
+    );
+
+    // Main: strip + mini clock + mini seek + 6 transport hit areas + 4
+    // window buttons.
+    let main = layout_of(&skin, "main", "shade");
+    assert_eq!((main.rect.w, main.rect.h), (Some(275), Some(14)));
+    assert_eq!(of_kind(main, "layer").len(), 1);
+    assert_eq!(of_kind(main, "text").len(), 1);
+    assert_eq!(of_kind(main, "slider").len(), 1);
+    assert_eq!(of_kind(main, "button").len(), 6 + 4);
+    assert!(with_action(main, "TOGGLE_SHADE").is_some());
+    assert!(with_action(main, "PLAY").is_some());
+    assert!(with_action(main, "SEEK").is_some());
+
+    // EQ: eq_ex.bmp is present in the full fixture, so its shade art wins.
+    let eq = layout_of(&skin, "eq", "shade");
+    assert_eq!((eq.rect.w, eq.rect.h), (Some(275), Some(14)));
+    let bg = match eq.objects.first() {
+        Some(GuiObject::Layer(l)) => l,
+        other => panic!("expected shade background layer, got {other:?}"),
+    };
+    assert_eq!(bg.image.as_deref(), Some("wsz.eq.shade"));
+    assert!(with_action(eq, "TOGGLE_SHADE").is_some());
+}
+
+#[test]
+fn eq_shade_falls_back_to_eqmain_titlebar_without_eq_ex() {
+    let mut entries: Vec<(&str, Vec<u8>)> = FULL_BMPS
+        .iter()
+        .filter(|(name, _, _)| *name != "eq_ex.bmp")
+        .map(|(name, w, h)| (*name, bmp(*w, *h)))
+        .collect();
+    entries.push(("viscolor.txt", VISCOLOR_TXT.as_bytes().to_vec()));
+    entries.push(("pledit.txt", PLEDIT_INI_TXT.as_bytes().to_vec()));
+    let borrowed: Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(name, data)| (*name, data.as_slice()))
+        .collect();
+    let (_archive, skin, warnings) = parse_classic(zip_bytes(&borrowed));
+
+    let eq = layout_of(&skin, "eq", "shade");
+    let bg = match eq.objects.first() {
+        Some(GuiObject::Layer(l)) => l,
+        other => panic!("expected shade background layer, got {other:?}"),
+    };
+    assert_eq!(bg.image.as_deref(), Some("wsz.eq.titlebar"));
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            Warning::ClassicMissingOptional { file, .. } if file == "eq_ex.bmp"
+        )),
+        "missing eq_ex.bmp is a normal fallback, not a warning: {warnings:?}"
+    );
 }
 
 #[test]

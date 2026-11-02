@@ -1,24 +1,53 @@
 <script lang="ts">
   /**
    * Skinned-ish chrome strip for the non-skin windows (playlist / library):
-   * a 14px dark titlebar that drags the OS window via `data-tauri-drag-region`
-   * (the attribute must sit on the mousedown target, so every child that
-   * isn't itself interactive carries it too).
+   * a 14px dark titlebar that drags the OS window after a small pointer
+   * movement (lib/window/drag — a Tauri drag region would swallow the
+   * double-click and maximize instead).
+   *
+   * With `onfold`, the strip is also the windowshade control: double-click
+   * toggles it, and as a real `<button>` it is keyboard reachable (Enter /
+   * Space produce a detail-0 click; ordinary mouse clicks are ignored).
    */
+  import { dragWindow } from "../lib/window/drag";
+
   interface Props {
     title: string;
     /** Right-aligned extra text (queue position, …). */
     note?: string;
+    /** Double-click on the strip folds/unfolds the window (windowshade). */
+    onfold?: () => void;
   }
-  let { title, note }: Props = $props();
+  let { title, note, onfold }: Props = $props();
 </script>
 
-<header class="strip" data-tauri-drag-region>
-  <span class="title" data-tauri-drag-region>{title}</span>
+{#snippet content()}
+  <span class="title">{title}</span>
   {#if note}
-    <span class="note mono" data-tauri-drag-region>{note}</span>
+    <span class="note mono">{note}</span>
   {/if}
-</header>
+{/snippet}
+
+{#if onfold}
+  <button
+    type="button"
+    class="strip foldable"
+    use:dragWindow
+    aria-label={`${title} — press Enter to fold or unfold`}
+    title="Drag to move — double-click folds the window"
+    ondblclick={onfold}
+    onclick={(e) => {
+      // detail 0 = keyboard activation (Enter/Space); mouse clicks wait for
+      // the classic double-click.
+      if (e.detail === 0) onfold?.();
+    }}>
+    {@render content()}
+  </button>
+{:else}
+  <header class="strip" use:dragWindow>
+    {@render content()}
+  </header>
+{/if}
 
 <style>
   .strip {
@@ -34,6 +63,16 @@
     border: 1px solid #2a2a2a;
     user-select: none;
     cursor: default;
+  }
+
+  /* Button reset for the foldable variant (it is a real <button>). */
+  .strip.foldable {
+    appearance: none;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
   }
 
   /* Pixel font + tracked caps: the classic skinned-titlebar look. */

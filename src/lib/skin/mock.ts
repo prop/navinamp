@@ -191,6 +191,22 @@ function backgroundBitmap(): string {
   });
 }
 
+/** 275×14 windowshade strip for the fallback skin. */
+function shadeBitmap(): string {
+  return png(W, 14, (ctx) => {
+    const grad = ctx.createLinearGradient(0, 0, 0, 14);
+    grad.addColorStop(0, "#34343e");
+    grad.addColorStop(1, "#0b0b0f");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, 14);
+    ctx.fillStyle = "rgba(255,255,255,0.07)";
+    ctx.fillRect(1, 1, W - 2, 1);
+    ctx.strokeStyle = "#4d4d58";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, W - 1, 13);
+  });
+}
+
 /** Inset panel behind the vis/status/volume group. */
 function panelBitmap(w: number, h: number): string {
   return png(w, h, (ctx) => {
@@ -238,6 +254,7 @@ function transportButton(t: Transport): GuiObject {
 function buildImages(): Record<string, string> {
   const images: Record<string, string> = {
     "player.background": backgroundBitmap(),
+    "player.shade": shadeBitmap(),
     "player.status.bg": panelBitmap(GROUP_W, GROUP_H),
     "anim.playstate": animBitmap(),
     "seek.track": trackBitmap(SEEK_W, TRACK_H, false),
@@ -359,6 +376,42 @@ export function mockSkinPayload(): SkinPayload {
                 params: { orientation: "horizontal" },
               },
               ...TRANSPORTS.map(transportButton),
+            ],
+          },
+          {
+            id: "shade",
+            rect: { x: 0, y: 0, w: W, h: 14 },
+            objects: [
+              {
+                kind: "layer",
+                id: "shade.background",
+                image: "player.shade",
+                rect: { x: 0, y: 0, w: W, h: 14 },
+              },
+              {
+                kind: "text",
+                id: "shade.title",
+                rect: { x: 8, y: 4, w: 80, h: 8 },
+                params: {
+                  text: "NAVINAMP",
+                  color: "#3ccb4e",
+                  font: "Verdana, Tahoma, sans-serif",
+                  fontsize: "7",
+                  bold: "1",
+                },
+              },
+              {
+                kind: "text",
+                id: "shade.time",
+                display: "time",
+                rect: { x: 190, y: 2, w: 50, h: 10 },
+                params: {
+                  text: " ",
+                  color: "#9adcff",
+                  font: "Verdana, Tahoma, sans-serif",
+                  fontsize: "9",
+                },
+              },
             ],
           },
         ],

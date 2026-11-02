@@ -1329,6 +1329,12 @@ impl WindowManager {
         Ok(())
     }
 
+    /// Current layout mode for a label (the size clamp allows shade strips to
+    /// be shorter than the normal-window minimum).
+    pub fn layout_of(&self, label: &str) -> Option<Layout> {
+        lock(&self.inner).wins.get(label).map(|st| st.layout)
+    }
+
     pub fn toggle_layout(&self, label: &str) -> Result<WindowsInfo, String> {
         {
             let mut inner = lock(&self.inner);
@@ -1732,6 +1738,21 @@ pub fn window_toggle_layout(
     state.toggle_layout(&label)
 }
 
+/// Size clamp for frontend-reported content sizes. The normal minimum keeps
+/// degenerate/transient layouts from collapsing a window; a windowshade strip
+/// (layout `shade`) may legitimately be only 14 logical px tall.
+fn clamp_window_size(layout: Layout, w: f64, h: f64) -> (f64, f64) {
+    const MIN_W: f64 = 60.0;
+    const MIN_H: f64 = 60.0;
+    const MIN_SHADE_H: f64 = 14.0;
+    const MAX: f64 = 8192.0;
+    let min_h = match layout {
+        Layout::Shade => MIN_SHADE_H,
+        Layout::Normal => MIN_H,
+    };
+    (w.clamp(MIN_W, MAX), h.clamp(min_h, MAX))
+}
+
 /// The frontend reports its mounted content size (CSS px == logical px);
 /// Rust applies it to the OS window, updates state and broadcasts.
 #[tauri::command]
@@ -1744,9 +1765,8 @@ pub fn window_set_size(
 ) -> Result<(), String> {
     // Degenerate or absurd sizes (transient layouts, hidden content under
     // a ResizeObserver) must not collapse or misplace an OS window.
-    const MIN: f64 = 60.0;
-    const MAX: f64 = 8192.0;
-    let (w, h) = (w.clamp(MIN, MAX), h.clamp(MIN, MAX));
+    let layout = state.layout_of(&label).unwrap_or(Layout::Normal);
+    let (w, h) = clamp_window_size(layout, w, h);
     state.set_size(&app, &label, w, h)
 }
 
@@ -1864,6 +1884,23 @@ mod tests {
         let lib = &merged["library"];
         assert!(lib.rect.x >= 0 && lib.rect.x < 1440);
         assert!(lib.rect.y >= 0 && lib.rect.y < 900);
+    }
+
+    #[test]
+    fn size_clamp_allows_shade_strips_but_not_collapsed_normal_windows() {
+        // A 14px windowshade strip survives the clamp…
+        assert_eq!(clamp_window_size(Layout::Shade, 275.0, 14.0), (275.0, 14.0));
+        // …a normal window still cannot collapse below 60px…
+        assert_eq!(
+            clamp_window_size(Layout::Normal, 275.0, 14.0),
+            (275.0, 60.0)
+        );
+        // …and absurd/transient sizes stay bounded on both axes.
+        assert_eq!(clamp_window_size(Layout::Shade, 0.0, 0.0), (60.0, 14.0));
+        assert_eq!(
+            clamp_window_size(Layout::Normal, 99_999.0, 99_999.0),
+            (8192.0, 8192.0)
+        );
     }
 
     #[test]

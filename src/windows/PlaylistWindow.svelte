@@ -13,9 +13,20 @@
 
   import PlaylistEditor from "../components/PlaylistEditor.svelte";
   import { expandAudioPaths } from "../lib/library/ipc";
-  import { queueIntent, queueSnapshot, skinTheme, windowSetSize } from "../lib/window/bus.svelte";
+  import {
+    layoutMode,
+    queueIntent,
+    queueSnapshot,
+    skinTheme,
+    windowSetSize,
+    windowToggleLayout,
+  } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
+
+  // Windowshade: the OS window manager owns the normal/shade flag; this
+  // window hides its body and keeps the title strip when folded.
+  const mode = $derived(layoutMode(LABEL));
 
   const snap = $derived(queueSnapshot.value);
   const items = $derived(snap?.items ?? []);
@@ -91,33 +102,42 @@
 
 <div class="win" bind:this={root}>
   <!-- ONE header (this strip) and ONE count (the status row below) — the
-       editor body repeats neither anymore. -->
-  <TitleStrip title="PLAYLIST EDITOR" />
-
-  <div class="qbar mono">
-    <span class="pos">{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span>
-    <button class:on={shuffle} onclick={() => queueIntent({ type: "toggleShuffle" })}>shuffle</button>
-    <button class:on={repeat !== "off"} onclick={() => queueIntent({ type: "cycleRepeat" })}>
-      repeat&nbsp;{repeat}
-    </button>
-    <button onclick={() => queueIntent({ type: "clear" })} disabled={items.length === 0}>clear</button>
-  </div>
-
-  <PlaylistEditor
-    {items}
-    {currentIndex}
-    {theme}
-    onplay={(i) => queueIntent({ type: "play", index: i })}
-    onremove={(i) => queueIntent({ type: "remove", index: i })}
-    onmove={(from, to) => queueIntent({ type: "move", from, to })}
-    onadd={() => void addAfterCurrent()}
-    onadddir={() => void addDirAfterCurrent()}
+       editor body repeats neither anymore. Double-clicking the strip folds
+       the window to the strip, classic windowshade style. -->
+  <TitleStrip
+    title="PLAYLIST EDITOR"
+    onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
   />
+
+  {#if mode === "normal"}
+    <div class="qbar mono">
+      <span class="pos">{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span>
+      <button class:on={shuffle} onclick={() => queueIntent({ type: "toggleShuffle" })}>shuffle</button>
+      <button class:on={repeat !== "off"} onclick={() => queueIntent({ type: "cycleRepeat" })}>
+        repeat&nbsp;{repeat}
+      </button>
+      <button onclick={() => queueIntent({ type: "clear" })} disabled={items.length === 0}>clear</button>
+    </div>
+
+    <PlaylistEditor
+      {items}
+      {currentIndex}
+      {theme}
+      onplay={(i) => queueIntent({ type: "play", index: i })}
+      onremove={(i) => queueIntent({ type: "remove", index: i })}
+      onmove={(from, to) => queueIntent({ type: "move", from, to })}
+      onadd={() => void addAfterCurrent()}
+      onadddir={() => void addDirAfterCurrent()}
+    />
+  {/if}
 </div>
 
 <style>
   .win {
-    width: max-content; /* editor (275px) + padding */
+    /* Editor 275px + 4px padding per side; max-content keeps the editor's
+       natural size, min-width keeps the folded strip full-width. */
+    width: max-content;
+    min-width: 283px;
     display: flex;
     flex-direction: column;
     align-items: center;
