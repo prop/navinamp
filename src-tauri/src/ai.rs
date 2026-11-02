@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State};
 
+use crate::ai_rules::{RulesContext, default_name, parse_prompt};
 use crate::library::{LibraryState, with_library};
 use crate::navidrome::NavidromeState;
 
@@ -32,7 +33,9 @@ const USER_AGENT: &str = "NaVinaMP/0.9 (+https://github.com/prop/navinamp)";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AiConfig {
-    /// Show the AI search mode and allow calls.
+    /// Allow calls to the configured provider. When false (or when no usable
+    /// key/endpoint is present) AI search falls back to the offline rules
+    /// parser instead of failing.
     pub enabled: bool,
     /// Provider preset id (`openrouter`, `openai`, `anthropic`, `custom`, …).
     pub preset: String,
@@ -342,11 +345,11 @@ pub async fn ai_search(
         return Err("enter a search prompt first".into());
     }
     let config = load_config(&app);
-    if !config.enabled {
-        return Err("AI search is disabled — configure it in AI SETTINGS".into());
-    }
-    if config.api_key.is_empty() && config.provider == ProviderKind::Anthropic {
-        return Err("AI API key is missing".into());
+    // No usable provider → deterministic offline rules. A configured cloud
+    // provider always keeps the cloud path (and its errors): never silently
+    // downgrade a real AI search.
+    if !provider_configured(&config) {
+        return offline_search(&app, &state, clean, base_def);
     }
 
     let context = with_library(&app, &state, |library| {
@@ -535,13 +538,93 @@ pub async fn ai_search(
     ))
 }
 
-fn default_name(prompt: &str) -> String {
-    prompt
-        .chars()
-        .take(60)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+/// Local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp, a LAN box)
+/// legitimately run without an API key.
+///
+/// Parsed per URL component — never a string prefix — so spoofed hosts like
+/// `localhost.attacker.com`, `localhost@attacker.com` or `127.0.0.1.nip.io`
+/// do not count as local (they would receive a keyless prompt).
+fn is_local_endpoint(base_url: &str) -> bool {
+    use std::net::Ipv4Addr;
+
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_matches(['[', ']']);
+    if host.eq_ignore_ascii_case("localhost") || host == "::1" || host == "::" {
+        return true;
+    }
+    host.parse::<Ipv4Addr>()
+        .map(|ip| ip.is_loopback() || ip.is_private() || ip.is_unspecified())
+        .unwrap_or(false)
+}
+
+/// Whether the saved settings describe a runnable AI provider. Anything else
+/// (disabled, missing cloud key) takes the offline rules path.
+fn provider_configured(config: &AiConfig) -> bool {
+    if !config.enabled {
+        return false;
+    }
+    match config.provider {
+        ProviderKind::Anthropic => !config.api_key.is_empty(),
+        ProviderKind::OpenAiCompatible => {
+            !config.api_key.is_empty() || is_local_endpoint(&config.base_url)
+        }
+    }
+}
+
+/// Deterministic no-provider search: parse the prompt with [`parse_prompt`],
+/// validate the result with the library engine, and report it as preset
+/// `offline`. A refinement `base_def` is ignored: instructions like "only
+/// flac" need a model; the rules parser answers the prompt as written.
+fn offline_search(
+    app: &AppHandle,
+    state: &State<'_, LibraryState>,
+    prompt: &str,
+    _base_def: Option<SmartViewDef>,
+) -> Result<AiSearchReport, String> {
+    let (genres, artists) = with_library(app, state, |library| {
+        let genres = library.genres(None).map_err(|e| e.to_string())?;
+        let artists = library.artists(None).map_err(|e| e.to_string())?;
+        Ok((genres, artists))
+    })?;
+    let context = RulesContext {
+        genres: &genres,
+        artists: &artists,
+    };
+    let Some(parsed) = parse_prompt(prompt, &context) else {
+        return Err(
+            "Offline search couldn't read that prompt — try a genre, artist, decade or \
+             phrase (e.g. \"jazz from the 70s\"), or configure a provider in AI SETTINGS"
+                .into(),
+        );
+    };
+    // Same validation the cloud path uses, so offline rules can never carry a
+    // definition the engine rejects.
+    with_library(app, state, |library| {
+        library
+            .smart_view_query(&parsed.def, 1)
+            .map_err(|e| e.to_string())
+    })?;
+    let explanation = match parsed.ignored {
+        Some(rest) => format!(
+            "Offline rules — matched the structured part only; ignored “{rest}”. \
+             Connect a provider in AI SETTINGS for full free-form search."
+        ),
+        None => "Offline rules — connect a provider in AI SETTINGS for free-form search.".into(),
+    };
+    Ok(AiSearchReport {
+        def: Some(parsed.def),
+        explanation,
+        catalog: Vec::new(),
+        catalog_total: 0,
+        preset: "offline".into(),
+        model: "rules".into(),
+        tool_calls: 0,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,5 +1157,67 @@ mod tests {
         assert_eq!(sample.split(", ").count(), 10);
         assert!(sample.contains("item0"));
         assert!(sample.contains("item900"));
+    }
+
+    #[test]
+    fn provider_configured_decides_cloud_vs_offline() {
+        let mut config = AiConfig {
+            enabled: false,
+            api_key: "sk".into(),
+            ..AiConfig::default()
+        };
+        assert!(
+            !provider_configured(&config),
+            "disabled always goes offline"
+        );
+
+        config.enabled = true;
+        config.provider = ProviderKind::OpenAiCompatible;
+        config.api_key.clear();
+        config.base_url = "https://api.openai.com/v1".into();
+        assert!(
+            !provider_configured(&config),
+            "cloud without a key falls back to offline rules"
+        );
+
+        config.base_url = "http://localhost:11434/v1".into();
+        assert!(
+            provider_configured(&config),
+            "local OpenAI-compatible servers need no key"
+        );
+
+        config.provider = ProviderKind::Anthropic;
+        config.base_url = "https://api.anthropic.com".into();
+        assert!(!provider_configured(&config), "Anthropic requires a key");
+        config.api_key = "sk".into();
+        assert!(provider_configured(&config));
+    }
+
+    #[test]
+    fn local_endpoint_detection_rejects_spoofed_hosts() {
+        for url in [
+            "http://localhost:11434/v1",
+            "https://localhost/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://[::1]:11434/v1",
+            "http://0.0.0.0:1234/v1",
+            "http://192.168.1.5:11434/v1",
+            "http://10.0.0.7:1234/v1",
+            "http://172.16.4.2:1234/v1",
+        ] {
+            assert!(is_local_endpoint(url), "{url} should be treated as local");
+        }
+        for url in [
+            "http://localhost.attacker.com/v1",
+            "http://localhost@attacker.com/v1",
+            "http://127.evil.com/v1",
+            "http://0.0.0.0.nip.io/v1",
+            "http://[::1]evil.com/v1",
+            "http://127.0.0.1.nip.io:1234/v1",
+            "https://api.openai.com/v1",
+            "not a url",
+        ] {
+            assert!(!is_local_endpoint(url), "{url} must not count as local");
+        }
     }
 }
