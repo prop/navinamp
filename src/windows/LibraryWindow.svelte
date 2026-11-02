@@ -204,7 +204,7 @@
       onplaynow={(metas) => queuePlayNow(metas)}
       onlog={logLine} />
 
-    <EqPanel />
+    <EqPanel manageCurves />
 
     <section class="skinbar">
       <span class="skinlabel">skin</span>

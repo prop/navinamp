@@ -12,6 +12,10 @@
    * await per tick), and releasing a groove does a trailing eq_state sync so
    * the panel converges with the engine. A missing backend command degrades
    * via friendlyIpcError to an inline note with inert controls.
+   *
+   * With `manageCurves` (library window), a collapsible AUTO CURVES manager
+   * lists saved track/artist associations, applies one to the live bands and
+   * deletes individual entries; the EQ window's fallback stays compact.
    */
   import {
     EQ_BAND_COUNT,
@@ -25,7 +29,17 @@
     notifyPresetsChanged,
     type EqPreset,
   } from "../lib/audio/eq";
-  import { friendlyIpcError } from "../lib/library/ipc";
+  import {
+    listEqAssociations,
+    onEqAssocChanged,
+    removeEqArtist,
+    removeEqTrack,
+    type EqArtistEntry,
+    type EqAssociationList,
+    type EqTrackEntry,
+  } from "../lib/audio/auto";
+  import { friendlyIpcError, libraryTrack } from "../lib/library/ipc";
+  import { untrack } from "svelte";
 
   // Classic Winamp EQ center frequencies (Hz) and their panel labels.
   const BAND_HZ = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000];
@@ -33,6 +47,13 @@
   const DB_MIN = -12;
   const DB_MAX = 12;
   const DB_RANGE = DB_MAX - DB_MIN;
+
+  interface Props {
+    /** Show the saved track/artist AUTO curve manager (library window only). */
+    manageCurves?: boolean;
+  }
+
+  let { manageCurves = false }: Props = $props();
 
   let enabled = $state(false);
   let preampDb = $state(0);
@@ -44,6 +65,23 @@
   let presetBusy = $state(false);
   let available = $state(false);
   let error = $state<string | null>(null);
+
+  // ── AUTO CURVES manager (library window only) ────────────────────────────
+  // Reads the same localStorage associations the context menus write. Track
+  // titles were not stored on older entries, so they are resolved lazily via
+  // `libraryTrack` when the manager is open; the basename is the fallback.
+  let curvesOpen = $state(false);
+  let associations = $state.raw<EqAssociationList>({ tracks: [], artists: [] });
+  let curveMeta = $state.raw<Record<string, { title: string; artist: string }>>({});
+  let curveNote = $state<string | null>(null);
+  let curveError = $state<string | null>(null);
+  let curveBusy = $state(false);
+
+  const resolvingPaths = new Set<string>();
+
+  const trackCurveCount = $derived(associations.tracks.length);
+  const artistCurveCount = $derived(associations.artists.length);
+  const curveCount = $derived(trackCurveCount + artistCurveCount);
 
   const selectedIsUser = $derived(presets.find((p) => p.name === presetName)?.user === true);
 
@@ -83,6 +121,148 @@
       .then((p) => (presets = p))
       .catch(() => (presets = [])); // missing presets just empty the dropdown
   });
+
+  // ── AUTO CURVES manager ──────────────────────────────────────────────────
+
+  function refreshCurves(): void {
+    associations = listEqAssociations();
+  }
+
+  // Keep the list live while the library panel is mounted: saves/clears from
+  // either window's context menus broadcast the same event.
+  $effect(() => {
+    if (!manageCurves) return;
+    refreshCurves();
+    const unlisten = onEqAssocChanged(() => refreshCurves()).catch(
+      () => () => undefined,
+    );
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  });
+
+  /** Resolve missing titles for older entries, a few lookups at a time. */
+  async function resolveTitles(): Promise<void> {
+    const missing = associations.tracks
+      .filter(
+        (e) =>
+          e.title.trim() === "" &&
+          curveMeta[e.path] == null &&
+          !resolvingPaths.has(e.path),
+      )
+      .map((e) => e.path)
+      .slice(0, 100);
+    if (missing.length === 0) return;
+    for (const path of missing) resolvingPaths.add(path);
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < missing.length) {
+        const path = missing[cursor++];
+        if (path == null) return;
+        try {
+          const track = await libraryTrack(path);
+          if (track != null) {
+            curveMeta = {
+              ...curveMeta,
+              [path]: { title: track.title, artist: track.artist },
+            };
+          }
+        } catch {
+          // unknown path: keep the basename fallback
+        } finally {
+          resolvingPaths.delete(path);
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(6, missing.length) }, () => worker()),
+    );
+  }
+
+  $effect(() => {
+    if (!manageCurves || !curvesOpen) return;
+    void associations; // retry after a save/delete changed the list
+    untrack(() => {
+      void resolveTitles();
+    });
+  });
+
+  function pathBasename(path: string): string {
+    const clean = path.split(/[?#]/, 1)[0] ?? path;
+    const base = clean.split(/[\\/]/).pop() ?? path;
+    try {
+      return decodeURIComponent(base) || path;
+    } catch {
+      return base;
+    }
+  }
+
+  function trackLabel(entry: EqTrackEntry): string {
+    const info = curveMeta[entry.path];
+    const title = entry.title.trim() || info?.title.trim() || "";
+    const artist = entry.artist.trim() || info?.artist.trim() || "";
+    if (title !== "" && artist !== "") return `${artist} — ${title}`;
+    if (title !== "") return title;
+    if (artist !== "") return `${artist} — ${pathBasename(entry.path)}`;
+    return pathBasename(entry.path);
+  }
+
+  /** Tiny 10-bar preview: positive bands above the midline, cuts below. */
+  function barHeight(db: number): number {
+    return Math.max(1, Math.round((Math.abs(db) / DB_MAX) * 5));
+  }
+
+  function barTop(db: number): number {
+    const h = barHeight(db);
+    return db >= 0 ? 6 - h : 6;
+  }
+
+  function applySavedCurve(bands: number[]): void {
+    if (!available) return;
+    const normalized = normalize(bands);
+    bandsDb = normalized;
+    presetName = ""; // this is an association, not a preset
+    normalized.forEach((db, i) => eqSetBand(i, db).catch(note));
+    if (!enabled) {
+      enabled = true;
+      eqSetEnabled(true).catch(note);
+    }
+    curveError = null;
+    curveNote = "applied to the live EQ";
+  }
+
+  async function deleteTrackCurve(entry: EqTrackEntry): Promise<void> {
+    if (curveBusy) return;
+    const label = trackLabel(entry);
+    curveBusy = true;
+    curveNote = null;
+    curveError = null;
+    try {
+      const changed = await removeEqTrack(entry.path);
+      if (changed) curveNote = `deleted the track curve for “${label}”`;
+      refreshCurves();
+    } catch (e) {
+      curveError = friendlyIpcError("delete EQ curve", e);
+    } finally {
+      curveBusy = false;
+    }
+  }
+
+  async function deleteArtistCurve(entry: EqArtistEntry): Promise<void> {
+    if (curveBusy) return;
+    curveBusy = true;
+    curveNote = null;
+    curveError = null;
+    try {
+      const changed = await removeEqArtist(entry.key);
+      if (changed) curveNote = `deleted the artist curve for ${entry.artist}`;
+      refreshCurves();
+    } catch (e) {
+      curveError = friendlyIpcError("delete EQ curve", e);
+    } finally {
+      curveBusy = false;
+    }
+  }
 
   function toggleEnabled(): void {
     const next = !enabled;
@@ -363,6 +543,90 @@
     height={SPARK_H}
     title="approximate frequency response (band gains only)"
   ></canvas>
+
+  {#if manageCurves}
+    <div class="curves">
+      <button
+        class="curvetoggle"
+        class:on={curvesOpen}
+        onclick={() => (curvesOpen = !curvesOpen)}
+        aria-expanded={curvesOpen}>
+        <span>auto curves</span>
+        <span class="cnt">({curveCount})</span>
+        <span class="tw">{curvesOpen ? "▾" : "▸"}</span>
+      </button>
+
+      {#if curvesOpen}
+        {#if curveError}<div class="err">{curveError}</div>{/if}
+        {#if curveNote}<div class="note">{curveNote}</div>{/if}
+
+        {#if curveCount === 0}
+          <div class="cempty">
+            no saved curves — use a track row's right-click menu to save the live
+            EQ curve for that track or artist
+          </div>
+        {:else}
+          {#if trackCurveCount > 0}
+            <h3>track curves <span>({trackCurveCount})</span></h3>
+            <ul class="curvelist">
+              {#each associations.tracks as entry (entry.path)}
+                <li>
+                  <span class="cmini" aria-hidden="true">
+                    {#each entry.bandsDb as db, i}
+                      <i
+                        class:up={db >= 0}
+                        style="left:{i * 5}px; top:{barTop(db)}px; height:{barHeight(db)}px"
+                      ></i>
+                    {/each}
+                  </span>
+                  <span class="clabel" title={entry.path}>{trackLabel(entry)}</span>
+                  <button
+                    class="capply"
+                    onclick={() => applySavedCurve(entry.bandsDb)}
+                    disabled={!available}
+                    title="load this curve into the live EQ">apply</button>
+                  <button
+                    class="cdel"
+                    onclick={() => void deleteTrackCurve(entry)}
+                    disabled={curveBusy}
+                    title="delete this track curve">×</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+
+          {#if artistCurveCount > 0}
+            <h3>artist curves <span>({artistCurveCount})</span></h3>
+            <ul class="curvelist">
+              {#each associations.artists as entry (entry.key)}
+                <li>
+                  <span class="cmini" aria-hidden="true">
+                    {#each entry.bandsDb as db, i}
+                      <i
+                        class:up={db >= 0}
+                        style="left:{i * 5}px; top:{barTop(db)}px; height:{barHeight(db)}px"
+                      ></i>
+                    {/each}
+                  </span>
+                  <span class="clabel" title={entry.artist}>{entry.artist}</span>
+                  <button
+                    class="capply"
+                    onclick={() => applySavedCurve(entry.bandsDb)}
+                    disabled={!available}
+                    title="load this curve into the live EQ">apply</button>
+                  <button
+                    class="cdel"
+                    onclick={() => void deleteArtistCurve(entry)}
+                    disabled={curveBusy}
+                    title="delete this artist curve">×</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/if}
+      {/if}
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -546,5 +810,147 @@
     background: #0b0b0f;
     border: 1px solid #26262e;
     border-radius: 2px;
+  }
+
+  /* ── AUTO CURVES manager ── */
+  .curves {
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #222;
+  }
+
+  .curvetoggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-align: left;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    background: #101014;
+  }
+
+  .curvetoggle .cnt {
+    color: #707070;
+  }
+
+  .curvetoggle .tw {
+    margin-left: auto;
+    color: #707070;
+  }
+
+  .curves h3 {
+    width: 100%;
+    margin: 0.15rem 0 0;
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #707070;
+  }
+
+  .curves h3 span {
+    color: #4f4f4f;
+  }
+
+  .curves > .err,
+  .curves > .note {
+    width: 100%;
+    text-align: center;
+  }
+
+  .curvelist {
+    width: 100%;
+    box-sizing: border-box;
+    max-height: 132px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    background: #0b0b0f;
+    border: 1px solid #26262e;
+    border-radius: 2px;
+  }
+
+  .curvelist li {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 5px;
+    border-bottom: 1px solid #16161c;
+  }
+
+  .curvelist li:last-child {
+    border-bottom: 0;
+  }
+
+  .clabel {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 10px;
+    color: #b8b8c0;
+  }
+
+  .cmini {
+    position: relative;
+    flex: none;
+    width: 50px;
+    height: 12px;
+  }
+
+  .cmini i {
+    position: absolute;
+    width: 4px;
+    background: #d8a63c;
+    border-radius: 1px;
+  }
+
+  .cmini i.up {
+    background: #3ccb4e;
+  }
+
+  .curvelist button {
+    flex: none;
+    padding: 0 5px;
+    font-size: 9px;
+    line-height: 15px;
+    border-radius: 2px;
+  }
+
+  .curvelist .capply {
+    color: #8a8a92;
+  }
+
+  .curvelist .cdel {
+    border-color: #5a2a22;
+    color: #d8604c;
+  }
+
+  .curvelist .cdel:hover:not(:disabled) {
+    border-color: #d8604c;
+    color: #ff7a66;
+  }
+
+  .cempty {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px;
+    background: #0b0b0f;
+    border: 1px solid #26262e;
+    border-radius: 2px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: #707070;
+    text-align: center;
   }
 </style>

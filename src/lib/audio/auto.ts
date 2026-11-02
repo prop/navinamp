@@ -10,6 +10,10 @@
  * A track override is a capture of the live EQ bands at save time, not a
  * preset name: tweak the curve to taste, then "save for this track". Saving
  * an artist curve drops that track's override so the artist curve applies.
+ *
+ * The EQ panel's AUTO CURVES manager lists and deletes these associations;
+ * removals broadcast the same change event so the playing track falls back
+ * through the resolution order immediately.
  */
 
 import { emit, listen } from "@tauri-apps/api/event";
@@ -35,11 +39,42 @@ export interface EqTrackOverride {
   bandsDb: number[];
   /** Artist captured with the override (display/diagnostics only). */
   artist: string;
+  /** Track title captured at save time; absent on older entries. */
+  title?: string;
+}
+
+export interface EqArtistOverride {
+  /** Ten band gains in dB. */
+  bandsDb: number[];
+  /** Display name captured at save time (the store key is lowercased). */
+  artist: string;
+}
+
+/** One saved track curve, as shown by the AUTO CURVES manager. */
+export interface EqTrackEntry {
+  path: string;
+  artist: string;
+  /** Captured title, or "" for entries saved before titles were stored. */
+  title: string;
+  bandsDb: number[];
+}
+
+/** One saved artist curve, as shown by the AUTO CURVES manager. */
+export interface EqArtistEntry {
+  /** Lowercased store key (pass back to `removeEqArtist`). */
+  key: string;
+  artist: string;
+  bandsDb: number[];
+}
+
+export interface EqAssociationList {
+  tracks: EqTrackEntry[];
+  artists: EqArtistEntry[];
 }
 
 interface AssocStore {
   tracks: Record<string, EqTrackOverride>;
-  artists: Record<string, number[]>;
+  artists: Record<string, EqArtistOverride>;
 }
 
 /** Fallback for webviews where localStorage is unavailable (session only). */
@@ -91,14 +126,28 @@ function parseStore(raw: string): AssocStore {
         store.tracks[path] = {
           bandsDb: bands,
           artist: typeof entry?.artist === "string" ? entry.artist : "",
+          title: typeof entry?.title === "string" ? entry.title : "",
         };
       }
     }
   }
   if (source.artists != null && typeof source.artists === "object") {
     for (const [key, value] of Object.entries(source.artists)) {
-      const bands = normalizeBands(value);
-      if (bands != null) store.artists[key] = bands;
+      // v1 stored a bare band array; newer entries carry the display name.
+      const legacyBands = normalizeBands(value);
+      if (legacyBands != null) {
+        store.artists[key] = { bandsDb: legacyBands, artist: key };
+        continue;
+      }
+      const entry = value as Partial<EqArtistOverride> | null;
+      const bands = normalizeBands(entry?.bandsDb);
+      if (bands != null) {
+        const name =
+          typeof entry?.artist === "string" && entry.artist.trim() !== ""
+            ? entry.artist.trim()
+            : key;
+        store.artists[key] = { bandsDb: bands, artist: name };
+      }
     }
   }
   return store;
@@ -153,7 +202,7 @@ export function getTrackEq(path: string): EqTrackOverride | null {
 /** The saved curve for an artist (case-insensitive), if any. */
 export function getArtistEq(artist: string): number[] | null {
   const key = artistKey(artist);
-  return key === "" ? null : (readStore().artists[key] ?? null);
+  return key === "" ? null : (readStore().artists[key]?.bandsDb ?? null);
 }
 
 /** Capture the live EQ bands for a track or an artist. */
@@ -161,6 +210,7 @@ export async function rememberEq(
   path: string,
   artist: string,
   scope: EqAssocScope,
+  title = "",
 ): Promise<void> {
   let resolvedArtist = artist.trim();
   if (scope === "artist" && resolvedArtist === "") {
@@ -179,14 +229,21 @@ export async function rememberEq(
     normalizeBands(live.bandsDb) ?? Array<number>(EQ_BAND_COUNT).fill(0);
   const store = readStore();
   if (scope === "track") {
-    store.tracks[path] = { bandsDb: bands, artist: resolvedArtist };
+    store.tracks[path] = {
+      bandsDb: bands,
+      artist: resolvedArtist,
+      title: title.trim(),
+    };
   } else {
     // The artist curve should apply to this track now, so the narrower
     // track override must go (including the legacy-path copy).
     delete store.tracks[path];
     const legacy = legacyRemotePath(path);
     if (legacy != null) delete store.tracks[legacy];
-    store.artists[artistKey(resolvedArtist)] = bands;
+    store.artists[artistKey(resolvedArtist)] = {
+      bandsDb: bands,
+      artist: resolvedArtist,
+    };
   }
   writeStore(store);
   await emit<EqAssocChange>(EQ_ASSOC_EVENT, {
@@ -245,4 +302,69 @@ export function onEqAssocChanged(
   handler: (change: EqAssocChange) => void,
 ): Promise<() => void> {
   return listen<EqAssocChange>(EQ_ASSOC_EVENT, (ev) => handler(ev.payload));
+}
+
+/** Snapshot of every saved association for the AUTO CURVES manager. */
+export function listEqAssociations(): EqAssociationList {
+  const store = readStore();
+  const collator = new Intl.Collator(undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+  const tracks = Object.entries(store.tracks).map(
+    ([path, entry]): EqTrackEntry => ({
+      path,
+      artist: entry.artist,
+      title: entry.title ?? "",
+      bandsDb: [...entry.bandsDb],
+    }),
+  );
+  tracks.sort(
+    (a, b) =>
+      collator.compare(a.artist || a.path, b.artist || b.path) ||
+      collator.compare(a.title || a.path, b.title || b.path),
+  );
+  const artists = Object.entries(store.artists)
+    .map(
+      ([key, entry]): EqArtistEntry => ({
+        key,
+        artist: entry.artist,
+        bandsDb: [...entry.bandsDb],
+      }),
+    )
+    .sort((a, b) => collator.compare(a.artist, b.artist));
+  return { tracks, artists };
+}
+
+/**
+ * Delete one saved track curve. Emits the usual clear event so the EQ window
+ * re-evaluates the current track (falling back to the artist curve).
+ */
+export async function removeEqTrack(path: string): Promise<boolean> {
+  const store = readStore();
+  const entry = store.tracks[path];
+  if (entry == null) return false;
+  delete store.tracks[path];
+  writeStore(store);
+  await emit<EqAssocChange>(EQ_ASSOC_EVENT, {
+    path,
+    artist: entry.artist,
+    scope: "clear",
+  });
+  return true;
+}
+
+/** Delete one saved artist curve by its store key (see `listEqAssociations`). */
+export async function removeEqArtist(key: string): Promise<boolean> {
+  const store = readStore();
+  const entry = store.artists[key];
+  if (entry == null) return false;
+  delete store.artists[key];
+  writeStore(store);
+  await emit<EqAssocChange>(EQ_ASSOC_EVENT, {
+    path: "",
+    artist: entry.artist,
+    scope: "clear",
+  });
+  return true;
 }

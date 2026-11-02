@@ -244,8 +244,12 @@
       const rating = Number(id.slice("rate:".length));
       if (Number.isFinite(rating)) void setItemRating(item, rating);
     } else if (id === "eq-track" || id === "eq-artist") {
-      void rememberEq(item.path, item.artist, id === "eq-track" ? "track" : "artist")
-        .catch((e) => console.warn(`[navinamp] eq: save failed: ${e}`));
+      void rememberEq(
+        item.path,
+        item.artist,
+        id === "eq-track" ? "track" : "artist",
+        item.title,
+      ).catch((e) => console.warn(`[navinamp] eq: save failed: ${e}`));
     } else if (id === "eq-clear") {
       void clearEqFor(item.path, item.artist)
         .catch((e) => console.warn(`[navinamp] eq: clear failed: ${e}`));

@@ -1328,7 +1328,7 @@
       const rating = Number(id.slice("rate:".length));
       if (Number.isFinite(rating)) void rateTrack(t, rating);
     } else if (id === "eq-track") {
-      void rememberEq(t.path, t.artist, "track")
+      void rememberEq(t.path, t.artist, "track", t.title)
         .then(() => onlog(`eq: saved the current curve for “${t.title || t.path}”`))
         .catch((e) => onlog(`eq: save failed: ${e}`));
     } else if (id === "eq-artist") {

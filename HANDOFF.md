@@ -137,11 +137,20 @@
   `#`, so the 14×2 cells always fit the 176px column. The active initial
   tracks the viewport; clicking one scrolls that group's first matching row
   just below the rail. The rail height is included in the virtual list math.
+- The library's equalizer panel has a collapsible AUTO CURVES manager: saved
+  track and artist curves are listed with a tiny band preview, APPLY loads
+  one into the live EQ, and × deletes just that entry. Track titles are
+  captured on save; older entries resolve lazily through the library (path
+  basename fallback). Deletions broadcast the usual clear event, so the
+  playing track falls back to its artist curve or genre preset immediately.
+  The manager is library-only; the EQ window's HTML fallback stays compact.
 
 ## Next up
 
-1. A manager/list for saved EQ track/artist curves (today they are only
-   saved/cleared from row context menus).
+1. Cut 0.8.0 (release-please PR #7: multi-server playlists/publishing, A–Z
+   rails, EQ curve manager) and watch the cached release runner.
+2. Optional: show the automatic EQ headroom in the panel (currently computed
+   silently) and offer a “match loudness” hint.
 
 ## Known follow-ups / deferred
 
