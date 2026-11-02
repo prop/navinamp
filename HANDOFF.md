@@ -62,6 +62,9 @@
 - Track table virtualization: only the visible ~20 rows (+8 overscan) are in
   the DOM; top/bottom spacers preserve the scroll height. Page loading still
   appends as you scroll.
+- EQ AUTO works: each track change auto-applies a preset named after the
+  track's genre (built-in curves or user saves); the flag persists in
+  localStorage. Per-track/artist associations remain a future refinement.
 - Paged views: SELECT ALL selects the loaded rows only; shift-range
   selection is limited to loaded rows (a select-all-by-filter command is a
   future addition). The tree renders 200-row slices but is not virtualized,
@@ -69,14 +72,12 @@
 
 ## Next up
 
-1. **EQ AUTO mode** — needs a product definition (per-track auto-load);
-   the toggle is still visual-only.
-2. Release-build devtools, chunked virtualization, svelte-check/TS7 cleanup.
+1. Release-build devtools, tree virtualization, svelte-check/TS7 cleanup.
 
 ## Known follow-ups / deferred
 
-- EQ: AUTO button (visual only — no per-track auto-load concept yet),
-  EQ window close button (decorative), duplicate HTML EqPanel in the
+- EQ: per-track/artist AUTO associations (current AUTO matches presets by
+  genre), EQ window close button (decorative), duplicate HTML EqPanel in the
   library DEV section
 - Metadata bitrate is average source bytes ÷ duration; streams whose
   container declares no duration (some transcodes) leave the kbps digits

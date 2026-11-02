@@ -41,8 +41,8 @@ export interface EqState {
 
 /**
  * Live EQ view-state the skinned EQ window renders from (M6c): the polled
- * `eq_state` plus the renderer-local AUTO flag (there is no backend AUTO
- * concept yet — the toggle is visual only and not persisted).
+ * `eq_state` plus the UI-side AUTO flag (genre-based preset auto-load,
+ * persisted in localStorage; the engine itself has no AUTO concept).
  */
 export interface EqLive {
   enabled: boolean;

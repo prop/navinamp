@@ -17,8 +17,10 @@
    * param `index` 0 = PREAMP (`eq_set_preamp`), 1..10 = bands 60 Hz…16 kHz
    * (`eq_set_band(index-1)`).
    *
-   * AUTO: visual toggle only — there is no backend AUTO concept yet, so the
-   * flag is window-local and NOT persisted (documented follow-up).
+   * AUTO: UI-side auto-load policy. When enabled, each track change loads a
+   * preset named after the track's genre (built-in or user-saved); the flag
+   * persists in localStorage. Per-track/artist associations are a future
+   * refinement.
    */
   import {
     EQ_BAND_COUNT,
@@ -38,7 +40,8 @@
   import { resolveLayout } from "../lib/skin/resolver";
   import { dragRects } from "../lib/skin/titlebar";
   import type { SkinPayload } from "../lib/skin/types";
-  import { windowIsVisible, windowSetSize } from "../lib/window/bus.svelte";
+  import { windowIsVisible, windowSetSize, queueSnapshot } from "../lib/window/bus.svelte";
+  import { libraryTrack } from "../lib/library/ipc";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
 
@@ -97,8 +100,27 @@
     enabled: false,
     preampDb: 0,
     bandsDb: Array<number>(EQ_BAND_COUNT).fill(0),
-    auto: false,
+    auto: storedAuto(),
   });
+
+  // AUTO = auto-load a preset whose name matches the current track's genre
+  // (built-in curves like Rock/Jazz or user presets). The flag persists.
+  function storedAuto(): boolean {
+    try {
+      return localStorage.getItem("navinamp.eq.auto") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function setAuto(on: boolean): void {
+    eq.auto = on;
+    try {
+      localStorage.setItem("navinamp.eq.auto", on ? "1" : "0");
+    } catch {
+      // storage-less webview: session-only
+    }
+  }
 
   $effect(() => {
     const sync = async () => {
@@ -183,6 +205,58 @@
     bands.forEach((db, i) => eqSetBand(i, db).catch(warnEq));
   }
 
+  // ── AUTO: apply a genre-named preset on every track change ──────────────
+  // The engine has no AUTO concept; this is a UI policy. A preset named after
+  // the track's genre (built-in "Rock"/"Jazz"/… or a user save) is loaded
+  // automatically. Tracks without a known genre (or unsynced remote rows)
+  // leave the curve alone.
+
+  let lastAutoPath = "";
+  let autoSeq = 0;
+
+  async function applyAutoPreset(path: string): Promise<void> {
+    const seq = ++autoSeq;
+    let genre = "";
+    try {
+      genre = (await libraryTrack(path))?.genre ?? "";
+    } catch {
+      return; // unknown/unsynced track: nothing to match
+    }
+    if (seq !== autoSeq || genre === "") return;
+    if (presets.length === 0) {
+      try {
+        presets = await eqPresets();
+      } catch {
+        return;
+      }
+    }
+    const index = presets.findIndex(
+      (p) => p.name.toLowerCase() === genre.toLowerCase(),
+    );
+    if (index < 0) return;
+
+    if (!eq.enabled) {
+      eq.enabled = true;
+      eqSetEnabled(true).catch(warnEq);
+    }
+    presetIndex = index;
+    const bands = normalize(presets[index]?.bandsDb);
+    eq.bandsDb = bands;
+    bands.forEach((db, i) => eqSetBand(i, db).catch(warnEq));
+  }
+
+  $effect(() => {
+    const snap = queueSnapshot.value;
+    const item = snap?.currentIndex != null ? snap.items[snap.currentIndex] : null;
+    if (!eq.auto) {
+      lastAutoPath = ""; // apply again when AUTO is re-enabled
+      return;
+    }
+    if (!item || item.path === lastAutoPath) return;
+    lastAutoPath = item.path;
+    void applyAutoPreset(item.path);
+  });
+
   // ── actions from the skin's EQ objects ───────────────────────────────────
   // EQ_TOGGLE/EQ_AUTO/EQ_PRESETS are canonical (the .wsz synthesizer emits
   // them); ON/AUTO/PRESETS are accepted aliases.
@@ -195,7 +269,7 @@
         break;
       case "EQ_AUTO":
       case "AUTO":
-        eq.auto = !eq.auto; // visual only — no backend AUTO yet
+        setAuto(!eq.auto);
         break;
       case "EQ_PRESETS":
       case "PRESETS":
