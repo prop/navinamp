@@ -29,7 +29,8 @@ sign-in needed to download).
 ## Navidrome (M5)
 
 Remote servers connect via the Media Library (`navidrome_*` commands).
-Multiple servers can be saved, with one active at a time; credentials,
+Multiple servers can be saved and are synced together into one library;
+the active server is the default for playlists and publishing. Credentials,
 streaming preferences and the selected library are stored per server,
 **in plaintext**, at `<app_data_dir>/navidrome.json` (a keyring backend is
 planned); treat the file like a password. Stream URLs carry Subsonic auth

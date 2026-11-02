@@ -65,9 +65,9 @@ mod smart;
 
 pub use model::{
     Album, LibraryStats, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress, ScanReport,
-    SourceStats, Track, TrackFilter,
+    ServerStats, SourceStats, Track, TrackFilter,
 };
-pub use remote::{remote_id_from_path, remote_path};
+pub use remote::{remote_path, remote_ref_from_path};
 pub use scanner::{AUDIO_EXTENSIONS, album_key};
 pub use smart::{
     Field, MatchMode, Op, RuleGroup, RuleRow, RuleValue, SavedSmartView, SmartViewDef, SortField,
@@ -168,13 +168,16 @@ impl Library {
         )?)
     }
 
-    /// Upserts a full batch of remote (Navidrome) tracks and removes
-    /// navidrome rows whose `remote_id` is absent from the batch — one
-    /// transaction, local rows never touched. Callers should pass the
-    /// *complete* walked library (not a delta); "remove unseen" only works
-    /// that way. See `remote.rs` for the column semantics.
-    pub fn sync_remote(&self, tracks: Vec<RemoteTrack>) -> Result<RemoteSyncReport> {
-        Ok(remote::sync_remote(&self.conn, &tracks)?)
+    /// Upserts a full batch of one server's remote (Navidrome) tracks and
+    /// removes that server's rows whose `remote_id` is absent from the batch
+    /// — one transaction, local rows and other servers never touched.
+    /// Callers should pass the *complete* walked library (not a delta).
+    pub fn sync_remote(
+        &self,
+        server_id: &str,
+        tracks: Vec<RemoteTrack>,
+    ) -> Result<RemoteSyncReport> {
+        Ok(remote::sync_remote(&self.conn, server_id, &tracks)?)
     }
 
     /// Upsert one batch of remote rows **without pruning** — the incremental
@@ -185,10 +188,27 @@ impl Library {
         Ok(remote::upsert_remote(&self.conn, tracks)?)
     }
 
-    /// Remove navidrome rows not present in `seen` (the completed sync's id
-    /// set). Local rows are never touched. Returns the number removed.
-    pub fn prune_remote(&self, seen: &std::collections::HashSet<String>) -> Result<u64> {
-        Ok(remote::prune_remote(&self.conn, seen)?)
+    /// Remove one server's navidrome rows not present in `seen` (the
+    /// completed sync's id set). Local rows and other servers are untouched.
+    /// Returns the number removed.
+    pub fn prune_remote(
+        &self,
+        server_id: &str,
+        seen: &std::collections::HashSet<String>,
+    ) -> Result<u64> {
+        Ok(remote::prune_remote(&self.conn, server_id, seen)?)
+    }
+
+    /// Delete every remote row synced from one server (profile removal).
+    pub fn delete_remote_server(&self, server_id: &str) -> Result<u64> {
+        Ok(remote::delete_server(&self.conn, server_id)?)
+    }
+
+    /// Rewrite pre-aggregation remote paths/ids into the server-qualified
+    /// `navidrome://<server_id>/<remote_id>` form. Idempotent; returns the
+    /// number of rows rewritten.
+    pub fn migrate_remote_server(&self, server_id: &str) -> Result<u64> {
+        Ok(remote::migrate_legacy_server(&self.conn, server_id)?)
     }
 
     /// Ranked FTS5 search over title/artist/album/genre; each whitespace
@@ -255,6 +275,11 @@ impl Library {
         Ok(query::track_count(&self.conn, source)?)
     }
 
+    /// Row count for one Navidrome profile.
+    pub fn track_count_for_server(&self, server_id: &str) -> Result<u64> {
+        Ok(query::track_count_for_server(&self.conn, server_id)?)
+    }
+
     /// Records one play of the local track at `path` (`play_count + 1`,
     /// `last_played_at = now`, unix seconds). Remote rows are never
     /// touched (their play stats are the server's business); an unknown
@@ -271,12 +296,15 @@ impl Library {
     }
 
     /// Mirrors the server's starred flag onto a navidrome row (called after
-    /// a successful `star`/`unstar`). Local rows and unknown ids are no-ops.
-    pub fn set_starred(&self, remote_id: &str, starred: bool) -> Result<()> {
-        Ok(query::set_starred(&self.conn, remote_id, starred)?)
+    /// a successful `star`/`unstar`). Scoped by server + remote id. Local
+    /// rows and unknown ids are no-ops.
+    pub fn set_starred(&self, server_id: &str, remote_id: &str, starred: bool) -> Result<()> {
+        Ok(query::set_starred(
+            &self.conn, server_id, remote_id, starred,
+        )?)
     }
 
-    /// One row by stored `path` (local path or `navidrome://id`), if known.
+    /// One row by stored `path` (local path or `navidrome://server/id`), if known.
     pub fn track_by_path(&self, path: &str) -> Result<Option<Track>> {
         Ok(query::track_by_path(&self.conn, path)?)
     }

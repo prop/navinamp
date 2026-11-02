@@ -73,6 +73,7 @@
     isSyncReport,
     navidromePlaylistTracks,
     navidromePlaylists,
+    navidromeProfiles,
     navidromePublishSmartView,
     navidromeRate,
     navidromeStar,
@@ -82,6 +83,7 @@
     onNavidromeSynced,
     REMOTE_SOURCE,
     type NavidromePlaylist,
+    type NavidromeProfile,
     type NavidromeProgressPayload,
     type NavidromeStatus,
     type NavidromeSyncReport,
@@ -112,6 +114,8 @@
     | { kind: "server" }
     /** All synced `source="navidrome"` rows. */
     | { kind: "remote" }
+    /** One saved server's synced rows (value = profile id). */
+    | { kind: "remoteServer"; value: string }
     /** One server playlist, fetched live (value = Subsonic playlist id). */
     | { kind: "playlist"; value: string };
 
@@ -177,7 +181,12 @@
     const changed = key !== nodeQueryKey;
     nodeQueryKey = key;
     let cancelled = false;
-    if (sel.kind === "all" || sel.kind === "server" || sel.kind === "remote") {
+    if (
+      sel.kind === "all" ||
+      sel.kind === "server" ||
+      sel.kind === "remote" ||
+      sel.kind === "remoteServer"
+    ) {
       // ALL / REMOTE are paged views (their own effect); only filtered node
       // queries fetch their rows here.
       // filtered node queries fetch their own rows.
@@ -342,13 +351,23 @@
   /** Vertical scroll offset of the track list (virtualization window). */
   let scrollTop = $state(0);
 
-  const pagedView = $derived(selection.kind === "all" || selection.kind === "remote");
+  const pagedView = $derived(
+    selection.kind === "all" ||
+      selection.kind === "remote" ||
+      selection.kind === "remoteServer",
+  );
 
   const displayedTotal = $derived.by(() => {
     if (searchResults != null) return searchResults.length;
     if (selection.kind === "server") return 0;
     if (selection.kind === "all") return stats?.tracks ?? 0;
     if (selection.kind === "remote") return stats?.navidrome.tracks ?? 0;
+    if (selection.kind === "remoteServer") {
+      const serverId = selection.value;
+      return (
+        stats?.navidromeServers?.find((s) => s.serverId === serverId)?.tracks ?? 0
+      );
+    }
     return nodeTracks?.length ?? 0;
   });
 
@@ -365,7 +384,11 @@
     pageLoading = true;
     try {
       const rows = await libraryTracks({
-        source: selection.kind === "remote" ? REMOTE_SOURCE : undefined,
+        source:
+          selection.kind === "remote" || selection.kind === "remoteServer"
+            ? REMOTE_SOURCE
+            : undefined,
+        serverId: selection.kind === "remoteServer" ? selection.value : undefined,
         limit: PAGE_SIZE,
         offset: pageOffset,
       });
@@ -386,7 +409,7 @@
   $effect(() => {
     const sel = selection;
     void dataVersion;
-    if (sel.kind !== "all" && sel.kind !== "remote") return;
+    if (sel.kind !== "all" && sel.kind !== "remote" && sel.kind !== "remoteServer") return;
     void loadPaged(true);
     return () => {
       pageSeq++; // cancel an in-flight page when the view changes
@@ -645,6 +668,9 @@
     if (selection.kind === "all") return "library is empty — use “Scan folder…” above";
     if (selection.kind === "smart") return "this smart view returned no tracks";
     if (selection.kind === "remote") return "no navidrome tracks — sync from SERVER STATUS";
+    if (selection.kind === "remoteServer") {
+      return "no tracks from this server yet — sync from SERVER STATUS";
+    }
     if (selection.kind === "playlist") return "this server playlist is empty";
     return "no tracks in this category";
   });
@@ -659,10 +685,15 @@
     const n = paged ? displayedTotal : displayed.length;
     let secs = 0;
     if (paged) {
-      secs =
-        selection.kind === "remote"
-          ? (stats?.navidrome.totalSecs ?? 0)
-          : (stats?.totalSecs ?? 0);
+      if (selection.kind === "remoteServer") {
+        const serverId = selection.value;
+        secs =
+          stats?.navidromeServers?.find((s) => s.serverId === serverId)?.totalSecs ?? 0;
+      } else if (selection.kind === "remote") {
+        secs = stats?.navidrome.totalSecs ?? 0;
+      } else {
+        secs = stats?.totalSecs ?? 0;
+      }
     } else {
       for (const t of displayed) secs += t.durationSecs;
     }
@@ -872,9 +903,13 @@
    */
   let starOverrides = $state.raw<Map<string, boolean>>(new Map());
 
+  function starKey(serverId: string | null, remoteId: string): string {
+    return `${serverId ?? ""}/${remoteId}`;
+  }
+
   function isStarred(t: Track): boolean {
     if (t.remoteId == null) return false;
-    return starOverrides.get(t.remoteId) ?? t.starred;
+    return starOverrides.get(starKey(t.serverId, t.remoteId)) ?? t.starred;
   }
 
   let navSeq = 0;
@@ -892,6 +927,29 @@
       navError = friendlyIpcError("navidrome", e);
     }
   }
+
+  /** Saved server profiles (labels for the per-server tree leaves). */
+  let navProfiles = $state.raw<NavidromeProfile[]>([]);
+
+  async function refreshNavProfiles(): Promise<void> {
+    try {
+      navProfiles = await navidromeProfiles();
+    } catch {
+      navProfiles = []; // tree falls back to server ids
+    }
+  }
+
+  // A removed server's filtered view would otherwise stay empty forever.
+  $effect(() => {
+    const selectedServer = selection.kind === "remoteServer" ? selection.value : null;
+    if (
+      selectedServer != null &&
+      navProfiles.length > 0 &&
+      !navProfiles.some((p) => p.id === selectedServer)
+    ) {
+      selection = { kind: "remote" };
+    }
+  });
 
   // Server playlists (browse-only): fetched once per connection and on
   // demand; opening one queries the server live via `getPlaylist`.
@@ -917,13 +975,13 @@
     }
   });
 
-  async function syncNow(): Promise<void> {
+  async function syncNow(serverId: string | null = null): Promise<void> {
     if (navSyncing) return;
     navSyncError = null;
     navSyncing = true;
     navProgress = null;
     try {
-      await navidromeSync();
+      await navidromeSync(serverId);
       // Refresh arrives via the `navidrome-synced` event (which also covers
       // externally started syncs); the resolved report is summarized there.
     } catch (e) {
@@ -939,33 +997,34 @@
   }
 
   /**
-   * Settings changed (connect/disconnect/streaming prefs): refresh status,
-   * and pull the library automatically when a *new* connection has no
-   * remote rows yet — otherwise connecting appears to do nothing.
+   * Settings changed (connect/switch/remove/prefs): refresh status + the
+   * profile list, and pull the active server when it has no remote rows yet.
    */
   async function onNavChanged(): Promise<void> {
     await refreshNavStatus();
+    await refreshNavProfiles();
     if (navStatus?.configured === true && navStatus.trackCount === 0 && !navSyncing) {
-      onlog("navidrome: no remote tracks — starting a library sync");
-      void syncNow();
+      onlog("navidrome: no remote tracks for the active server — starting a sync");
+      void syncNow(navStatus.profileId);
     }
   }
 
   async function toggleStar(t: Track): Promise<void> {
     if (t.source !== REMOTE_SOURCE || t.remoteId == null) return;
     const id = t.remoteId;
+    const key = starKey(t.serverId, id);
     const previous = isStarred(t);
     const starred = !previous;
     const next = new Map(starOverrides); // optimistic
-    next.set(id, starred);
+    next.set(key, starred);
     starOverrides = next;
     try {
-      await navidromeStar(id, starred);
+      await navidromeStar(t.serverId, id, starred);
       onlog(`navidrome: ${starred ? "★" : "☆"} ${t.title !== "" ? t.title : id}`);
     } catch (e) {
       const revert = new Map(starOverrides);
-      if (previous === t.starred) revert.delete(id);
-      else revert.set(id, previous);
+      if (previous === t.starred) revert.delete(key);
+      else revert.set(key, previous);
       starOverrides = revert;
       onlog(`media library: star failed: ${e}`);
     }
@@ -1007,7 +1066,7 @@
     // rating (and logs it) — the next sync never overwrites a rated row.
     if (t.source === REMOTE_SOURCE && t.remoteId != null && navStatus?.configured === true) {
       try {
-        await navidromeRate(t.remoteId, rating);
+        await navidromeRate(t.serverId, t.remoteId, rating);
       } catch (e) {
         onlog(`navidrome: rating push failed (kept locally): ${e}`);
       }
@@ -1105,6 +1164,7 @@
   let lastTreeRefresh = 0;
   $effect(() => {
     void refreshNavStatus();
+    void refreshNavProfiles();
     const up = onNavidromeProgress((p) => {
       // Events also fire for syncs started elsewhere — latch onto them.
       navSyncing = true;
@@ -1123,7 +1183,10 @@
       // while the previous query is in flight. ALL/REMOTE are paged: their
       // counts follow stats; the page refreshes on view entry/completion.
       const masterView =
-        selection.kind === "all" || selection.kind === "remote" || selection.kind === "server";
+        selection.kind === "all" ||
+        selection.kind === "remote" ||
+        selection.kind === "remoteServer" ||
+        selection.kind === "server";
       if (!masterView && !nodeLoading && now - lastProgressRefresh >= 5000) {
         lastProgressRefresh = now;
         dataVersion++;
@@ -1145,6 +1208,7 @@
           `navidrome synced: +${payload.tracksAdded} ~${payload.tracksUpdated} −${payload.tracksRemoved} (${payload.durationMs} ms)`,
         );
         void refreshNavStatus();
+        void refreshNavProfiles();
         void refreshAll();
         ratingOverrides = new Map(); // pick up server-seeded ratings
         starOverrides = new Map(); // ...and server-owned stars
@@ -1170,41 +1234,55 @@
   // across refreshes — so results cache by id and late replies are
   // harmless. Unresolvable/failed art keeps the ♪ placeholder.
 
-  /** navidrome coverArt id → authed URL (session-local). */
+  /** navidrome coverArt id → authed URL (session-local, keyed by server+id). */
   let remoteArtUrls = $state.raw<Map<string, string>>(new Map());
-  /** Art ids whose <img> errored (dead link) → back to the placeholder. */
+  /** Art keys whose <img> errored (dead link) → back to the placeholder. */
   let failedArtIds = $state.raw<Set<string>>(new Set());
-  /** Ids already queued for `fetchRemoteArt`; each is fetched at most once. */
+  /** Keys already queued for `fetchRemoteArt`; each is fetched at most once. */
   const requestedRemoteArt = new Set<string>();
 
   const REMOTE_ART_BATCH = 8;
 
+  function artKey(serverId: string | null | undefined, id: string): string {
+    return `${serverId ?? ""}/${id}`;
+  }
+
   function albumCoverSrc(a: Album): string | null {
     const id = a.artId;
-    if (id == null || failedArtIds.has(id)) return null;
-    if (a.artSource === REMOTE_SOURCE) return remoteArtUrls.get(id) ?? null;
+    if (id == null) return null;
+    if (a.artSource === REMOTE_SOURCE) {
+      const key = artKey(a.artServerId, id);
+      if (failedArtIds.has(key)) return null;
+      return remoteArtUrls.get(key) ?? null;
+    }
     if (a.artSource === "local") return localArtUrl(id);
     return null;
   }
 
-  function failArt(id: string): void {
-    if (failedArtIds.has(id)) return;
+  function failArt(serverId: string | null, id: string): void {
+    const key = artKey(serverId, id);
+    if (failedArtIds.has(key)) return;
     const next = new Set(failedArtIds);
-    next.add(id);
+    next.add(key);
     failedArtIds = next;
   }
 
-  async function fetchRemoteArt(ids: string[]): Promise<void> {
-    for (let i = 0; i < ids.length; i += REMOTE_ART_BATCH) {
-      const batch = ids.slice(i, i + REMOTE_ART_BATCH);
+  interface RemoteArtRef {
+    serverId: string | null;
+    id: string;
+  }
+
+  async function fetchRemoteArt(refs: RemoteArtRef[]): Promise<void> {
+    for (let i = 0; i < refs.length; i += REMOTE_ART_BATCH) {
+      const batch = refs.slice(i, i + REMOTE_ART_BATCH);
       const results = await Promise.allSettled(
-        batch.map((id) => navidromeArtUrl(id, 64)),
+        batch.map((ref) => navidromeArtUrl(ref.serverId, ref.id, 64)),
       );
       const next = new Map(remoteArtUrls);
       let changed = false;
       results.forEach((r, k) => {
         if (r.status === "fulfilled") {
-          next.set(batch[k], r.value);
+          next.set(artKey(batch[k].serverId, batch[k].id), r.value);
           changed = true;
         }
       });
@@ -1214,18 +1292,18 @@
 
   $effect(() => {
     if (!openGroups.albums) return;
-    const wanted: string[] = [];
+    const wanted: RemoteArtRef[] = [];
     for (const a of albumsWindowed) {
       const id = a.artId;
+      if (id == null || a.artSource !== REMOTE_SOURCE) continue;
+      const key = artKey(a.artServerId, id);
       if (
-        id != null &&
-        a.artSource === REMOTE_SOURCE &&
-        !remoteArtUrls.has(id) &&
-        !failedArtIds.has(id) &&
-        !requestedRemoteArt.has(id)
+        !remoteArtUrls.has(key) &&
+        !failedArtIds.has(key) &&
+        !requestedRemoteArt.has(key)
       ) {
-        requestedRemoteArt.add(id);
-        wanted.push(id);
+        requestedRemoteArt.add(key);
+        wanted.push({ serverId: a.artServerId, id });
       }
     }
     if (wanted.length > 0) void fetchRemoteArt(wanted);
@@ -1249,8 +1327,10 @@
       artist: t.artist,
       durationSecs: t.durationSecs,
       // Remote rows keep their navidrome:// path for display, but playback
-      // resolves the stream URL through remoteId (queue.feedPath).
-      ...(t.source === REMOTE_SOURCE && t.remoteId != null ? { remoteId: t.remoteId } : {}),
+      // resolves the stream URL through serverId + remoteId (queue.feedPath).
+      ...(t.source === REMOTE_SOURCE && t.remoteId != null
+        ? { remoteId: t.remoteId, ...(t.serverId != null ? { serverId: t.serverId } : {}) }
+        : {}),
     };
   }
 
@@ -1272,7 +1352,11 @@
       const CHUNK = 2000;
       while (offset < total) {
         const page = await libraryTracks({
-          source: selection.kind === "remote" ? REMOTE_SOURCE : undefined,
+          source:
+            selection.kind === "remote" || selection.kind === "remoteServer"
+              ? REMOTE_SOURCE
+              : undefined,
+          serverId: selection.kind === "remoteServer" ? selection.value : undefined,
           limit: CHUNK,
           offset,
         });
@@ -1454,7 +1538,7 @@
                       alt=""
                       loading="lazy"
                       decoding="async"
-                      onerror={() => a.artId != null && failArt(a.artId)} />
+                      onerror={() => a.artId != null && failArt(a.artServerId, a.artId)} />
                   {:else}
                     <span class="alb-art none" aria-hidden="true">♪</span>
                   {/if}
@@ -1535,6 +1619,26 @@
           class:on={selKey(selection) === "remote"}
           onclick={() => select({ kind: "remote" })}
           >REMOTE TRACKS <span class="cnt">({remoteTrackCount})</span></button>
+        {#if navProfiles.length > 0}
+          <div class="leaf sub">
+            <span class="sublabel">SERVERS</span>
+            <span class="cnt">({navProfiles.length})</span>
+          </div>
+          {#each navProfiles as profile (profile.id)}
+            {@const serverStats = stats?.navidromeServers?.find(
+              (s) => s.serverId === profile.id,
+            )}
+            <div class="leaf smart" class:on={selKey(selection) === `remoteServer:${profile.id}`}>
+              <button
+                class="leafbtn"
+                title={`${profile.url} — ${(serverStats?.tracks ?? 0).toLocaleString()} synced tracks`}
+                onclick={() => select({ kind: "remoteServer", value: profile.id })}>
+                {profile.name}{#if profile.active} ●{/if}
+              </button>
+              <span class="cnt">({(serverStats?.tracks ?? 0).toLocaleString()})</span>
+            </div>
+          {/each}
+        {/if}
         {#if navStatus?.configured}
           <div class="leaf sub">
             <span class="sublabel">PLAYLISTS</span>
@@ -1627,9 +1731,9 @@
 
           <div class="card-actions">
             <button
-              onclick={syncNow}
+              onclick={() => void syncNow()}
               disabled={navSyncing || navStatus?.configured !== true}
-              title="full library sync">{navSyncing ? "SYNCING…" : "SYNC NOW"}</button>
+              title="sync every saved server">{navSyncing ? "SYNCING…" : "SYNC NOW"}</button>
             <button onclick={() => (showSettings = true)} title="connection & streaming settings">
               SETTINGS…
             </button>
@@ -1656,13 +1760,13 @@
           {:else if tableLoading}
             <div class="msg">loading…</div>
           {:else if displayed.length === 0}
-            {#if selection.kind === "remote" && searchResults == null}
+            {#if (selection.kind === "remote" || selection.kind === "remoteServer") && searchResults == null}
               <div class="msg remote-empty">
                 {#if navSyncing}
                   <p>
                     syncing the Navidrome library…
                     {navProgress
-                      ? `${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
+                      ? `${navProgress.label ? `${navProgress.label} · ` : ""}${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
                       : ""}
                   </p>
                 {:else}
@@ -1676,7 +1780,8 @@
                   <button
                     class="cta"
                     disabled={navStatus?.configured !== true || navSyncing}
-                    onclick={() => void syncNow()}>
+                    onclick={() =>
+                      void syncNow(selection.kind === "remoteServer" ? selection.value : null)}>
                     {navSyncError ? "RETRY SYNC" : "SYNC LIBRARY NOW"}
                   </button>
                 {/if}
@@ -1758,7 +1863,7 @@
   <footer class="bar">
     {#if navSyncing}
       <span class="syncnote">
-        navidrome syncing…
+        navidrome syncing{navProgress?.label ? ` ${navProgress.label}` : ""}…
         {navProgress
           ? `${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
           : ""}

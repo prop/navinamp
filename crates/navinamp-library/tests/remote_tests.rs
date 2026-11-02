@@ -5,9 +5,12 @@ mod common;
 
 use navinamp_library::{Library, RemoteTrack, TrackFilter};
 
+const S: &str = "s1";
+
 fn rt(remote_id: &str, title: &str) -> RemoteTrack {
     RemoteTrack {
         remote_id: remote_id.into(),
+        server_id: S.into(),
         title: title.into(),
         artist: "Björk".into(),
         album_artist: "Björk".into(),
@@ -38,10 +41,10 @@ fn db(label: &str) -> (common::Scratch, Library) {
 fn sync_inserts_remote_rows_with_derived_paths() {
     let (_s, library) = db("remote-insert");
     let report = library
-        .sync_remote(vec![
-            rt("t1", "Human Behaviour"),
-            rt("t2", "Venus as a Boy"),
-        ])
+        .sync_remote(
+            S,
+            vec![rt("t1", "Human Behaviour"), rt("t2", "Venus as a Boy")],
+        )
         .unwrap();
 
     assert_eq!(report.added, 2);
@@ -60,7 +63,7 @@ fn sync_inserts_remote_rows_with_derived_paths() {
         .iter()
         .find(|t| t.remote_id.as_deref() == Some("t1"))
         .unwrap();
-    assert_eq!(first.path, "navidrome://t1");
+    assert_eq!(first.path, "navidrome://s1/t1");
     assert_eq!(first.source, "navidrome");
     assert_eq!(first.title, "Human Behaviour");
     assert_eq!(first.art_id.as_deref(), Some("al-1"));
@@ -87,7 +90,7 @@ fn sync_inserts_remote_rows_with_derived_paths() {
 fn resync_updates_metadata_preserves_user_data_and_dates() {
     let (scratch, library) = db("remote-update");
     library
-        .sync_remote(vec![rt("t1", "Human Behaviour")])
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")])
         .unwrap();
 
     // Simulate user data + an older date_added (direct SQL: there is no
@@ -106,7 +109,7 @@ fn resync_updates_metadata_preserves_user_data_and_dates() {
     changed.album = "Debut (Deluxe)".into();
     changed.art_id = Some("al-2".into());
     changed.duration_secs = 251.0;
-    let report = library.sync_remote(vec![changed]).unwrap();
+    let report = library.sync_remote(S, vec![changed]).unwrap();
 
     assert_eq!(report.added, 0);
     assert_eq!(report.updated, 1);
@@ -138,19 +141,19 @@ fn sync_refreshes_server_starred_state() {
     };
 
     library
-        .sync_remote(vec![rt("t1", "Human Behaviour")])
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")])
         .unwrap();
     assert!(!starred_of("t1"), "fresh rows start unstarred");
 
     let mut starred = rt("t1", "Human Behaviour");
     starred.starred = true;
-    library.sync_remote(vec![starred]).unwrap();
+    library.sync_remote(S, vec![starred]).unwrap();
     assert!(starred_of("t1"), "a sync refreshes the server-owned star");
 
     // The star command mirrors the server result into the local row.
-    library.set_starred("t1", false).unwrap();
+    library.set_starred(S, "t1", false).unwrap();
     assert!(!starred_of("t1"));
-    library.set_starred("missing-id", true).unwrap(); // silent no-op
+    library.set_starred(S, "missing-id", true).unwrap(); // silent no-op
 }
 
 #[test]
@@ -171,19 +174,19 @@ fn sync_imports_server_ratings_without_clobbering_local_ones() {
     rated.rating = 4;
     let unrated = rt("t2", "Venus as a Boy");
     library
-        .sync_remote(vec![rated.clone(), unrated.clone()])
+        .sync_remote(S, vec![rated.clone(), unrated.clone()])
         .unwrap();
     assert_eq!(rating_of("t1"), 4);
     assert_eq!(rating_of("t2"), 0);
 
     // A rating set in the app wins over the server's copy on the next sync.
-    library.set_rating("navidrome://t1", 2).unwrap();
+    library.set_rating("navidrome://s1/t1", 2).unwrap();
     let mut server_changed = rated.clone();
     server_changed.rating = 5;
     let mut server_rated = unrated.clone();
     server_rated.rating = 3;
     library
-        .sync_remote(vec![server_changed, server_rated])
+        .sync_remote(S, vec![server_changed, server_rated])
         .unwrap();
     assert_eq!(rating_of("t1"), 2, "local rating survives a resync");
     assert_eq!(rating_of("t2"), 3, "unrated row picks up the server rating");
@@ -207,10 +210,10 @@ fn remove_unseen_is_scoped_to_navidrome_rows() {
     library.scan_roots(&[music], |_| {}).unwrap();
 
     library
-        .sync_remote(vec![rt("t1", "A"), rt("t2", "B")])
+        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B")])
         .unwrap();
     // t2 vanishes server-side; t1 stays.
-    let report = library.sync_remote(vec![rt("t1", "A")]).unwrap();
+    let report = library.sync_remote(S, vec![rt("t1", "A")]).unwrap();
     assert_eq!(report.removed, 1);
     assert_eq!(report.added, 0);
     assert_eq!(report.updated, 1);
@@ -239,7 +242,7 @@ fn remove_unseen_is_scoped_to_navidrome_rows() {
     assert_eq!(locals[0].play_count, 0);
 
     // And an empty sync wipes the remote side only.
-    let report = library.sync_remote(vec![]).unwrap();
+    let report = library.sync_remote(S, vec![]).unwrap();
     assert_eq!(report.removed, 1);
     assert_eq!(
         library
@@ -264,7 +267,9 @@ fn remove_unseen_is_scoped_to_navidrome_rows() {
 #[test]
 fn fts_finds_remote_rows() {
     let (_s, library) = db("remote-fts");
-    library.sync_remote(vec![rt("t1", "Böse Spieler")]).unwrap();
+    library
+        .sync_remote(S, vec![rt("t1", "Böse Spieler")])
+        .unwrap();
 
     // Prefix + diacritic-insensitive, exactly like local rows.
     let hits = library.search("bjö spiel", 10).unwrap();
@@ -273,20 +278,20 @@ fn fts_finds_remote_rows() {
 
     // Updated titles re-index (trigger-synced FTS).
     let changed = rt("t1", "Big Time Sensuality");
-    library.sync_remote(vec![changed]).unwrap();
+    library.sync_remote(S, vec![changed]).unwrap();
     assert!(library.search("spiel", 10).unwrap().is_empty());
     let hits = library.search("sensual", 10).unwrap();
     assert_eq!(hits.len(), 1);
 
     // Removed rows vanish from the index too.
-    library.sync_remote(vec![]).unwrap();
+    library.sync_remote(S, vec![]).unwrap();
     assert!(library.search("sensual", 10).unwrap().is_empty());
 }
 
 #[test]
 fn empty_remote_ids_are_skipped() {
     let (_s, library) = db("remote-empty-id");
-    let report = library.sync_remote(vec![rt("", "ghost")]).unwrap();
+    let report = library.sync_remote(S, vec![rt("", "ghost")]).unwrap();
     assert_eq!(report.added, 0);
     assert_eq!(
         library
@@ -301,7 +306,7 @@ fn empty_remote_ids_are_skipped() {
 fn batched_upserts_defer_pruning_until_the_walk_completes() {
     let (_scratch, library) = db("remote-batched");
     library
-        .sync_remote(vec![rt("t1", "A"), rt("t2", "B")])
+        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B")])
         .unwrap();
 
     // A mid-walk batch inserts rows but never removes unseen ones.
@@ -321,7 +326,7 @@ fn batched_upserts_defer_pruning_until_the_walk_completes() {
     // The final prune (complete walk) removes rows missing from `seen`.
     let seen: std::collections::HashSet<String> =
         ["t1", "t3"].iter().map(|id| (*id).to_string()).collect();
-    assert_eq!(library.prune_remote(&seen).unwrap(), 1);
+    assert_eq!(library.prune_remote(S, &seen).unwrap(), 1);
     let ids: Vec<String> = library
         .tracks_filtered(&TrackFilter {
             source: Some("navidrome".into()),
@@ -332,4 +337,98 @@ fn batched_upserts_defer_pruning_until_the_walk_completes() {
         .filter_map(|t| t.remote_id)
         .collect();
     assert_eq!(ids, vec!["t1", "t3"]);
+}
+
+#[test]
+fn remote_ids_are_scoped_per_server() {
+    let (_s, library) = db("remote-multi-server");
+    let mut other = rt("t1", "Same id on another server");
+    other.server_id = "s2".into();
+
+    library.sync_remote(S, vec![rt("t1", "On s1")]).unwrap();
+    library.sync_remote("s2", vec![other]).unwrap();
+
+    let rows = library.tracks_filtered(&TrackFilter::default()).unwrap();
+    assert_eq!(rows.len(), 2, "same remote id stays distinct per server");
+    let mut paths: Vec<&str> = rows.iter().map(|t| t.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["navidrome://s1/t1", "navidrome://s2/t1"]);
+
+    // Per-server counters drive the tree leaves.
+    let stats = library.stats().unwrap();
+    assert_eq!(stats.navidrome_servers.len(), 2);
+    let s1 = stats
+        .navidrome_servers
+        .iter()
+        .find(|s| s.server_id == "s1")
+        .unwrap();
+    assert_eq!((s1.tracks, s1.albums), (1, 1));
+
+    // Pruning s1 cannot delete s2's row with the same remote id.
+    let report = library.sync_remote(S, vec![]).unwrap();
+    assert_eq!(report.removed, 1);
+    let s2_rows = library
+        .tracks_filtered(&TrackFilter {
+            server_id: Some("s2".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    assert_eq!(s2_rows.len(), 1);
+    assert_eq!(s2_rows[0].server_id.as_deref(), Some("s2"));
+
+    // Removing a server clears only its rows.
+    assert_eq!(library.delete_remote_server("s2").unwrap(), 1);
+    assert!(
+        library
+            .tracks_filtered(&TrackFilter::default())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn legacy_remote_paths_migrate_to_a_server() {
+    let (scratch, library) = db("remote-migrate");
+    library.sync_remote("default", vec![rt("t1", "A")]).unwrap();
+    drop(library);
+
+    // Rewind the row to the pre-aggregation identity.
+    {
+        let raw = rusqlite::Connection::open(scratch.db()).unwrap();
+        raw.execute(
+            "UPDATE tracks SET server_id = NULL, path = 'navidrome://t1'
+             WHERE remote_id = 't1'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let library = Library::open(scratch.db()).unwrap();
+    assert_eq!(library.migrate_remote_server("default").unwrap(), 1);
+    let track = &library.tracks_filtered(&TrackFilter::default()).unwrap()[0];
+    assert_eq!(track.server_id.as_deref(), Some("default"));
+    assert_eq!(track.path, "navidrome://default/t1");
+
+    // Idempotent: a second boot rewrites nothing.
+    assert_eq!(library.migrate_remote_server("default").unwrap(), 0);
+}
+
+#[test]
+fn open_migrates_a_tracks_table_created_before_server_id() {
+    let (scratch, library) = db("server-id-migration");
+    drop(library);
+    {
+        let raw = rusqlite::Connection::open(scratch.db()).unwrap();
+        raw.execute_batch(
+            "DROP INDEX idx_tracks_server;
+             ALTER TABLE tracks DROP COLUMN server_id;",
+        )
+        .unwrap();
+    }
+
+    // Reopening adds the column + index; remote upserts then work.
+    let library = Library::open(scratch.db()).unwrap();
+    library.sync_remote(S, vec![rt("t1", "A")]).unwrap();
+    let track = &library.tracks_filtered(&TrackFilter::default()).unwrap()[0];
+    assert_eq!(track.server_id.as_deref(), Some("s1"));
 }

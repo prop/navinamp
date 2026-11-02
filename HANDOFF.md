@@ -72,15 +72,19 @@
   the selected id (`libraryId`) persists in `navidrome.json` and scopes the
   sync walk via `musicFolderId`; Navidrome Settings has an all-libraries /
   library dropdown that re-syncs (the prune drops rows outside the choice).
-- Multiple Navidrome servers: `navidrome.json` now holds `profiles` +
-  `activeId` (v1 single-server files migrate to one `default` profile).
-  Settings lists saved servers (switch / rename / remove) and the connect
-  form adds one; labels default to `user@host` and are editable. Switching
-  clears the previous server's synced rows, drops the client cache and
-  auto-syncs the new server (one active at a time, syncs must finish first).
-  Publish mappings are keyed per server (`smart_view_playlists.server`), so
-  switching back updates the same server playlist instead of duplicating;
-  legacy mappings move to the single migrated profile on first boot.
+- Multiple Navidrome servers are aggregated: every saved profile syncs into
+  the unified `tracks` table; rows carry `server_id` and paths are
+  `navidrome://<profile>/<remote_id>`, so identical remote ids stay distinct.
+  Playback, scrobbling, stars, ratings and cover art route to the row's
+  server; the NAVIDROME tree lists each server with its count and selecting
+  one filters the table. REMOTE TRACKS shows the union; SYNC NOW walks all
+  servers (an unreachable one is reported and skipped). The active profile
+  only drives playlists, publishing and the status card; removing it
+  promotes the first remaining server to active. `navidrome.json`
+  v1 files migrate to one `default` profile; existing remote rows/paths are
+  qualified on first boot. Publish mappings are keyed per server
+  (`smart_view_playlists.server`); legacy mappings move to the migrated
+  profile on first boot.
 - Navidrome Settings UX: saved servers and the add form share one SERVERS
   block. The form starts empty as “+ ADD SERVER” after every completed
   action; typing a saved `url` + `user` flips it to UPDATE SERVER or
@@ -105,8 +109,11 @@
 
 ## Next up
 
-1. True multi-server aggregation (rows from several servers at once; needs a
-   server identity in track paths and per-server routing).
+1. Per-server playlists and a smart-view publish target picker (both still
+   use the active profile).
+2. A–Z jump rail for the large tree groups (complements virtualization).
+3. A manager/list for saved EQ track/artist curves (today they are only
+   saved/cleared from row context menus).
 
 ## Known follow-ups / deferred
 
@@ -122,15 +129,11 @@
   its profile id; re-adding the same server later gets a fresh id, so the
   next publish creates a new `[NaVinaMP]` playlist instead of updating the
   old one
-- Switching servers while remote tracks are queued/playing is not guarded:
-  the old stream keeps playing, but queue entries resolve against the new
-  server (ids can collide). Stop/clear the queue when switching if this
-  becomes a problem
+- Playlist browsing and smart-view publishing still target only the active
+  profile; per-server playlist groups / a publish-target picker are a future
+  enhancement
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
-- EQ track curves are keyed by path; identical Navidrome song ids on two
-  saved servers share a path, so a curve can carry across profiles (same
-  class of issue as queued remote rows on server switch)
 - Signing ($99/yr) for prompt-free installs; auto-updater after that
 - Deferred by decision: multi-platform CI releases, MAKI runtime,
   video window, Shoutcast

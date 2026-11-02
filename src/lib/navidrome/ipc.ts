@@ -45,7 +45,7 @@ export interface NavidromeStatus {
   profileLabel: string | null;
 }
 
-/** One saved Navidrome server (one active at a time). */
+/** One saved Navidrome server (all are aggregated; one is active/default). */
 export interface NavidromeProfile {
   id: string;
   /** Effective display name (custom label or `user@host`). */
@@ -91,9 +91,8 @@ export function navidromeProfiles(): Promise<NavidromeProfile[]> {
 
 /**
  * Verify credentials (ping) and save them. Connecting to a known url+user
- * updates that profile; a new pair adds one. The profile becomes active and,
- * when that changes the server, the previous server's synced rows are
- * cleared (caller should re-sync). `label` is the optional display name.
+ * updates that profile; a new pair adds one. The profile becomes active;
+ * other servers' synced rows stay untouched (aggregated library).
  */
 export function navidromeConnect(
   url: string,
@@ -110,16 +109,16 @@ export function navidromeDisconnect(): Promise<NavidromeStatus> {
 }
 
 /**
- * Make a saved server active. Clears the previous server's synced rows;
- * the caller re-syncs the new one.
+ * Make a saved server the active/default one. All servers stay synced and
+ * visible; active drives playlists, publishing and the status card.
  */
 export function navidromeSwitch(id: string): Promise<NavidromeStatus> {
   return invoke<NavidromeStatus>("navidrome_switch", { id });
 }
 
 /**
- * Remove one saved server. Removing the active server also clears its synced
- * rows and leaves no active profile; inactive removals are credential-only.
+ * Remove one saved server: its synced rows, credentials and playlist
+ * mappings. Other servers' rows stay visible.
  */
 export function navidromeRemoveProfile(id: string): Promise<NavidromeStatus> {
   return invoke<NavidromeStatus>("navidrome_remove_profile", { id });
@@ -134,32 +133,52 @@ export function navidromeRenameProfile(
 }
 
 /**
- * Full library sync into the unified `tracks` table. Resolves with the
- * report; a second concurrent call throws ("one sync at a time" — the
- * running sync's `navidrome-progress` events keep the UI live).
+ * Sync one server (`serverId`) or every saved server (`null`/omitted) into
+ * the unified `tracks` table. Resolves with the aggregate report; a second
+ * concurrent call throws ("one sync at a time" — the running sync's
+ * `navidrome-progress` events keep the UI live).
  */
-export function navidromeSync(): Promise<NavidromeSyncReport> {
-  return invoke<NavidromeSyncReport>("navidrome_sync");
+export function navidromeSync(serverId: string | null = null): Promise<NavidromeSyncReport> {
+  return invoke<NavidromeSyncReport>("navidrome_sync", { serverId });
 }
 
 /** Translate a remote track id into a streamable http(s) URL. */
-export function navidromeStreamUrl(remoteId: string): Promise<string> {
-  return invoke<string>("navidrome_stream_url", { remoteId });
+export function navidromeStreamUrl(
+  serverId: string | null | undefined,
+  remoteId: string,
+): Promise<string> {
+  return invoke<string>("navidrome_stream_url", { serverId: serverId ?? null, remoteId });
 }
 
 /** Scrobble: `submission=false` = "now playing", `true` = counted listen. */
-export function navidromeScrobble(remoteId: string, submission: boolean): Promise<void> {
-  return invoke<void>("navidrome_scrobble", { remoteId, submission });
+export function navidromeScrobble(
+  serverId: string | null | undefined,
+  remoteId: string,
+  submission: boolean,
+): Promise<void> {
+  return invoke<void>("navidrome_scrobble", {
+    serverId: serverId ?? null,
+    remoteId,
+    submission,
+  });
 }
 
 /** Star / unstar a remote track on the server. */
-export function navidromeStar(remoteId: string, starred: boolean): Promise<void> {
-  return invoke<void>("navidrome_star", { remoteId, starred });
+export function navidromeStar(
+  serverId: string | null | undefined,
+  remoteId: string,
+  starred: boolean,
+): Promise<void> {
+  return invoke<void>("navidrome_star", { serverId: serverId ?? null, remoteId, starred });
 }
 
 /** Set the server-side rating (0 = clear, 1–5 stars) for a remote track. */
-export function navidromeRate(remoteId: string, rating: number): Promise<void> {
-  return invoke<void>("navidrome_rate", { remoteId, rating });
+export function navidromeRate(
+  serverId: string | null | undefined,
+  remoteId: string,
+  rating: number,
+): Promise<void> {
+  return invoke<void>("navidrome_rate", { serverId: serverId ?? null, remoteId, rating });
 }
 
 /** One server playlist from `getPlaylists`. */
@@ -231,6 +250,10 @@ export function navidromeSetStreaming(
 export interface NavidromeProgressPayload {
   scanned: number;
   total: number;
+  /** Profile id currently being walked (multi-server sync). */
+  server?: string;
+  /** Display name of that profile. */
+  label?: string;
 }
 
 /** `navidrome-synced` payload: the final report, or `{ error }` on failure. */

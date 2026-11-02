@@ -642,26 +642,30 @@ fn set_rating_updates_clamps_and_scopes_by_path() {
 fn mark_played_never_touches_remote_rows() {
     let (_scratch, library) = scanned_library("mark-remote");
     library
-        .sync_remote(vec![RemoteTrack {
-            remote_id: "t9".into(),
-            title: "Remote Song".into(),
-            artist: "Björk".into(),
-            album_artist: "Björk".into(),
-            album: "Debut".into(),
-            genre: "Electronic".into(),
-            year: Some(1993),
-            track_no: Some(9),
-            disc_no: Some(1),
-            duration_secs: 250.0,
-            bitrate_kbps: Some(320),
-            samplerate: Some(44_100),
-            channels: Some(2),
-            codec: "mp3".into(),
-            rating: 0,
-            starred: false,
-            art_id: None,
-            size: Some(1_000_000),
-        }])
+        .sync_remote(
+            "s1",
+            vec![RemoteTrack {
+                remote_id: "t9".into(),
+                server_id: "s1".into(),
+                title: "Remote Song".into(),
+                artist: "Björk".into(),
+                album_artist: "Björk".into(),
+                album: "Debut".into(),
+                genre: "Electronic".into(),
+                year: Some(1993),
+                track_no: Some(9),
+                disc_no: Some(1),
+                duration_secs: 250.0,
+                bitrate_kbps: Some(320),
+                samplerate: Some(44_100),
+                channels: Some(2),
+                codec: "mp3".into(),
+                rating: 0,
+                starred: false,
+                art_id: None,
+                size: Some(1_000_000),
+            }],
+        )
         .unwrap();
     let remote_path = library
         .tracks_filtered(&TrackFilter {
@@ -704,7 +708,7 @@ fn open_migrates_a_tracks_table_created_before_starred() {
     // The column list now selects `starred`; this fails without the ALTER.
     let tracks = library.tracks_filtered(&TrackFilter::default()).unwrap();
     assert!(tracks.iter().all(|t| !t.starred));
-    library.set_starred("anything", true).unwrap();
+    library.set_starred("s1", "anything", true).unwrap();
 }
 
 #[test]

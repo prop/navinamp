@@ -194,7 +194,7 @@
     starCache.set(item.path, next);
     menuInfo = next;
     try {
-      await navidromeStar(item.remoteId, starred);
+      await navidromeStar(item.serverId, item.remoteId, starred);
     } catch (e) {
       starCache.set(item.path, previous);
       menuInfo = previous;
@@ -217,7 +217,7 @@
     }
     if (item.remoteId != null) {
       try {
-        await navidromeRate(item.remoteId, rating);
+        await navidromeRate(item.serverId, item.remoteId, rating);
       } catch (e) {
         console.warn(`[navinamp] rating push failed (kept locally): ${e}`);
       }

@@ -34,7 +34,8 @@
  *  · repeat=one feeds the current track as its own successor, making repeats
  *    gapless; the EndOfQueue wrap is then only a fallback.
  *
- * Remote (M5): items synced from Navidrome carry `path: "navidrome://<id>"`
+ * Remote (M5): items synced from Navidrome carry
+ * `path: "navidrome://<serverId>/<remoteId>"`
  * plus `remoteId`. Inside the serialized feed chain `feedPath` translates
  * them into a fresh stream URL (they can be time-limited, so every feed
  * resolves its own); a failed resolution rejects into the existing
@@ -63,8 +64,9 @@ export interface QueueItem {
   /** Stable UI identity (survives reorders; the engine has its own u64 ids). */
   id: string;
   /**
-   * Local file path, or `navidrome://<remoteId>` for synced remote rows.
-   * Remote items resolve their real stream URL at feed time (feedPath).
+   * Local file path, or `navidrome://<serverId>/<remoteId>` for synced
+   * remote rows. Remote items resolve their real stream URL at feed time
+   * (feedPath).
    */
   path: string;
   title: string;
@@ -75,6 +77,8 @@ export interface QueueItem {
    * resolution and scrobbling. `null`/undefined ⇒ a local file.
    */
   remoteId?: string;
+  /** Navidrome profile id paired with `remoteId` (aggregated servers). */
+  serverId?: string;
 }
 
 /** Fully-tagged track info; the M4 library browser will feed this directly. */
@@ -164,15 +168,15 @@ function feed(run: () => Promise<unknown>): void {
 
 /**
  * The path handed to the engine for `item`. Remote (Navidrome) items store
- * `navidrome://<remoteId>` and must be translated into a stream URL first —
- * URLs can be time-limited, so each feed resolves its own instead of
- * caching. A failed resolution rejects inside the serialized feed chain and
- * lands in the existing feed-error log above; the item is skipped exactly
- * like a file the engine cannot open.
+ * `navidrome://<serverId>/<remoteId>` and must be translated into a stream
+ * URL first — URLs can be time-limited, so each feed resolves its own
+ * instead of caching. A failed resolution rejects inside the serialized feed
+ * chain and lands in the existing feed-error log above; the item is skipped
+ * exactly like a file the engine cannot open.
  */
 async function feedPath(item: QueueItem): Promise<string> {
   if (item.remoteId == null) return item.path;
-  return navidromeStreamUrl(item.remoteId);
+  return navidromeStreamUrl(item.serverId, item.remoteId);
 }
 
 // ── Navidrome scrobbling (M5) ──────────────────────────────────────────────
@@ -192,10 +196,14 @@ async function feedPath(item: QueueItem): Promise<string> {
 //    what it holds and EndOfQueue (or the next TrackStarted) closes it.
 
 /** The open now-playing instance, if the current track is a remote one. */
-let scrobbleOpen: { itemId: string; remoteId: string } | null = null;
+let scrobbleOpen: { itemId: string; remoteId: string; serverId?: string } | null = null;
 
-function scrobbleNow(remoteId: string, submission: boolean): void {
-  navidromeScrobble(remoteId, submission).catch((e) =>
+function scrobbleNow(
+  serverId: string | undefined,
+  remoteId: string,
+  submission: boolean,
+): void {
+  navidromeScrobble(serverId, remoteId, submission).catch((e) =>
     logLine(`✖ scrobble failed (${submission ? "submit" : "now-playing"} ${remoteId}): ${e}`),
   );
 }
@@ -203,9 +211,9 @@ function scrobbleNow(remoteId: string, submission: boolean): void {
 /** Submit the open instance (submission=true) exactly once, then drop it. */
 function closeScrobble(): void {
   if (scrobbleOpen == null) return;
-  const { remoteId } = scrobbleOpen;
+  const { serverId, remoteId } = scrobbleOpen;
   scrobbleOpen = null;
-  scrobbleNow(remoteId, true);
+  scrobbleNow(serverId, remoteId, true);
 }
 
 /** A TrackStarted made `item` current: cycle the scrobble onto it. */
@@ -214,8 +222,8 @@ function scrobbleStart(item: QueueItem): void {
   // (repeat-one wrap / replay = a new play of the same item).
   closeScrobble();
   if (item.remoteId == null) return; // local item: nothing to open
-  scrobbleOpen = { itemId: item.id, remoteId: item.remoteId };
-  scrobbleNow(item.remoteId, false);
+  scrobbleOpen = { itemId: item.id, remoteId: item.remoteId, serverId: item.serverId };
+  scrobbleNow(item.serverId, item.remoteId, false);
 }
 
 // ── Local play stats (M6) ───────────────────────────────────────────────────

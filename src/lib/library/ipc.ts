@@ -50,6 +50,8 @@ export interface Track {
   /** `local` today; `navidrome` rows arrive with the M5 sync. */
   source: string;
   remoteId: string | null;
+  /** Navidrome profile id this row belongs to (`null` for local rows). */
+  serverId: string | null;
   /**
    * Album-art reference. For `local` rows: a 16-hex content hash served by
    * the `navinamp-art` scheme (see `localArtUrl`). For `navidrome` rows:
@@ -80,10 +82,22 @@ export interface Album {
    * exactly when `artId` is.
    */
   artSource: string | null;
+  /** Navidrome profile id that provided `artId` (`null` for local art). */
+  artServerId: string | null;
 }
 
 /** Per-source library counters (the source chips / tree). */
 export interface SourceStats {
+  tracks: number;
+  albums: number;
+  artists: number;
+  genres: number;
+  totalSecs: number;
+}
+
+/** Per-server counters for one Navidrome profile. */
+export interface ServerStats {
+  serverId: string;
   tracks: number;
   albums: number;
   artists: number;
@@ -104,6 +118,8 @@ export interface LibraryStats {
   local: SourceStats;
   /** Rows whose `source = 'navidrome'`. */
   navidrome: SourceStats;
+  /** Per-server counters (one entry per server with rows). */
+  navidromeServers: ServerStats[];
 }
 
 /** Why a single file could not be indexed (never fatal). */
@@ -195,6 +211,8 @@ export interface TrackQuery {
   genre?: string;
   /** Filter by library source, e.g. `local` / `navidrome` (M5). */
   source?: string;
+  /** Filter by Navidrome profile id (aggregated remote rows). */
+  serverId?: string;
   limit?: number;
   offset?: number;
 }
@@ -299,8 +317,12 @@ export function artForTrack(path: string): Promise<string | null> {
  * small one for thumbnails. Mirrors `navidromeStreamUrl` (navidrome/ipc):
  * the URL embeds the session token, so hand it straight to `<img src>`.
  */
-export function navidromeArtUrl(remoteId: string, size?: number): Promise<string> {
-  return invoke<string>("navidrome_art_url", { remoteId, size });
+export function navidromeArtUrl(
+  serverId: string | null | undefined,
+  remoteId: string,
+  size?: number,
+): Promise<string> {
+  return invoke<string>("navidrome_art_url", { serverId: serverId ?? null, remoteId, size });
 }
 
 /**

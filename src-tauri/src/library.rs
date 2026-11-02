@@ -286,14 +286,17 @@ pub fn library_album_tracks(
     })
 }
 
-/// Tracks filtered by optional artist/genre/source with limit/offset paging.
+/// Tracks filtered by optional artist/genre/source/server with limit/offset
+/// paging.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn library_tracks(
     app: AppHandle,
     state: State<'_, LibraryState>,
     artist: Option<String>,
     genre: Option<String>,
     source: Option<String>,
+    server_id: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<Track>, String> {
@@ -303,6 +306,7 @@ pub fn library_tracks(
                 artist,
                 genre,
                 source,
+                server_id,
                 limit,
                 offset: offset.unwrap_or(0),
                 ..TrackFilter::default()

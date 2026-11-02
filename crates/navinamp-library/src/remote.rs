@@ -3,15 +3,10 @@
 //!
 //! Semantics mirror the local scanner (see `scanner.rs`) so both sources
 //! behave identically downstream:
-//! - rows are keyed by `path` (`navidrome://<remote_id>`, unique, and never
-//!   a filesystem path — the namespaces cannot collide);
-//! - an upsert refreshes only sync-owned columns; user data (`play_count`,
-//!   `last_played_at`) and provenance (`date_added`) survive. Server ratings
-//!   seed rows still unrated locally (0), but a rating set in the app always
-//!   wins over the server's copy. `starred` is server-owned and refreshed on
-//!   every sync (the star action mirrors back into the local row);
-//! - removal is scoped to `source = 'navidrome'` — **local rows are never
-//!   touched**, not even read for deletion candidates by path;
+//! - rows are keyed by `path` (`navidrome://<server_id>/<remote_id>`,
+//!   unique across servers; remote ids are only unique per server);
+//! - removal is scoped to `source = 'navidrome'` **and one server** —
+//!   local rows and other servers are never touched;
 //! - the whole batch lands in one transaction: a sync is atomic.
 
 use std::collections::HashSet;
@@ -22,16 +17,20 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::model::{RemoteSyncReport, RemoteTrack};
 use crate::scanner::album_key;
 
-/// `path` for a navidrome row — the scheme-prefixed remote id. Public so
-/// the Tauri bridge can hand a playing track's `path` back to the stream /
-/// scrobble commands (they strip the prefix to recover the remote id).
-pub fn remote_path(remote_id: &str) -> String {
-    format!("navidrome://{remote_id}")
+/// `path` for a navidrome row: the server profile id plus the remote id.
+/// Remote ids are only unique per server, so both are needed. Public so the
+/// Tauri bridge can hand a playing track's `path` back to the stream /
+/// scrobble commands (they strip the prefix to recover the pair).
+pub fn remote_path(server_id: &str, remote_id: &str) -> String {
+    format!("navidrome://{server_id}/{remote_id}")
 }
 
-/// Strips the `navidrome://` prefix from `path`, if it carries one.
-pub fn remote_id_from_path(path: &str) -> Option<&str> {
-    path.strip_prefix("navidrome://")
+/// Splits a remote path into `(server_id, remote_id)`. `None` for local
+/// paths and for legacy `navidrome://<remote_id>` paths.
+pub fn remote_ref_from_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("navidrome://")?;
+    let (server, remote) = rest.split_once('/')?;
+    (!server.is_empty() && !remote.is_empty()).then_some((server, remote))
 }
 
 /// Upserts one batch of remote tracks, **without removals**. The sync walk
@@ -54,12 +53,12 @@ pub(super) fn upsert_remote(
             .unwrap_or(0);
 
         for t in tracks {
-            // Defensive: an empty id would produce `navidrome://`, which
-            // could never be played or removed again.
-            if t.remote_id.is_empty() {
+            // Defensive: empty identities would produce an unplayable path
+            // that could never be removed again.
+            if t.remote_id.is_empty() || t.server_id.is_empty() {
                 continue;
             }
-            let path = remote_path(&t.remote_id);
+            let path = remote_path(&t.server_id, &t.remote_id);
             let was_new = lookup
                 .query_row([&path], |_row| Ok(()))
                 .optional()?
@@ -86,6 +85,7 @@ pub(super) fn upsert_remote(
                 t.starred,
                 now_secs,
                 t.remote_id,
+                t.server_id,
                 t.art_id,
             ])?;
 
@@ -100,17 +100,25 @@ pub(super) fn upsert_remote(
     Ok(report)
 }
 
-/// Deletes navidrome rows whose `remote_id` is absent from `seen`. Scoped
-/// strictly to `source = 'navidrome'` — local rows are never candidates.
-/// Returns the number removed. Only called after a *complete* sync walk, so
-/// a failed sync never prunes rows it simply did not reach.
-pub(super) fn prune_remote(conn: &Connection, seen: &HashSet<String>) -> rusqlite::Result<u64> {
+/// Deletes one server's navidrome rows whose `remote_id` is absent from
+/// `seen`. Scoped to `source = 'navidrome' AND server_id = ?` — local rows
+/// and other servers are never candidates. Returns the number removed. Only
+/// called after a *complete* sync walk, so a failed sync never prunes rows it
+/// simply did not reach.
+pub(super) fn prune_remote(
+    conn: &Connection,
+    server_id: &str,
+    seen: &HashSet<String>,
+) -> rusqlite::Result<u64> {
     let tx = conn.unchecked_transaction()?;
     let mut removed = 0u64;
     {
-        let mut stmt = tx.prepare("SELECT id, remote_id FROM tracks WHERE source = 'navidrome'")?;
+        let mut stmt = tx.prepare(
+            "SELECT id, remote_id FROM tracks
+             WHERE source = 'navidrome' AND server_id = ?1",
+        )?;
         let candidates: Vec<(i64, Option<String>)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map([server_id], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
         drop(stmt);
         let mut delete = tx.prepare("DELETE FROM tracks WHERE id = ?1")?;
@@ -126,20 +134,49 @@ pub(super) fn prune_remote(conn: &Connection, seen: &HashSet<String>) -> rusqlit
     Ok(removed)
 }
 
-/// One-shot upsert + prune (tests and callers that already hold the full
-/// batch). The incremental sync path uses [`upsert_remote`] per batch and
-/// [`prune_remote`] at the end.
+/// Deletes every remote row belonging to one server (profile removal).
+pub(super) fn delete_server(conn: &Connection, server_id: &str) -> rusqlite::Result<u64> {
+    let n = conn.execute(
+        "DELETE FROM tracks WHERE source = 'navidrome' AND server_id = ?1",
+        [server_id],
+    )?;
+    Ok(n as u64)
+}
+
+/// Rewrites pre-aggregation rows (`navidrome://<remote_id>`, NULL server id)
+/// to the new `navidrome://<server_id>/<remote_id>` identity. Idempotent:
+/// rows already carrying a server-qualified path are left alone. Rows with a
+/// different server id are never touched.
+pub(super) fn migrate_legacy_server(conn: &Connection, server_id: &str) -> rusqlite::Result<u64> {
+    let prefix = format!("navidrome://{server_id}/");
+    let prefix_len = prefix.chars().count() as i64;
+    Ok(conn.execute(
+        "UPDATE OR IGNORE tracks
+         SET server_id = ?1,
+             path = ?2 || remote_id
+         WHERE source = 'navidrome'
+           AND remote_id IS NOT NULL
+           AND (server_id IS NULL OR server_id = ?1)
+           AND substr(path, 1, ?3) != ?2",
+        rusqlite::params![server_id, prefix, prefix_len],
+    )? as u64)
+}
+
+/// One-shot upsert + prune for one server (tests and callers that already
+/// hold the full batch). The incremental sync path uses [`upsert_remote`]
+/// per batch and [`prune_remote`] at the end.
 pub(super) fn sync_remote(
     conn: &Connection,
+    server_id: &str,
     tracks: &[RemoteTrack],
 ) -> rusqlite::Result<RemoteSyncReport> {
     let mut report = upsert_remote(conn, tracks)?;
     let seen: HashSet<String> = tracks
         .iter()
-        .filter(|t| !t.remote_id.is_empty())
+        .filter(|t| !t.remote_id.is_empty() && t.server_id == server_id)
         .map(|t| t.remote_id.clone())
         .collect();
-    report.removed = prune_remote(conn, &seen)?;
+    report.removed = prune_remote(conn, server_id, &seen)?;
     Ok(report)
 }
 
@@ -155,9 +192,9 @@ const REMOTE_UPSERT_SQL: &str = "\
 INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
-    channels, codec, rating, starred, date_added, source, remote_id, art_id
+    channels, codec, rating, starred, date_added, source, remote_id, server_id, art_id
 ) VALUES (
-    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22
 )
 ON CONFLICT(path) DO UPDATE SET
     size         = excluded.size,
@@ -178,4 +215,5 @@ ON CONFLICT(path) DO UPDATE SET
     rating          = CASE WHEN tracks.rating = 0 THEN excluded.rating ELSE tracks.rating END,
     starred         = excluded.starred,
     remote_id       = excluded.remote_id,
+    server_id       = excluded.server_id,
     art_id          = excluded.art_id";

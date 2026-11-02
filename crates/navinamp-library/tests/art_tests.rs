@@ -50,6 +50,7 @@ fn write_track(
 fn remote(remote_id: &str, album: &str, art_id: Option<&str>) -> RemoteTrack {
     RemoteTrack {
         remote_id: remote_id.into(),
+        server_id: "s1".into(),
         title: remote_id.into(),
         artist: "Björk".into(),
         album_artist: "Björk".into(),
@@ -233,7 +234,7 @@ fn albums_expose_first_track_art_and_its_source() {
 
     // A navidrome album whose rows carry the server's coverArt id.
     library
-        .sync_remote(vec![remote("mf-1", "Homogenic", Some("al-42"))])
+        .sync_remote("s1", vec![remote("mf-1", "Homogenic", Some("al-42"))])
         .unwrap();
 
     let albums = library.albums(None).unwrap();
@@ -247,14 +248,17 @@ fn albums_expose_first_track_art_and_its_source() {
     let debut = find("Debut");
     assert_eq!(debut.art_id.as_deref(), Some(content_id(&png).as_str()));
     assert_eq!(debut.art_source.as_deref(), Some("local"));
+    assert_eq!(debut.art_server_id, None);
 
     let post = find("Post");
     assert_eq!(post.art_id, None);
     assert_eq!(post.art_source, None);
+    assert_eq!(post.art_server_id, None);
 
     let homogenic = find("Homogenic");
     assert_eq!(homogenic.art_id.as_deref(), Some("al-42"));
     assert_eq!(homogenic.art_source.as_deref(), Some("navidrome"));
+    assert_eq!(homogenic.art_server_id.as_deref(), Some("s1"));
 }
 
 #[test]
@@ -395,7 +399,7 @@ fn art_for_track_point_lookup_covers_both_sources() {
         .scan_roots(std::slice::from_ref(&music), |_| {})
         .unwrap();
     library
-        .sync_remote(vec![remote("mf-7", "Post", None)])
+        .sync_remote("s1", vec![remote("mf-7", "Post", None)])
         .unwrap();
 
     // The scanner canonicalizes roots, so the stored path is the resolved
@@ -411,7 +415,7 @@ fn art_for_track_point_lookup_covers_both_sources() {
         Some(content_id(&png).as_str())
     );
     assert_eq!(
-        library.art_for_track("navidrome://mf-7").unwrap(),
+        library.art_for_track("navidrome://s1/mf-7").unwrap(),
         None,
         "this remote row has no art"
     );

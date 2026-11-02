@@ -153,10 +153,10 @@
 
   const formHint = $derived(
     formMatch == null
-      ? "saves the server and switches to it — the current server stays in the list"
+      ? "adds the server, syncs it and makes it active — the other servers stay visible"
       : formMatch.active
         ? "reconnects to the active server with these credentials"
-        : "updates this saved server and switches to it; its tracks re-sync",
+        : "updates this saved server and makes it active",
   );
 
   async function connect(): Promise<void> {
@@ -348,8 +348,8 @@
           ? "all libraries"
           : (libraries.find((l) => l.id === libraryId)?.name ?? libraryId);
       onlog?.(`navidrome: library — ${name}`);
-      // Re-sync so the local remote rows match the new scope.
-      void navidromeSync().catch((e) => {
+      // Re-sync just the active server after changing its library scope.
+      void navidromeSync(status.profileId).catch((e) => {
         const msg = e instanceof Error ? e.message : String(e);
         if (!/already|running/i.test(msg)) onlog?.(`navidrome: sync error: ${msg}`);
       });
@@ -419,7 +419,7 @@
           {/each}
         {/if}
         {#if profiles.length > 1}
-          <div class="dim">switching servers re-syncs; only one is active at a time</div>
+          <div class="dim">all saved servers stay synced; the active one drives playlists and publishing</div>
         {/if}
 
         <div class="add">

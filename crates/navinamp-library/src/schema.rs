@@ -25,6 +25,14 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+    if !has_column(conn, "tracks", "server_id")? {
+        // Multi-server aggregation: remote rows now carry their profile id.
+        conn.execute("ALTER TABLE tracks ADD COLUMN server_id TEXT", [])?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id)",
+        [],
+    )?;
     if !has_column(conn, "smart_view_playlists", "server")? {
         // Rebuild the single-server mapping table with a composite key;
         // existing rows survive under the legacy '' server key.
@@ -85,6 +93,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     date_added      INTEGER NOT NULL,          -- unix seconds
     source          TEXT NOT NULL DEFAULT 'local',
     remote_id       TEXT,
+    server_id       TEXT,                      -- navidrome profile id (remote rows)
     art_id          TEXT                       -- local: content hash into art-cache; remote: coverArt id
 );
 

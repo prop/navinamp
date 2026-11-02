@@ -47,6 +47,10 @@ pub struct Track {
     /// `local` today; `navidrome` rows arrive with the Navidrome sync (M5).
     pub source: String,
     pub remote_id: Option<String>,
+    /// Navidrome profile id this row belongs to (`None` for local rows).
+    /// Remote ids are only unique per server, so this + `remote_id` identify
+    /// the row on its server.
+    pub server_id: Option<String>,
     /// Album-art reference. For `local` rows: a 16-hex content hash into
     /// the art cache (`<db dir>/art-cache/<art_id>.<ext>`, served by the
     /// app's `navinamp-art` scheme). For `navidrome` rows: the server's
@@ -75,12 +79,28 @@ pub struct Album {
     /// `navidrome`), telling the frontend which serving route to use.
     /// `None` exactly when `art_id` is.
     pub art_source: Option<String>,
+    /// Navidrome profile id that provided `art_id` (`None` for local art).
+    pub art_server_id: Option<String>,
 }
 
 /// Per-source counters (the library's source chips and tree counts).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceStats {
+    pub tracks: u64,
+    pub albums: u64,
+    pub artists: u64,
+    pub genres: u64,
+    pub total_secs: f64,
+}
+
+/// Per-server counters for a Navidrome profile (the NAVIDROME tree's server
+/// leaves). Remote ids are unique per server, so counts are scoped by
+/// `server_id`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStats {
+    pub server_id: String,
     pub tracks: u64,
     pub albums: u64,
     pub artists: u64,
@@ -103,6 +123,8 @@ pub struct LibraryStats {
     pub local: SourceStats,
     /// Rows whose `source = 'navidrome'`.
     pub navidrome: SourceStats,
+    /// Per-server Navidrome counters (one entry per server with rows).
+    pub navidrome_servers: Vec<ServerStats>,
 }
 
 /// Optional constraints for [`crate::Library::tracks_filtered`]. All fields
@@ -117,6 +139,8 @@ pub struct TrackFilter {
     pub genre: Option<String>,
     /// Exact source match (`local` | `navidrome`); `None` = both.
     pub source: Option<String>,
+    /// Exact Navidrome server profile id; `None` = all servers.
+    pub server_id: Option<String>,
     /// Max rows; `None` = unlimited.
     pub limit: Option<u32>,
     /// Rows to skip (0 by default).
@@ -165,7 +189,8 @@ pub struct ScanReport {
 
 /// One remote (Navidrome) track as delivered by a sync — everything the
 /// sync owns, no file I/O involved. `path` is derived as
-/// `navidrome://<remote_id>`; `album_key` is computed by the library.
+/// `navidrome://<server_id>/<remote_id>`; `album_key` is computed by the
+/// library.
 ///
 /// Mapping from Subsonic's `Child` happens in the caller (the Tauri
 /// bridge): `album_artist` should come from the enclosing album when the
@@ -176,6 +201,8 @@ pub struct ScanReport {
 pub struct RemoteTrack {
     /// Subsonic id of the song (also the stable identity across syncs).
     pub remote_id: String,
+    /// Navidrome profile id; remote ids are only unique per server.
+    pub server_id: String,
     pub title: String,
     pub artist: String,
     pub album_artist: String,

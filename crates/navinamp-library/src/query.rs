@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Row};
 
-use crate::model::{Album, LibraryStats, SourceStats, Track, TrackFilter};
+use crate::model::{Album, LibraryStats, ServerStats, SourceStats, Track, TrackFilter};
 
 /// Column list for every `SELECT` on `tracks`; positionally mapped by
 /// [`track_from_row`]. With a prefix (`tracks.`) for joins where bare names
@@ -37,6 +37,7 @@ const TRACK_COLUMN_NAMES: &[&str] = &[
     "date_added",
     "source",
     "remote_id",
+    "server_id",
     "art_id",
 ];
 
@@ -80,7 +81,8 @@ pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
         date_added: row.get(22)?,
         source: row.get(23)?,
         remote_id: row.get(24)?,
-        art_id: row.get(25)?,
+        server_id: row.get(25)?,
+        art_id: row.get(26)?,
     })
 }
 
@@ -144,6 +146,9 @@ pub(super) fn albums(conn: &Connection, source: Option<&str>) -> rusqlite::Resul
                ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1),
              (SELECT t2.source FROM tracks t2
                WHERE t2.album_key = t.album_key AND t2.art_id IS NOT NULL
+               ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1),
+             (SELECT t2.server_id FROM tracks t2
+               WHERE t2.album_key = t.album_key AND t2.art_id IS NOT NULL
                ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1)
          FROM tracks t
          WHERE ?1 IS NULL OR t.source = ?1
@@ -161,6 +166,7 @@ pub(super) fn albums(conn: &Connection, source: Option<&str>) -> rusqlite::Resul
                 total_secs: row.get(5)?,
                 art_id: row.get(6)?,
                 art_source: row.get(7)?,
+                art_server_id: row.get(8)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -232,6 +238,10 @@ pub(super) fn tracks_filtered(
         where_clauses.push("source = ?");
         params.push(source);
     }
+    if let Some(server_id) = &filter.server_id {
+        where_clauses.push("server_id = ?");
+        params.push(server_id);
+    }
     if !where_clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
@@ -262,6 +272,16 @@ pub(super) fn track_count(conn: &Connection, source: Option<&str>) -> rusqlite::
         })?,
         None => conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))?,
     };
+    Ok(n.max(0) as u64)
+}
+
+/// Row count for one Navidrome profile (the per-server tree leaves).
+pub(super) fn track_count_for_server(conn: &Connection, server_id: &str) -> rusqlite::Result<u64> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE source = 'navidrome' AND server_id = ?1",
+        [server_id],
+        |r| r.get(0),
+    )?;
     Ok(n.max(0) as u64)
 }
 
@@ -298,21 +318,24 @@ pub(super) fn set_rating(conn: &Connection, path: &str, rating: i64) -> rusqlite
     Ok(())
 }
 
-/// Mirrors the server's starred flag onto a navidrome row. Local rows and
-/// unknown ids are a silent no-op (0 affected rows is not an error).
+/// Mirrors the server's starred flag onto a navidrome row. Scoped by
+/// server + remote id (ids are only unique per server). Local rows and
+/// unknown ids are a silent no-op.
 pub(super) fn set_starred(
     conn: &Connection,
+    server_id: &str,
     remote_id: &str,
     starred: bool,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE tracks SET starred = ?2 WHERE source = 'navidrome' AND remote_id = ?1",
-        rusqlite::params![remote_id, starred],
+        "UPDATE tracks SET starred = ?3
+         WHERE source = 'navidrome' AND server_id = ?1 AND remote_id = ?2",
+        rusqlite::params![server_id, remote_id, starred],
     )?;
     Ok(())
 }
 
-/// One track by its stored `path` (local path or `navidrome://id`), if it
+/// One track by its stored `path` (local path or `navidrome://server/id`), if it
 /// exists. Used by the context menus to show the current star/rating state.
 pub(super) fn track_by_path(conn: &Connection, path: &str) -> rusqlite::Result<Option<Track>> {
     conn.query_row(
@@ -357,6 +380,7 @@ pub(super) fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
                 last_scan: None,
                 local: SourceStats::default(),
                 navidrome: SourceStats::default(),
+                navidrome_servers: Vec::new(),
             })
         },
     )?;
@@ -392,6 +416,32 @@ pub(super) fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
                 _ => {} // unknown future source: totals still include it
             }
         }
+    }
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT
+                 server_id,
+                 COUNT(*),
+                 COUNT(DISTINCT album_key),
+                 COUNT(DISTINCT COALESCE(NULLIF(album_artist, ''), artist)),
+                 COUNT(DISTINCT CASE WHEN genre != '' THEN genre END),
+                 COALESCE(SUM(duration_secs), 0.0)
+             FROM tracks
+             WHERE source = 'navidrome' AND server_id IS NOT NULL
+             GROUP BY server_id
+             ORDER BY server_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ServerStats {
+                server_id: row.get(0)?,
+                tracks: row.get::<_, i64>(1)?.max(0) as u64,
+                albums: row.get::<_, i64>(2)?.max(0) as u64,
+                artists: row.get::<_, i64>(3)?.max(0) as u64,
+                genres: row.get::<_, i64>(4)?.max(0) as u64,
+                total_secs: row.get(5)?,
+            })
+        })?;
+        stats.navidrome_servers = rows.collect::<Result<_, _>>()?;
     }
     stats.last_scan = conn
         .query_row(
