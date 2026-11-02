@@ -514,6 +514,9 @@
   const TREE_LEAF_H = 20;
   const TREE_ALBUM_H = 29;
   const TREE_OVERSCAN = 8;
+  /** A–Z jump rails appear once a list is long enough to need them. */
+  const TREE_JUMP_MIN = 30;
+  const TREE_JUMP_H = 24;
 
   interface RowWindow {
     start: number;
@@ -528,17 +531,29 @@
   let albumWindow = $state.raw<RowWindow>({ start: 0, end: 0 });
   let genreWindow = $state.raw<RowWindow>({ start: 0, end: 0 });
 
+  /** Sticky rail height for a list that is (or is not) long enough for one. */
+  function railHeight(count: number): number {
+    return count >= TREE_JUMP_MIN ? TREE_JUMP_H : 0;
+  }
+
+  /** Virtual container height: all row slots plus the in-flow rail. */
+  function listHeight(count: number, rowH: number): number {
+    return Math.max(0, count * rowH - 1) + railHeight(count);
+  }
+
   function treeWindow(
     el: HTMLElement | null,
     count: number,
     slotH: number,
+    topOffset: number,
     scrollTop: number,
     viewport: number,
   ): RowWindow {
     if (el == null || count === 0) return { start: 0, end: 0 };
     // offsetTop is measured from the tree's padding edge, the same origin
-    // scrollTop uses. The ±4px padding error is absorbed by the overscan.
-    const relative = scrollTop - el.offsetTop;
+    // scrollTop uses. Rows start below the sticky rail; the ±4px padding
+    // error is absorbed by the overscan.
+    const relative = scrollTop - el.offsetTop - topOffset;
     const start = Math.max(0, Math.floor(relative / slotH) - TREE_OVERSCAN);
     const end = Math.min(
       count,
@@ -555,6 +570,7 @@
       artistsListEl,
       artistNames.length,
       TREE_LEAF_H,
+      railHeight(artistNames.length),
       scrollTop,
       viewport,
     );
@@ -566,6 +582,7 @@
       albumsListEl,
       albums.length,
       TREE_ALBUM_H,
+      railHeight(albums.length),
       scrollTop,
       viewport,
     );
@@ -577,6 +594,7 @@
       genresListEl,
       genreNames.length,
       TREE_LEAF_H,
+      railHeight(genreNames.length),
       scrollTop,
       viewport,
     );
@@ -591,6 +609,78 @@
   /** Albums are fetched pre-filtered by the source chip. */
   const albumsWindowed = $derived(albums.slice(albumWindow.start, albumWindow.end));
   const genresWindowed = $derived(genreNames.slice(genreWindow.start, genreWindow.end));
+
+  // Groups that get an A–Z rail.
+  type JumpGroup = "artists" | "albums" | "genres";
+
+  function initialOf(text: string): string {
+    const first = Array.from(text.trim())[0];
+    if (first === undefined) return "#";
+    // Fold accents (É → E) and collapse digits/symbols/other scripts into a
+    // single "#" bucket so the rail never needs more than 27 cells.
+    const base = first.normalize("NFD").replace(/\p{M}/gu, "").toUpperCase();
+    return /^[A-Z]$/.test(base) ? base : "#";
+  }
+
+  function initialsOf(items: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of items) {
+      const initial = initialOf(item);
+      if (seen.has(initial)) continue;
+      seen.add(initial);
+      out.push(initial);
+    }
+    return out;
+  }
+
+  function initialAt(items: string[], index: number): string {
+    const item = items[index];
+    return item === undefined ? "" : initialOf(item);
+  }
+
+  // Keys follow each list's own order: albums are sorted by artist, so their
+  // rail uses the artist initial (not the album title).
+  const albumJumpKeys = $derived(albums.map((a) => a.artist || a.name));
+  const artistInitials = $derived(initialsOf(artistNames));
+  const albumInitials = $derived(initialsOf(albumJumpKeys));
+  const genreInitials = $derived(initialsOf(genreNames));
+
+  // Highlight the initial at the top of the actual viewport (the window
+  // starts TREE_OVERSCAN rows above it, except at the very top).
+  function visibleStart(win: RowWindow, count: number): number {
+    if (count === 0) return 0;
+    const index = win.start === 0 ? 0 : win.start + TREE_OVERSCAN;
+    return Math.min(index, count - 1);
+  }
+
+  const artistJumpLetter = $derived(
+    initialAt(artistNames, visibleStart(artistWindow, artistNames.length)),
+  );
+  const albumJumpLetter = $derived(
+    initialAt(albumJumpKeys, visibleStart(albumWindow, albumJumpKeys.length)),
+  );
+  const genreJumpLetter = $derived(
+    initialAt(genreNames, visibleStart(genreWindow, genreNames.length)),
+  );
+
+  function jumpTo(group: JumpGroup, letter: string): void {
+    const items =
+      group === "artists"
+        ? artistNames
+        : group === "albums"
+          ? albumJumpKeys
+          : genreNames;
+    const index = items.findIndex((item) => initialOf(item) === letter);
+    const listEl =
+      group === "artists" ? artistsListEl : group === "albums" ? albumsListEl : genresListEl;
+    if (index < 0 || listEl == null || treeEl == null) return;
+    const rowH = group === "albums" ? TREE_ALBUM_H : TREE_LEAF_H;
+    // The sticky rail occupies the top of the scrollport; the row below it
+    // lands at y = railHeight + 4 (or 4 when the list has no rail).
+    treeEl.scrollTop = Math.max(0, listEl.offsetTop + index * rowH - 4);
+    updateTreeWindows();
+  }
 
   // Recompute after the tree DOM changes: a group toggle/list load shifts
   // every list below it, and the refs attach/detach with the group.
@@ -1591,8 +1681,21 @@
           <div
             class="vlist"
             bind:this={artistsListEl}
-            style="height:{artistNames.length * TREE_LEAF_H - 1}px">
-            <div class="vstrip" style="top:{artistWindow.start * TREE_LEAF_H}px">
+            style="height:{listHeight(artistNames.length, TREE_LEAF_H)}px">
+            {#if artistNames.length >= TREE_JUMP_MIN}
+              <div class="jump" role="group" aria-label="jump to artist initial">
+                {#each artistInitials as letter (letter)}
+                  <button
+                    class="jbtn"
+                    class:on={artistJumpLetter === letter}
+                    title={`jump to ${letter}`}
+                    onclick={() => jumpTo("artists", letter)}>{letter}</button>
+                {/each}
+              </div>
+            {/if}
+            <div
+              class="vstrip"
+              style="top:{railHeight(artistNames.length) + artistWindow.start * TREE_LEAF_H}px">
               {#each artistsWindowed as name (name)}
                 <button
                   class="leaf"
@@ -1618,8 +1721,21 @@
           <div
             class="vlist"
             bind:this={albumsListEl}
-            style="height:{albums.length * TREE_ALBUM_H - 1}px">
-            <div class="vstrip" style="top:{albumWindow.start * TREE_ALBUM_H}px">
+            style="height:{listHeight(albums.length, TREE_ALBUM_H)}px">
+            {#if albums.length >= TREE_JUMP_MIN}
+              <div class="jump" role="group" aria-label="jump to album artist initial">
+                {#each albumInitials as letter (letter)}
+                  <button
+                    class="jbtn"
+                    class:on={albumJumpLetter === letter}
+                    title={`jump to ${letter}`}
+                    onclick={() => jumpTo("albums", letter)}>{letter}</button>
+                {/each}
+              </div>
+            {/if}
+            <div
+              class="vstrip"
+              style="top:{railHeight(albums.length) + albumWindow.start * TREE_ALBUM_H}px">
               {#each albumsWindowed as a (a.albumKey)}
                 <button
                   class="leaf album"
@@ -1659,8 +1775,21 @@
           <div
             class="vlist"
             bind:this={genresListEl}
-            style="height:{genreNames.length * TREE_LEAF_H - 1}px">
-            <div class="vstrip" style="top:{genreWindow.start * TREE_LEAF_H}px">
+            style="height:{listHeight(genreNames.length, TREE_LEAF_H)}px">
+            {#if genreNames.length >= TREE_JUMP_MIN}
+              <div class="jump" role="group" aria-label="jump to genre initial">
+                {#each genreInitials as letter (letter)}
+                  <button
+                    class="jbtn"
+                    class:on={genreJumpLetter === letter}
+                    title={`jump to ${letter}`}
+                    onclick={() => jumpTo("genres", letter)}>{letter}</button>
+                {/each}
+              </div>
+            {/if}
+            <div
+              class="vstrip"
+              style="top:{railHeight(genreNames.length) + genreWindow.start * TREE_LEAF_H}px">
               {#each genresWindowed as name (name)}
                 <button
                   class="leaf"
@@ -2189,10 +2318,54 @@
   }
 
   /* Virtual leaf lists (artists / albums / genres): the container keeps the
-     full scroll height, the strip inside holds only the windowed rows. */
+     full scroll height, the strip inside holds only the windowed rows.
+     `overflow: clip` (not hidden) keeps the sticky A–Z rail anchored to the
+     tree scrollport: hidden would make this non-scrolling box a scroll
+     container of its own and freeze the rail. */
   .tree .vlist {
     position: relative;
-    overflow: hidden;
+    overflow: clip;
+  }
+
+  /* Compact two-row A–Z rail: 14 monospace letter cells per row fills the
+     176px tree column without horizontal scrolling. */
+  .tree .jump {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    box-sizing: border-box;
+    height: 24px;
+    padding: 1px 0;
+    display: grid;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    grid-auto-rows: 11px;
+    background: #000;
+    border-bottom: 1px solid #1e3a24;
+  }
+
+  .tree .jump .jbtn {
+    min-width: 0;
+    height: 11px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #3f7a49;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8px;
+    line-height: 11px;
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .tree .jump .jbtn:hover {
+    color: #8dff9e;
+    background: #12301b;
+  }
+
+  .tree .jump .jbtn.on {
+    color: #0d0d0d;
+    background: #3ccb4e;
   }
 
   .tree .vstrip {

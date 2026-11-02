@@ -132,11 +132,15 @@
   scroll height with only the visible rows (+8 overscan) in the DOM, using
   fixed-height leaf slots. Expanding/collapsing groups recomputes offsets;
   the old 200-row chunk extension is gone.
+- Long tree lists (30+ rows) get a sticky two-row A–Z rail: present initials
+  only, accents folded (É → E) and digits/symbols/other scripts grouped under
+  `#`, so the 14×2 cells always fit the 176px column. The active initial
+  tracks the viewport; clicking one scrolls that group's first matching row
+  just below the rail. The rail height is included in the virtual list math.
 
 ## Next up
 
-1. A–Z jump rail for the large tree groups (complements virtualization).
-2. A manager/list for saved EQ track/artist curves (today they are only
+1. A manager/list for saved EQ track/artist curves (today they are only
    saved/cleared from row context menus).
 
 ## Known follow-ups / deferred
