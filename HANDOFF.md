@@ -51,9 +51,9 @@
   rating, Copy path; the stock webview menu is replaced on those rows
 - Library loads lazily: startup fetches only stats/roots/views; the table
   pages 500 rows on entry and appends on scroll; artist/genre/album tree
-  lists load when a group expands and render a 200-row slice that extends as
-  the tree scrolls; counts come from per-source stats. No 20k-row master
-  snapshot and no sync-time aggregate reload.
+  lists load when a group expands and render only the visible window;
+  counts come from per-source stats. No 20k-row master snapshot and no
+  sync-time aggregate reload.
 - Navidrome sync still writes rows in album batches; the UI now refreshes
   only counts (2s) and the tree groups that are actually open (15s);
   pruning only runs after a complete walk.
@@ -94,16 +94,17 @@
   SELECT ALL again (DESELECT ALL) clears it.
 - Paged views: shift-range selection is limited to loaded rows. Deselecting a
   single row out of a 20k-row SELECT ALL isn't representable, so a row click
-  replaces the virtual selection. The tree renders 200-row slices but is not
-  virtualized, so a deep scroll through thousands of albums still builds DOM
-  rows.
+  replaces the virtual selection.
+- Tree lists are virtualized too: ARTISTS / ALBUMS / GENRES keep their full
+  scroll height with only the visible rows (+8 overscan) in the DOM, using
+  fixed-height leaf slots. Expanding/collapsing groups recomputes offsets;
+  the old 200-row chunk extension is gone.
 
 ## Next up
 
 1. True multi-server aggregation (rows from several servers at once; needs a
    server identity in track paths and per-server routing).
-2. Tree virtualization (deep album/artist scrolling still builds rows).
-3. AUTO per-track/artist associations (genre matching ships today).
+2. AUTO per-track/artist associations (genre matching ships today).
 
 ## Known follow-ups / deferred
 
@@ -126,8 +127,6 @@
   becomes a problem
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
-- Virtualization: the table is windowed; the tree still renders 200-row
-  slices (deep scrolls build DOM rows)
 - Signing ($99/yr) for prompt-free installs; auto-updater after that
 - Deferred by decision: multi-platform CI releases, MAKI runtime,
   video window, Shoutcast

@@ -9,11 +9,11 @@
    * `queue.addFromLibrary`, keeping this component queue-agnostic.
    *
    * Data flow:
-   *  · one `refreshAll()` loads stats/roots/albums/tracks/views; the artist +
-   *    genre tree children are derived client-side from the full track list
-   *    (there is no dedicated IPC for them, and the ALL TRACKS node needs
-   *    the full list anyway);
-   *  · node selection drives the right pane: all → the master list,
+   *  · startup loads only stats/roots/saved views; artist / album / genre
+   *    lists are fetched lazily when a group expands, and the track table
+   *    pages 500 rows on entry (infinite scroll) — there is no full-library
+   *    snapshot;
+   *  · node selection drives the right pane: all → the paged master list,
    *    artist/album/genre → the matching `library_*` filter query (server
    *    ordering), smart view → `smart_view_run`; a `dataVersion` bump re-runs
    *    the current node after a scan;
@@ -25,10 +25,10 @@
    *    a `navidrome-synced` event refreshes stats/tree/pane (dataVersion)
    *    so synced rows appear everywhere at once.
    *
-   * The table renders every row but each row opts into
-   * `content-visibility: auto` with a fixed 20px intrinsic size, so the
-   * browser skips layout/paint for offscreen rows — 100k rows scroll without
-   * per-frame work (DOM node count stays O(n); see report notes).
+   * Large lists are windowed: the track table renders only the visible rows
+   * (+ overscan), and ARTISTS / ALBUMS / GENRES keep their full scroll
+   * height while rendering just the visible leaf window. The tree's other
+   * rows (group headers, smart views, playlists) are small and always render.
    *
    * Missing backend commands (smart views land in parallel) surface as
    * friendly inline notes via `friendlyIpcError` — never a crash.
@@ -478,33 +478,109 @@
     return sourceFilter === "local" ? stats.local : stats.navidrome;
   });
 
-  /** Tree lists are large too (5k albums, 3k artists): render a slice and
-   *  extend it as the tree scrolls. Counts still come from stats. */
-  const TREE_CHUNK = 200;
-  let artistLimit = $state(TREE_CHUNK);
-  let albumLimit = $state(TREE_CHUNK);
+  /** Virtual tree rows: only the rows around the viewport are in the DOM.
+   *  Slot heights include the tree's 1px gap so offset math stays exact
+   *  (leaf row 19 + 1, album row 28 + 1). Counts still come from stats. */
+  const TREE_LEAF_H = 20;
+  const TREE_ALBUM_H = 29;
+  const TREE_OVERSCAN = 8;
 
-  const artistsShown = $derived(artistNames.slice(0, artistLimit));
+  interface RowWindow {
+    start: number;
+    end: number;
+  }
 
+  let treeEl = $state<HTMLElement | null>(null);
+  let artistsListEl = $state<HTMLElement | null>(null);
+  let albumsListEl = $state<HTMLElement | null>(null);
+  let genresListEl = $state<HTMLElement | null>(null);
+  let artistWindow = $state.raw<RowWindow>({ start: 0, end: 0 });
+  let albumWindow = $state.raw<RowWindow>({ start: 0, end: 0 });
+  let genreWindow = $state.raw<RowWindow>({ start: 0, end: 0 });
+
+  function treeWindow(
+    el: HTMLElement | null,
+    count: number,
+    slotH: number,
+    scrollTop: number,
+    viewport: number,
+  ): RowWindow {
+    if (el == null || count === 0) return { start: 0, end: 0 };
+    // offsetTop is measured from the tree's padding edge, the same origin
+    // scrollTop uses. The ±4px padding error is absorbed by the overscan.
+    const relative = scrollTop - el.offsetTop;
+    const start = Math.max(0, Math.floor(relative / slotH) - TREE_OVERSCAN);
+    const end = Math.min(
+      count,
+      Math.max(start, Math.ceil((relative + viewport) / slotH) + TREE_OVERSCAN),
+    );
+    return { start, end };
+  }
+
+  function updateTreeWindows(): void {
+    const scrollTop = treeEl?.scrollTop ?? 0;
+    const viewport = treeEl?.clientHeight ?? 0;
+
+    const nextArtists = treeWindow(
+      artistsListEl,
+      artistNames.length,
+      TREE_LEAF_H,
+      scrollTop,
+      viewport,
+    );
+    if (nextArtists.start !== artistWindow.start || nextArtists.end !== artistWindow.end) {
+      artistWindow = nextArtists;
+    }
+
+    const nextAlbums = treeWindow(
+      albumsListEl,
+      albums.length,
+      TREE_ALBUM_H,
+      scrollTop,
+      viewport,
+    );
+    if (nextAlbums.start !== albumWindow.start || nextAlbums.end !== albumWindow.end) {
+      albumWindow = nextAlbums;
+    }
+
+    const nextGenres = treeWindow(
+      genresListEl,
+      genreNames.length,
+      TREE_LEAF_H,
+      scrollTop,
+      viewport,
+    );
+    if (nextGenres.start !== genreWindow.start || nextGenres.end !== genreWindow.end) {
+      genreWindow = nextGenres;
+    }
+  }
+
+  const artistsWindowed = $derived(
+    artistNames.slice(artistWindow.start, artistWindow.end),
+  );
   /** Albums are fetched pre-filtered by the source chip. */
-  const albumsShown = $derived(albums.slice(0, albumLimit));
+  const albumsWindowed = $derived(albums.slice(albumWindow.start, albumWindow.end));
+  const genresWindowed = $derived(genreNames.slice(genreWindow.start, genreWindow.end));
 
-  // A chip change reloads the lists; start from the first chunk again.
+  // Recompute after the tree DOM changes: a group toggle/list load shifts
+  // every list below it, and the refs attach/detach with the group.
   $effect(() => {
+    void openGroups.artists;
+    void openGroups.albums;
+    void openGroups.genres;
     void sourceFilter;
-    artistLimit = TREE_CHUNK;
-    albumLimit = TREE_CHUNK;
+    void artistNames;
+    void albums;
+    void genreNames;
+    void treeEl;
+    void artistsListEl;
+    void albumsListEl;
+    void genresListEl;
+    updateTreeWindows();
   });
 
-  function onTreeScroll(e: Event & { currentTarget: HTMLElement }): void {
-    const el = e.currentTarget;
-    if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
-    if (openGroups.artists && artistLimit < artistNames.length) {
-      artistLimit = Math.min(artistNames.length, artistLimit + TREE_CHUNK);
-    }
-    if (openGroups.albums && albumLimit < albums.length) {
-      albumLimit = Math.min(albums.length, albumLimit + TREE_CHUNK);
-    }
+  function onTreeScroll(): void {
+    updateTreeWindows();
   }
 
   // ── current table view ─────────────────────────────────────────────────────
@@ -1102,7 +1178,7 @@
   $effect(() => {
     if (!openGroups.albums) return;
     const wanted: string[] = [];
-    for (const a of albumsShown) {
+    for (const a of albumsWindowed) {
       const id = a.artId;
       if (
         id != null &&
@@ -1269,7 +1345,7 @@
   {/if}
 
   <div class="body">
-    <nav class="tree" aria-label="library categories" onscroll={onTreeScroll}>
+    <nav class="tree" aria-label="library categories" bind:this={treeEl} onscroll={onTreeScroll}>
       <button class="node" class:on={selection.kind === "all"} onclick={() => select({ kind: "all" })}>
         ALL TRACKS
       </button>
@@ -1295,13 +1371,21 @@
       {#if openGroups.artists}
         {#if artistNames.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no artists"}</div>
+        {:else if artistNames.length > 0}
+          <div
+            class="vlist"
+            bind:this={artistsListEl}
+            style="height:{artistNames.length * TREE_LEAF_H - 1}px">
+            <div class="vstrip" style="top:{artistWindow.start * TREE_LEAF_H}px">
+              {#each artistsWindowed as name (name)}
+                <button
+                  class="leaf"
+                  class:on={selKey(selection) === `artist:${name}`}
+                  onclick={() => select({ kind: "artist", value: name })}>{name}</button>
+              {/each}
+            </div>
+          </div>
         {/if}
-        {#each artistsShown as name (name)}
-          <button
-            class="leaf"
-            class:on={selKey(selection) === `artist:${name}`}
-            onclick={() => select({ kind: "artist", value: name })}>{name}</button>
-        {/each}
       {/if}
 
       <button
@@ -1312,29 +1396,37 @@
         <span class="cnt">({(chipStats?.albums ?? 0).toLocaleString()})</span>
       </button>
       {#if openGroups.albums}
-        {#if albumsShown.length === 0 && treeError == null}
+        {#if albums.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no albums"}</div>
+        {:else if albums.length > 0}
+          <div
+            class="vlist"
+            bind:this={albumsListEl}
+            style="height:{albums.length * TREE_ALBUM_H - 1}px">
+            <div class="vstrip" style="top:{albumWindow.start * TREE_ALBUM_H}px">
+              {#each albumsWindowed as a (a.albumKey)}
+                <button
+                  class="leaf album"
+                  class:on={selKey(selection) === `album:${a.albumKey}`}
+                  title={a.artist}
+                  onclick={() => select({ kind: "album", value: a.albumKey })}>
+                  {#if albumCoverSrc(a)}
+                    <img
+                      class="alb-art"
+                      src={albumCoverSrc(a)}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      onerror={() => a.artId != null && failArt(a.artId)} />
+                  {:else}
+                    <span class="alb-art none" aria-hidden="true">♪</span>
+                  {/if}
+                  <span class="alb-name">{a.name}{a.year != null ? ` (${a.year})` : ""}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
         {/if}
-        {#each albumsShown as a (a.albumKey)}
-          <button
-            class="leaf album"
-            class:on={selKey(selection) === `album:${a.albumKey}`}
-            title={a.artist}
-            onclick={() => select({ kind: "album", value: a.albumKey })}>
-            {#if albumCoverSrc(a)}
-              <img
-                class="alb-art"
-                src={albumCoverSrc(a)}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                onerror={() => a.artId != null && failArt(a.artId)} />
-            {:else}
-              <span class="alb-art none" aria-hidden="true">♪</span>
-            {/if}
-            <span class="alb-name">{a.name}{a.year != null ? ` (${a.year})` : ""}</span>
-          </button>
-        {/each}
       {/if}
 
       <button
@@ -1347,13 +1439,21 @@
       {#if openGroups.genres}
         {#if genreNames.length === 0 && treeError == null}
           <div class="leaf empty">{navSyncing ? "syncing…" : "no genres"}</div>
+        {:else if genreNames.length > 0}
+          <div
+            class="vlist"
+            bind:this={genresListEl}
+            style="height:{genreNames.length * TREE_LEAF_H - 1}px">
+            <div class="vstrip" style="top:{genreWindow.start * TREE_LEAF_H}px">
+              {#each genresWindowed as name (name)}
+                <button
+                  class="leaf"
+                  class:on={selKey(selection) === `genre:${name}`}
+                  onclick={() => select({ kind: "genre", value: name })}>{name}</button>
+              {/each}
+            </div>
+          </div>
         {/if}
-        {#each genreNames as name (name)}
-          <button
-            class="leaf"
-            class:on={selKey(selection) === `genre:${name}`}
-            onclick={() => select({ kind: "genre", value: name })}>{name}</button>
-        {/each}
       {/if}
 
       <button
@@ -1827,6 +1927,7 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+    position: relative; /* offsetParent for the virtual list windows */
     scrollbar-width: thin;
     scrollbar-color: #2f4f33 #000;
   }
@@ -1836,6 +1937,34 @@
      tree scrolls instead. */
   .tree > * {
     flex: none;
+  }
+
+  /* Virtual leaf lists (artists / albums / genres): the container keeps the
+     full scroll height, the strip inside holds only the windowed rows. */
+  .tree .vlist {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tree .vstrip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  /* Fixed 19px row + the strip's 1px gap = TREE_LEAF_H (20). The album rule
+     below overrides height/line-height (28 + 1 = TREE_ALBUM_H). */
+  .tree .vstrip .leaf {
+    box-sizing: border-box;
+    height: 19px;
+    line-height: 19px;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-width: 0;
+    content-visibility: visible;
   }
 
   .tree .node,
