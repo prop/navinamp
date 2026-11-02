@@ -767,18 +767,18 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
 
     out.finish_layout("normal", WINDOW_W, WINDOW_H, objects);
 
-    main_window_shade(out, text_font.as_deref());
+    main_window_shade(out, text_font.as_deref(), viscolors);
 }
 
 /// Windowshade strip for the main window (275×14): titlebar.bmp's shade row,
-/// the mini 5×6 clock, the 17×7 position slider and the transport/window
-/// buttons.
+/// the mini 5×6 clock, the 38×5 analyzer well, the 17×7 position slider and
+/// the transport/window buttons.
 ///
 /// The classic shade row bakes the transport glyphs into its pixels, so each
 /// transport button's image is a crop of the same strip at its hit rectangle:
 /// the overlay is pixel-identical and the controls stay clickable (there is no
 /// pressed-state art in the shade row, so `downimage` repeats the normal crop).
-fn main_window_shade(out: &mut Builder, text_font: Option<&str>) {
+fn main_window_shade(out: &mut Builder, text_font: Option<&str>, viscolors: &VisColors) {
     // No shade row → no shade layout at all; the resolver then degrades the
     // window to `normal` instead of collapsing to an empty 14px strip.
     let Some(bg) = out.bitmap("main.shade", "titlebar.bmp", 27, 29, WINDOW_W as u32, 14) else {
@@ -800,6 +800,18 @@ fn main_window_shade(out: &mut Builder, text_font: Option<&str>) {
             params,
         }));
     }
+
+    // Mini analyzer well (Webamp's shade visualizer: 38×5 at 79,5 — the
+    // renderer draws the live bars and clicking cycles bars → scope → off).
+    let mut vis_params = Params::new();
+    if !viscolors.entries.is_empty() {
+        vis_params.insert("viscolors".to_owned(), viscolors.joined());
+    }
+    objects.push(GuiObject::Vis(Vis {
+        id: Some("wsz.shade.vis".to_owned()),
+        rect: rect(79, 5, 38, 5),
+        params: vis_params,
+    }));
 
     // Mini position slider (titlebar.bmp rows: 17×7 trough at (0,36), 3×7
     // thumb at (20,36)).
