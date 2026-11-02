@@ -4,7 +4,7 @@
 //! between windows.
 //!
 //! Layout on disk: `<app-config-dir>/windows.json` — `{ label: WinInfo }`
-//! with `WinInfo { visible, layout, x, y, w, h }` (logical/CSS px). Saved
+//! with `WinInfo { visible, layout, onTop, x, y, w, h }` (logical/CSS px). Saved
 //! (debounced) after every geometry/visibility/layout change and flushed
 //! synchronously on exit.
 //!
@@ -815,6 +815,9 @@ pub enum Layout {
 pub struct WinInfo {
     pub visible: bool,
     pub layout: Layout,
+    /// Kept above other apps' windows; persisted like geometry.
+    #[serde(default)]
+    pub on_top: bool,
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -848,6 +851,7 @@ struct WindowsChanged {
 struct WinState {
     visible: bool,
     layout: Layout,
+    on_top: bool,
     rect: Rect,
 }
 
@@ -856,6 +860,7 @@ impl WinState {
         WinInfo {
             visible: self.visible,
             layout: self.layout,
+            on_top: self.on_top,
             x: self.rect.x,
             y: self.rect.y,
             w: self.rect.w,
@@ -877,6 +882,7 @@ fn default_state(label: &str) -> WinState {
     WinState {
         visible,
         layout: Layout::Normal,
+        on_top: false,
         rect,
     }
 }
@@ -895,6 +901,7 @@ fn merged_defaults(
             if let Some(saved) = persisted.get(*label) {
                 state.visible = saved.visible;
                 state.layout = saved.layout;
+                state.on_top = saved.on_top;
                 state.rect = geom::clamp_to_screens(
                     saved.rect(),
                     screens,
@@ -1165,6 +1172,7 @@ impl WindowManager {
             }
             let _ = win.set_position(LogicalPosition::new(rect.x as f64, rect.y as f64));
             let _ = win.set_size(LogicalSize::new(rect.w as f64, rect.h as f64));
+            let _ = win.set_always_on_top(state.on_top);
             if state.visible {
                 let _ = win.show();
             }
@@ -1272,6 +1280,53 @@ impl WindowManager {
         crate::menu::sync_visibility(app, label, visible);
         self.tick();
         Ok(self.info_from_state())
+    }
+
+    pub fn set_always_on_top(&self, app: &AppHandle, label: &str, on: bool) -> Result<(), String> {
+        if !LABELS.contains(&label) {
+            return Err(format!("unknown window '{label}'"));
+        }
+        {
+            let mut inner = lock(&self.inner);
+            let Some(st) = inner.wins.get_mut(label) else {
+                return Err(format!("unknown window '{label}'"));
+            };
+            st.on_top = on;
+            inner.pending_broadcast = true;
+        }
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.set_always_on_top(on);
+        }
+        crate::menu::sync_always_on_top(app, self.all_always_on_top());
+        self.tick();
+        Ok(())
+    }
+
+    /// True when every app window is above other applications.
+    pub fn all_always_on_top(&self) -> bool {
+        let inner = lock(&self.inner);
+        LABELS
+            .iter()
+            .all(|label| inner.wins.get(*label).is_some_and(|st| st.on_top))
+    }
+
+    /// Toggle the whole Winamp stack at once (Window menu item).
+    pub fn set_all_always_on_top(&self, app: &AppHandle, on: bool) -> Result<(), String> {
+        {
+            let mut inner = lock(&self.inner);
+            for state in inner.wins.values_mut() {
+                state.on_top = on;
+            }
+            inner.pending_broadcast = true;
+        }
+        for label in LABELS {
+            if let Some(win) = app.get_webview_window(label) {
+                let _ = win.set_always_on_top(on);
+            }
+        }
+        crate::menu::sync_always_on_top(app, on);
+        self.tick();
+        Ok(())
     }
 
     pub fn toggle_layout(&self, label: &str) -> Result<WindowsInfo, String> {
@@ -1700,14 +1755,12 @@ pub fn window_set_size(
 #[tauri::command]
 pub fn window_drag_region_ready(_label: String) {}
 
-/// Keep a window above all others (session-level option, not persisted).
+/// Keep a window above all others (persisted per window; the Window menu's
+/// "Always on Top" toggles the whole stack).
 #[tauri::command]
 pub fn window_set_always_on_top(app: AppHandle, label: String, on: bool) -> Result<(), String> {
-    let win = app
-        .get_webview_window(&label)
-        .ok_or_else(|| format!("no window `{label}`"))?;
-    win.set_always_on_top(on)
-        .map_err(|e| format!("cannot set always-on-top for `{label}`: {e}"))
+    app.state::<WindowManager>()
+        .set_always_on_top(&app, &label, on)
 }
 
 // ---------------------------------------------------------------------------
@@ -1758,6 +1811,7 @@ mod tests {
                 WinInfo {
                     visible: true,
                     layout: Layout::Shade,
+                    on_top: true,
                     x: 10,
                     y: 20,
                     w: 275,
@@ -1769,6 +1823,7 @@ mod tests {
                 WinInfo {
                     visible: false,
                     layout: Layout::Normal,
+                    on_top: false,
                     x: 10,
                     y: 34,
                     w: 275,
@@ -1782,6 +1837,7 @@ mod tests {
         let parsed = parse_persisted(&json);
         assert_eq!(parsed.len(), 4, "always all four windows");
         assert_eq!(parsed["main"].layout, Layout::Shade);
+        assert!(parsed["main"].on_top, "on-top survives the round trip");
         assert_eq!(parsed["main"].x, 10);
         assert!(parsed["library"].visible == parsed.get("library").unwrap().visible);
         // re-merge is idempotent within the screen area
@@ -1796,6 +1852,7 @@ mod tests {
             WinInfo {
                 visible: true,
                 layout: Layout::Normal,
+                on_top: false,
                 x: 5000,
                 y: -900,
                 w: 900,
@@ -1818,6 +1875,7 @@ mod tests {
         }"#;
         let parsed = parse_persisted(json);
         assert!(parsed.contains_key("main"));
+        assert!(!parsed["main"].on_top, "old files default to off");
         assert!(!parsed.contains_key("broken"));
         // ghost parses fine but merged_defaults ignores unknown labels
         let merged = merged_defaults(&parsed, &[Rect::at(0, 0, 1000, 800)]);
@@ -1830,6 +1888,7 @@ mod tests {
         let info = WinInfo {
             visible: true,
             layout: Layout::Shade,
+            on_top: true,
             x: 1,
             y: 2,
             w: 3,
@@ -1838,6 +1897,7 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"visible\""));
         assert!(json.contains("\"layout\":\"shade\""));
+        assert!(json.contains("\"onTop\":true"));
         assert!(!json.contains("\"layout\":\"Shade\""));
         let wins = WindowsInfo {
             main: info,

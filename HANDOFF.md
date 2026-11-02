@@ -30,7 +30,18 @@
 - Window menu: checkable **Media Library / Equalizer / Playlist Editor**
   toggles (⌘⇧L / ⌘⇧E / ⌘⇧P), checkmarks kept in sync with actual
   visibility; plus the fallback player's LIBRARY toggle and Alt+L in the
-  player for every skin (classic `.wsz` skins have no library button)
+  player for every skin (classic `.wsz` skins have no library button).
+- Always on Top: the Window menu's checkable item (**⌘⇧T**) puts all four
+  windows above other apps at once. The per-window flag is persisted in
+  `windows.json` (`onTop`) and restored on launch; the old DEV checkboxes
+  were removed.
+- Context menus act on the whole table selection: right-clicking a selected
+  row gives “Play/Enqueue N selected” (virtual SELECT ALL included);
+  right-clicking an unselected row makes it current and acts on it alone.
+  Copy/star/rating/EQ actions stay per-row.
+- The Media Library window keeps its title strip fixed and scrolls the
+  library/EQ/skin/DEV panels, so the lower controls are reachable in a
+  short window instead of being clipped.
 - Persisted volume + EQ in `<app_config_dir>/audio.json`: loaded before
   the engine boots, replayed on first playback, and written with a
   debounced coalescing thread (slider drags → one write per quiet window)

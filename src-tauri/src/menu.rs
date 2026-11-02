@@ -19,12 +19,14 @@ use crate::windows::{WindowManager, WindowsInfo};
 const MENU_LIBRARY: &str = "window_toggle_library";
 const MENU_EQ: &str = "window_toggle_eq";
 const MENU_PLAYLIST: &str = "window_toggle_playlist";
+const MENU_ALWAYS_ON_TOP: &str = "window_always_on_top";
 
-/// Handles for the three checkable Window-menu items.
+/// Handles for the checkable Window-menu items.
 pub struct WindowMenu {
     library: CheckMenuItem<Wry>,
     eq: CheckMenuItem<Wry>,
     playlist: CheckMenuItem<Wry>,
+    always_on_top: CheckMenuItem<Wry>,
 }
 
 /// Installs the native menu. Must run after [`WindowManager::init`] so the
@@ -61,11 +63,35 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         info.playlist.visible,
         Some("CmdOrCtrl+Shift+P"),
     )?;
+    let always_on_top = CheckMenuItem::with_id(
+        app,
+        MENU_ALWAYS_ON_TOP,
+        "Always on Top",
+        true,
+        app.state::<WindowManager>().all_always_on_top(),
+        Some("CmdOrCtrl+Shift+T"),
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
-    window_menu.prepend_items(&[&library, &eq, &playlist, &separator])?;
+    let separator2 = PredefinedMenuItem::separator(app)?;
+    window_menu.prepend_items(&[
+        &library,
+        &eq,
+        &playlist,
+        &separator,
+        &always_on_top,
+        &separator2,
+    ])?;
 
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
+        if event.id().as_ref() == MENU_ALWAYS_ON_TOP {
+            let manager = app.state::<WindowManager>();
+            let on = !manager.all_always_on_top();
+            if let Err(e) = manager.set_all_always_on_top(app, on) {
+                eprintln!("navinamp menu: always-on-top failed: {e}");
+            }
+            return;
+        }
         let Some(label) = label_for(event.id().as_ref()) else {
             return; // predefined items (minimize/zoom/close) handle themselves
         };
@@ -82,6 +108,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         library,
         eq,
         playlist,
+        always_on_top,
     });
     Ok(())
 }
@@ -95,6 +122,14 @@ pub fn sync_visibility(app: &AppHandle, label: &str, visible: bool) {
         return; // "main" has no toggle (it is never hidden)
     };
     let _ = item.set_checked(visible);
+}
+
+/// Keep the "Always on Top" checkmark in step with the window manager.
+pub fn sync_always_on_top(app: &AppHandle, on: bool) {
+    let Some(menu) = app.try_state::<WindowMenu>() else {
+        return;
+    };
+    let _ = menu.always_on_top.set_checked(on);
 }
 
 /// Menu id → window label (None for everything that is not ours).

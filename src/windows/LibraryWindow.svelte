@@ -31,22 +31,12 @@
     queueIntent,
     queuePlayNow,
     queueSnapshot,
-    windowSetAlwaysOnTop,
     windowSetSize,
   } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
 
   const snap = $derived(queueSnapshot.value);
-
-  // ── always-on-top toggles (session-level, player + playlist) ────────────
-  let playerOnTop = $state(false);
-  let playlistOnTop = $state(false);
-  function setOnTop(label: "main" | "playlist", on: boolean): void {
-    if (label === "main") playerOnTop = on;
-    else playlistOnTop = on;
-    void windowSetAlwaysOnTop(label, on);
-  }
 
   const queueNote = $derived(
     `QUEUE ${snap?.currentIndex == null ? "--" : snap.currentIndex + 1}/${snap?.items.length ?? 0}`,
@@ -208,28 +198,29 @@
 <div class="win" bind:this={root}>
   <TitleStrip title="MEDIA LIBRARY / EQ / DEV" note={queueNote} />
 
-  <MediaLibrary
-    onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
-    onplaynow={(metas) => queuePlayNow(metas)}
-    onlog={logLine} />
+  <div class="content">
+    <MediaLibrary
+      onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
+      onplaynow={(metas) => queuePlayNow(metas)}
+      onlog={logLine} />
 
-  <EqPanel />
+    <EqPanel />
 
-  <section class="skinbar">
-    <span class="skinlabel">skin</span>
-    <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
-      {#each skins as s (s.id)}
-        <option value={s.id}>{s.id}{s.id === "fallback" ? " (built-in)" : ""}</option>
-      {/each}
-    </select>
-    <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
-      {skinBusy ? "APPLYING…" : "APPLY"}
-    </button>
-    <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
-      >↻</button>
-    {#if skinNote}<span class="ok">{skinNote}</span>{/if}
-    {#if skinError}<span class="err">{skinError}</span>{/if}
-  </section>
+    <section class="skinbar">
+      <span class="skinlabel">skin</span>
+      <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
+        {#each skins as s (s.id)}
+          <option value={s.id}>{s.id}{s.id === "fallback" ? " (built-in)" : ""}</option>
+        {/each}
+      </select>
+      <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
+        {skinBusy ? "APPLYING…" : "APPLY"}
+      </button>
+      <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
+        >↻</button>
+      {#if skinNote}<span class="ok">{skinNote}</span>{/if}
+      {#if skinError}<span class="err">{skinError}</span>{/if}
+    </section>
 
   <section class="dev">
     <button class="devtoggle" class:on={devOpen} onclick={() => (devOpen = !devOpen)}>
@@ -238,25 +229,6 @@
 
     {#if devOpen}
       <div class="devbox">
-        <div class="row">
-          <label class="opt">
-            <input
-              type="checkbox"
-              checked={playerOnTop}
-              onchange={(e) => setOnTop("main", e.currentTarget.checked)}
-            />
-            keep player on top
-          </label>
-          <label class="opt">
-            <input
-              type="checkbox"
-              checked={playlistOnTop}
-              onchange={(e) => setOnTop("playlist", e.currentTarget.checked)}
-            />
-            keep playlist on top
-          </label>
-        </div>
-
         <div class="row">
           <button onclick={() => void devOpenPlay()}>Open &amp; Play…</button>
           <button onclick={() => void devEnqueue()}>Enqueue…</button>
@@ -336,21 +308,39 @@
       </div>
     {/if}
   </section>
+  </div>
 </div>
 
 <style>
   .win {
     width: max-content; /* panel (640px) + padding */
+    height: 100vh;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 10px;
     padding: 6px;
+    overflow: hidden;
     background: #000;
     color: #c8c8c8;
     font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     user-select: none;
+  }
+
+  /* The stack is taller than a typical window; keep the title strip fixed
+     and let the panels scroll instead of clipping DEV/skin controls. */
+  .content {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #000;
   }
 
   .dev {

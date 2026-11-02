@@ -1079,6 +1079,9 @@
     x: number;
     y: number;
     track: Track;
+    /** Play/enqueue apply to the whole selection when >1 rows are selected. */
+    scope: "row" | "selection";
+    count: number;
   }
   let rowMenu = $state<RowMenu | null>(null);
 
@@ -1086,9 +1089,16 @@
     const m = rowMenu;
     if (!m) return [];
     const t = m.track;
+    const bulk = m.scope === "selection";
     const list: ContextMenuItem[] = [
-      { id: "play", label: "Play now" },
-      { id: "enqueue", label: "Enqueue" },
+      {
+        id: "play",
+        label: bulk ? `Play ${m.count.toLocaleString()} selected` : "Play now",
+      },
+      {
+        id: "enqueue",
+        label: bulk ? `Enqueue ${m.count.toLocaleString()} selected` : "Enqueue",
+      },
       { id: "copy", label: "Copy path" },
       { id: "sep", label: "", separator: true },
     ];
@@ -1121,7 +1131,32 @@
 
   function openRowMenu(e: MouseEvent, t: Track): void {
     e.preventDefault();
-    rowMenu = { x: e.clientX, y: e.clientY, track: t };
+    const inSelection = selectAllMode || selectedIds.has(t.id);
+    if (!inSelection) {
+      // Right-clicking outside the selection makes that row current, so the
+      // menu's per-row actions and the visible selection agree.
+      selectAllMode = false;
+      selectedIds = new Set([t.id]);
+      const index = displayed.findIndex((row) => row.id === t.id);
+      anchorIndex = index >= 0 ? index : null;
+    }
+    const count = inSelection
+      ? selectAllMode
+        ? displayedTotal
+        : selectedMetas.length
+      : 1;
+    rowMenu = {
+      x: e.clientX,
+      y: e.clientY,
+      track: t,
+      scope: inSelection && count > 1 ? "selection" : "row",
+      count: Math.max(1, count),
+    };
+  }
+
+  /** Rows behind a bulk context-menu Play/Enqueue (virtual ALL included). */
+  function menuSelectionRows(): Promise<Track[]> {
+    return selectAllMode ? allRowsForAction() : Promise.resolve(selectedMetas);
   }
 
   function rowMenuSelect(id: string): void {
@@ -1130,9 +1165,21 @@
     if (!m) return;
     const t = m.track;
     if (id === "play") {
-      onplaynow([toMeta(t)]);
+      if (m.scope === "selection") {
+        void menuSelectionRows().then((rows) => {
+          if (rows.length > 0) onplaynow(toMetas(rows));
+        });
+      } else {
+        onplaynow([toMeta(t)]);
+      }
     } else if (id === "enqueue") {
-      onenqueue([toMeta(t)]);
+      if (m.scope === "selection") {
+        void menuSelectionRows().then((rows) => {
+          if (rows.length > 0) onenqueue(toMetas(rows));
+        });
+      } else {
+        onenqueue([toMeta(t)]);
+      }
     } else if (id === "copy") {
       void navigator.clipboard.writeText(t.path).catch((e) => {
         onlog(`copy path failed: ${e}`);

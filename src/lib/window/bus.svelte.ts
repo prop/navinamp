@@ -47,6 +47,8 @@ import {
 export interface WinInfo {
   visible: boolean;
   layout: "normal" | "shade";
+  /** Kept above other applications' windows (persisted). */
+  onTop: boolean;
   x: number;
   y: number;
   w: number;
