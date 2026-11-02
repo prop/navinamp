@@ -1,0 +1,229 @@
+{
+  "version": 1,
+  "curatedAt": "2026-11-03",
+  "source": "https://archive.org/details/winampskins",
+  "note": "Downloaded on request from the Internet Archive's Winamp Skin Museum collection; authors retain all rights.",
+  "skins": [
+    {
+      "id": "nightcrawler",
+      "name": "Nightcrawler",
+      "author": "t-k",
+      "fileName": "nightcrawler.wsz",
+      "url": "https://archive.org/download/winampskin_nightcrawler_by_t_k/nightcrawler_by_t_k.wsz",
+      "size": 237609,
+      "sha256": "34258c7816c9997ae5ba2f27970f22d3825c80f4d2a3db796515d7ccd80ed813",
+      "sourceUrl": "https://archive.org/details/winampskin_nightcrawler_by_t_k",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "zlomp",
+      "name": "Zlomp",
+      "author": "herod",
+      "fileName": "zlomp.wsz",
+      "url": "https://archive.org/download/winampskin_zlomp/zlomp.wsz",
+      "size": 280444,
+      "sha256": "2b6c6454d2c586e11856913c89f2fa03ce14b4c050be20a9c50fc774b2cf702e",
+      "sourceUrl": "https://archive.org/details/winampskin_zlomp",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "black-slanxp2",
+      "name": "Black SlanXP2",
+      "author": null,
+      "fileName": "black-slanxp2.wsz",
+      "url": "https://archive.org/download/winampskin_Black_SlanXP2_Update/Black_SlanXP2_Update.wsz",
+      "size": 36401,
+      "sha256": "09ae7cc1dc2d7fd9c813ab6c9e6ac875b3969e12f6a9894fb77d110254744dee",
+      "sourceUrl": "https://archive.org/details/winampskin_Black_SlanXP2_Update",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "expensive-hi-fi",
+      "name": "Expensive Hi-Fi",
+      "author": null,
+      "fileName": "expensive-hi-fi.wsz",
+      "url": "https://archive.org/download/winampskin_Expensive_Hi-Fi_1_2/ExpensiveHi-Fi.wsz",
+      "size": 110568,
+      "sha256": "248b93f26367d2dc9dca25afaacb0c58690d26194a73e7f938f76a6a1f23502e",
+      "sourceUrl": "https://archive.org/details/winampskin_Expensive_Hi-Fi_1_2",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "nucleo-nlog-v2g",
+      "name": "Nucleo NLog v2G",
+      "author": null,
+      "fileName": "nucleo-nlog-v2g.wsz",
+      "url": "https://archive.org/download/winampskin_Nucleo_NLog_v2G/Nucleo_NLog_v102_.wsz",
+      "size": 150554,
+      "sha256": "d3b9327d217f0a7bafdad5950c2ae19538dc27c11f6c7a960e235806824e5952",
+      "sourceUrl": "https://archive.org/details/winampskin_Nucleo_NLog_v2G",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "frutiger-aero",
+      "name": "Frutiger Aero",
+      "author": null,
+      "fileName": "frutiger-aero.wsz",
+      "url": "https://archive.org/download/winampskins_Frutiger_Aero/Frutiger%20Aero.wsz",
+      "size": 114214,
+      "sha256": "7b4c958f5e31aef98e3e3cdd4e21a6d216ec1533e4106a542a9723fe1b70ab61",
+      "sourceUrl": "https://archive.org/details/winampskins_Frutiger_Aero",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "cyanian",
+      "name": "Cyanian",
+      "author": null,
+      "fileName": "cyanian.wsz",
+      "url": "https://archive.org/download/winampskin_Cyanian/Cyanian.wsz",
+      "size": 50683,
+      "sha256": "f3ea3cd5dc46b41f7808ed3e2641b4b4b767fb474113e2c3fd5fa0d8cd093b35",
+      "sourceUrl": "https://archive.org/details/winampskin_Cyanian",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "amper",
+      "name": "AMPER",
+      "author": null,
+      "fileName": "amper.wsz",
+      "url": "https://archive.org/download/winampskins_AMPER/AMPER.wsz",
+      "size": 132687,
+      "sha256": "d4be55df35f84686093d06a7cc866f8037d0617e8d048e63f9dd6a51f267e580",
+      "sourceUrl": "https://archive.org/details/winampskins_AMPER",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "nightshade",
+      "name": "Nightshade",
+      "author": null,
+      "fileName": "nightshade.wsz",
+      "url": "https://archive.org/download/winampskin_Nightshade/Nightshade.wsz",
+      "size": 129415,
+      "sha256": "64115c049f1c043651cc9ff6ac9133b383d045662ff1cede18da20f59e0e7d5b",
+      "sourceUrl": "https://archive.org/details/winampskin_Nightshade",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "topazamp-v5",
+      "name": "TopazAmp v5",
+      "author": null,
+      "fileName": "topazamp-v5.wsz",
+      "url": "https://archive.org/download/winampskin_TopazAmp_v5/TopazAmp_v5.wsz",
+      "size": 124889,
+      "sha256": "2c58073d772b67a047177dda4f32934f19724b4f6787ec64962bb6f48aabae5c",
+      "sourceUrl": "https://archive.org/details/winampskin_TopazAmp_v5",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "elaysia",
+      "name": "Elaysia",
+      "author": "x4-deejay",
+      "fileName": "elaysia.wsz",
+      "url": "https://archive.org/download/winampskin_elaysia/elaysia.wsz",
+      "size": 78564,
+      "sha256": "8db157db4ed2026993ceb98058b460c1b6960af6be8667d89e9d0ad6de39a7b4",
+      "sourceUrl": "https://archive.org/details/winampskin_elaysia",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "limeamp-3",
+      "name": "LimeAmp 3",
+      "author": null,
+      "fileName": "limeamp-3.wsz",
+      "url": "https://archive.org/download/winampskins_LimeAmp_3/LimeAmp.wsz",
+      "size": 73231,
+      "sha256": "407445dd7bf0272e813c7442352265048e0d6f27d4814922d7f3d4399a4043ea",
+      "sourceUrl": "https://archive.org/details/winampskins_LimeAmp_3",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "winstepamp",
+      "name": "Winstep Amp",
+      "author": "dangeruss",
+      "fileName": "winstepamp.wsz",
+      "url": "https://archive.org/download/winampskin_winstepamp/winstepamp.wsz",
+      "size": 79945,
+      "sha256": "58255296f8c619d0b7aa644b6bccc68125dabf4af769a671a6deeb3f8537e5f2",
+      "sourceUrl": "https://archive.org/details/winampskin_winstepamp",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "major-tom-v5",
+      "name": "Major Tom v5",
+      "author": null,
+      "fileName": "major-tom-v5.wsz",
+      "url": "https://archive.org/download/winampskin_Major_Tom_v5/Major_Tom_v5.wsz",
+      "size": 123190,
+      "sha256": "36e0b666e98bb8fe2da4dd80861d86eaf8c2532c80adf2d940da8eb5003f1c42",
+      "sourceUrl": "https://archive.org/details/winampskin_Major_Tom_v5",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "chromengine-indigo-v5",
+      "name": "CHROMEngine Indigo v5",
+      "author": null,
+      "fileName": "chromengine-indigo-v5.wsz",
+      "url": "https://archive.org/download/winampskin_CHROMEngine_Indigo_v5/CHROMEngine_Indigo_v5.wsz",
+      "size": 182356,
+      "sha256": "0c3d2ab9a70ea6024bba9762d109fcdcb5604ebb8e98addf42c6b1862526d962",
+      "sourceUrl": "https://archive.org/details/winampskin_CHROMEngine_Indigo_v5",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "rebel-amp-2k",
+      "name": "Rebel Amp 2k",
+      "author": null,
+      "fileName": "rebel-amp-2k.wsz",
+      "url": "https://archive.org/download/winampskin_Rebel_Amp_2k/Rebel_Amp_2k.wsz",
+      "size": 91350,
+      "sha256": "aadbc3ed6a4e4926ad3e92865ce76321fb18897873234b30f750e67337bf479d",
+      "sourceUrl": "https://archive.org/details/winampskin_Rebel_Amp_2k",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "void-dark",
+      "name": "Void (dark)",
+      "author": null,
+      "fileName": "void-dark.wsz",
+      "url": "https://archive.org/download/winampskin_Void_dark/Void_dark.wsz",
+      "size": 18271,
+      "sha256": "dcd62b3691ef0de4981514a6737acb3a444d1a60c7f3e7b3eff362c2f94c5109",
+      "sourceUrl": "https://archive.org/details/winampskin_Void_dark",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "classic-ebony",
+      "name": "Classic Ebony",
+      "author": null,
+      "fileName": "classic-ebony.wsz",
+      "url": "https://archive.org/download/winampskin_Classic_Ebony/Classic_Ebony.wsz",
+      "size": 18657,
+      "sha256": "2f3a1cb376198200ddf656cc25bd2a6fbfc5095c4624bf9d41c5c524cac326f4",
+      "sourceUrl": "https://archive.org/details/winampskin_Classic_Ebony",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "moonlight-night",
+      "name": "Moonlight Night",
+      "author": null,
+      "fileName": "moonlight-night.wsz",
+      "url": "https://archive.org/download/winampskin_Moonlight_night/Moonlight_night.wsz",
+      "size": 107850,
+      "sha256": "af6c3e4bbc4c049779e93d23eeacead6cee0af9bfa5949eff768957e8bbbf4d8",
+      "sourceUrl": "https://archive.org/details/winampskin_Moonlight_night",
+      "license": "not stated on archive.org"
+    },
+    {
+      "id": "yboris-minimal",
+      "name": "yboris minimal",
+      "author": "yboris",
+      "fileName": "yboris-minimal.wsz",
+      "url": "https://archive.org/download/winampskin_yboris_minimal_winamp_by_yboris/yboris_minimal_winamp_by_yboris.wsz",
+      "size": 17264,
+      "sha256": "1ddfb40466401304abbeb1e43d06951b1bea92c1f0829d7fef153e3b22697f99",
+      "sourceUrl": "https://archive.org/details/winampskin_yboris_minimal_winamp_by_yboris",
+      "license": "not stated on archive.org"
+    }
+  ],
+  "licenseNote": "No license is stated on the archive.org items; authors retain all rights. Skin files are downloaded only at the user's request."
+}

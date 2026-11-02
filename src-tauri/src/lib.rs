@@ -72,6 +72,8 @@ pub fn run() {
             audio::audio_spectrum,
             skin::skin_list,
             skin::skin_load,
+            skin::popular_skins,
+            skin::skin_install_popular,
             library::library_scan,
             library::library_search,
             library::library_albums,

@@ -21,16 +21,22 @@
    * seek/volume sliders stay direct IPC like before.
    */
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
 
   import EqPanel from "../components/EqPanel.svelte";
   import MediaLibrary from "../components/MediaLibrary.svelte";
   import TabStrip from "../components/TabStrip.svelte";
   import {
+    POPULAR_PROGRESS_EVENT,
     chooseSkin,
+    installPopularSkins,
     listSkins,
     loadSkin,
+    popularSkins,
     selectedSkinId,
+    type PopularPack,
+    type PopularProgress,
     type SkinInfo,
   } from "../lib/skin/load";
   import {
@@ -99,6 +105,71 @@
       skinError = `skin list: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
+
+  // ── popular skins pack (downloaded on request from archive.org) ──────────
+
+  let popular = $state.raw<PopularPack | null>(null);
+  let popularBusy = $state(false);
+  let popularNote = $state<string | null>(null);
+  let popularError = $state<string | null>(null);
+  let popularProgress = $state<PopularProgress | null>(null);
+
+  const popularInstalled = $derived(popular?.skins.filter((s) => s.installed).length ?? 0);
+  const popularTotal = $derived(popular?.skins.length ?? 0);
+  const popularMissing = $derived(popularTotal - popularInstalled);
+
+  function skinLabel(id: string): string {
+    return popular?.skins.find((s) => s.id === id)?.name ?? id;
+  }
+
+  async function refreshPopular(): Promise<void> {
+    try {
+      popular = await popularSkins();
+      popularError = null;
+    } catch (e) {
+      popularError = `popular skins: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async function installPopular(): Promise<void> {
+    if (popularBusy || popular == null) return;
+    popularBusy = true;
+    popularNote = null;
+    popularError = null;
+    try {
+      const report = await installPopularSkins();
+      popularNote =
+        `${report.installed} installed · ${report.skipped} already present` +
+        (report.failed.length > 0 ? ` · ${report.failed.length} failed` : "");
+      const failures = report.failed.map((f) => `${f.id}: ${f.error}`).join("; ");
+      await Promise.all([refreshPopular(), refreshSkins()]);
+      // Set after the refresh (which clears the previous error).
+      if (failures !== "") popularError = failures;
+      logLine(`popular skins: ${popularNote}`);
+    } catch (e) {
+      popularError = `popular skins: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      popularBusy = false;
+    }
+  }
+
+  // Load the pack when the SKIN tab becomes visible; stream install progress.
+  $effect(() => {
+    if (tab !== "skin") return;
+    void refreshPopular();
+  });
+
+  $effect(() => {
+    const unlisten = listen<PopularProgress>(POPULAR_PROGRESS_EVENT, (event) => {
+      popularProgress = event.payload;
+      if (event.payload.error != null) {
+        popularError = `${event.payload.name || event.payload.id}: ${event.payload.error}`;
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  });
 
   async function applySkin(): Promise<void> {
     if (skinChoice === "" || skinBusy) return;
@@ -249,20 +320,57 @@
   {/if}
 
   {#if tab === "skin"}
-    <section id="pane-skin" class="pane skinbar" role="tabpanel" aria-labelledby="tab-skin">
-      <span class="skinlabel">skin</span>
-      <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
-        {#each skins as s (s.id)}
-          <option value={s.id}>{s.id}{s.id === "fallback" ? " (built-in)" : ""}</option>
-        {/each}
-      </select>
-      <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
-        {skinBusy ? "APPLYING…" : "APPLY"}
-      </button>
-      <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
-        >↻</button>
-      {#if skinNote}<span class="ok">{skinNote}</span>{/if}
-      {#if skinError}<span class="err">{skinError}</span>{/if}
+    <section id="pane-skin" class="pane skinpane" role="tabpanel" aria-labelledby="tab-skin">
+      <div class="skinbar">
+        <span class="skinlabel">skin</span>
+        <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
+          {#each skins as s (s.id)}
+            <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" ? " (built-in)" : ""}</option>
+          {/each}
+        </select>
+        <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
+          {skinBusy ? "APPLYING…" : "APPLY"}
+        </button>
+        <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
+          >↻</button>
+        {#if skinNote}<span class="ok">{skinNote}</span>{/if}
+        {#if skinError}<span class="err">{skinError}</span>{/if}
+      </div>
+
+      <div class="popular">
+        <div class="poprow">
+          <button
+            onclick={() => void installPopular()}
+            disabled={popularBusy || popular == null || popularMissing === 0}>
+            {popularBusy
+              ? "DOWNLOADING…"
+              : popular == null
+                ? "CHECKING PACK…"
+                : popularMissing > 0
+                  ? `INSTALL POPULAR SKINS (${popularMissing})`
+                  : "POPULAR SKINS INSTALLED"}
+          </button>
+          <button
+            class="reload"
+            title="recheck the installed pack files"
+            onclick={() => void refreshPopular()}
+            disabled={popularBusy}>↻</button>
+          {#if popularBusy && popularProgress}
+            <span class="dim">
+              {popularProgress.done}/{popularProgress.total}
+              {#if popularProgress.name} · {popularProgress.name}{/if}
+            </span>
+          {:else if popularNote}
+            <span class="ok">{popularNote}</span>
+          {/if}
+        </div>
+        <div class="popnote">
+          {popularInstalled}/{popularTotal} installed · curated {popular?.curatedAt ?? "…"} from the
+          <strong>Winamp Skin Museum</strong> (archive.org).
+          {popular?.licenseNote ?? "Skins download only when you ask; authors retain their rights."}
+        </div>
+        {#if popularError}<span class="err">{popularError}</span>{/if}
+      </div>
     </section>
   {/if}
 
@@ -433,6 +541,82 @@
 
   .skinbar .err {
     color: #d8604c;
+  }
+
+  .skinpane {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .popular {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.45rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #222;
+    font-size: 0.8rem;
+    color: #808080;
+  }
+
+  .poprow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .popular button {
+    background: #1a1a1a;
+    color: #c8c8c8;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .popular button:hover:not(:disabled) {
+    border-color: #3ccb4e;
+    color: #3ccb4e;
+  }
+
+  .popular button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .popular .reload {
+    padding: 0.3rem 0.55rem;
+  }
+
+  .popular .dim {
+    color: #707070;
+  }
+
+  .popular .ok {
+    color: #3ccb4e;
+  }
+
+  .popular .err {
+    max-width: 90%;
+    text-align: center;
+    color: #d8604c;
+  }
+
+  .popnote {
+    max-width: 92%;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    text-align: center;
+    color: #707070;
+  }
+
+  .popnote strong {
+    color: #9a9a9a;
+    font-weight: 600;
   }
 
   .devbox {
