@@ -1,11 +1,11 @@
 # NaVinaMP — current status & next steps
 
 > Handoff note for the next development session. Last updated: 2026-11-02,
-> after v0.8.0.
+> after v0.9.0.
 
 ## State
 
-- All six roadmap milestones shipped. Latest release: **v0.8.0**
+- All six roadmap milestones shipped. Latest release: **v0.9.0**
   (dmg on the Releases page; built successfully by the cached self-hosted
   runner — see the release-runner gotcha below).
 - Test suites green across six crates + frontend. Clippy/fmt clean.
@@ -16,9 +16,9 @@
 - **v0.8.0**: per-server Navidrome playlists + publish-target picker, sticky
   A–Z tree rails, the EQ AUTO curve manager, EQ clipping/headroom fix with
   Bass Boost, selection-aware row context menus and global Always on Top.
-- Post-v0.8.0 master: the equalizer's automatic headroom is now visible as a
-  live `auto headroom −X.X dB` readout.
-- Post-v0.8.0 master: three-mode library search — SIMPLE (full-text),
+- **v0.9.0**: the equalizer's automatic headroom is now visible as a live
+  `auto headroom −X.X dB` readout.
+- **v0.9.0**: three-mode library search — SIMPLE (full-text),
   ADVANCED (field rules) and AI (LLM-built rules, optional Discogs lookup) —
   with save-to-smart-view, publish-to-server and replace-playlist actions.
   Detailed notes near the end of this section.
@@ -183,7 +183,8 @@
 ## Next up
 
 The backlog lives in GitHub issues — `gh issue list` (labels:
-`enhancement`, `bug`). The next batch is a 0.9.0 release.
+`enhancement`, `bug`). Release-please has staged **0.10.0** (windowshade +
+AI setup copy polish).
 
 ## Design notes & deferred
 
