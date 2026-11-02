@@ -9,11 +9,18 @@
     title: string;
     /** Right-aligned extra text (queue position, …). */
     note?: string;
+    /** Double-click on the strip folds/unfolds the window (windowshade). */
+    onfold?: () => void;
   }
-  let { title, note }: Props = $props();
+  let { title, note, onfold }: Props = $props();
 </script>
 
-<header class="strip" data-tauri-drag-region>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<header
+  class="strip"
+  data-tauri-drag-region
+  title={onfold ? "Drag to move — double-click folds the window" : undefined}
+  ondblclick={onfold}>
   <span class="title" data-tauri-drag-region>{title}</span>
   {#if note}
     <span class="note mono" data-tauri-drag-region>{note}</span>

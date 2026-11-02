@@ -766,6 +766,108 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     }
 
     out.finish_layout("normal", WINDOW_W, WINDOW_H, objects);
+
+    main_window_shade(out, text_font.as_deref());
+}
+
+/// Windowshade strip for the main window (275×14): titlebar.bmp's shade row,
+/// the mini 5×6 clock, the 17×7 position slider and the transport/window
+/// buttons.
+///
+/// The classic shade row bakes the transport glyphs into its pixels, so each
+/// transport button's image is a crop of the same strip at its hit rectangle:
+/// the overlay is pixel-identical and the controls stay clickable (there is no
+/// pressed-state art in the shade row, so `downimage` repeats the normal crop).
+fn main_window_shade(out: &mut Builder, text_font: Option<&str>) {
+    // No shade row → no shade layout at all; the resolver then degrades the
+    // window to `normal` instead of collapsing to an empty 14px strip.
+    let Some(bg) = out.bitmap("main.shade", "titlebar.bmp", 27, 29, WINDOW_W as u32, 14) else {
+        return;
+    };
+    let mut objects = vec![layer("main.shade", bg, 0, 0, WINDOW_W, 14)];
+
+    // Mini clock: text.bmp's 5×6 glyphs at the classic shade position
+    // (Webamp's `.mini-time`: left 127, top 4, 25×6).
+    if let Some(font) = text_font {
+        let mut params = Params::new();
+        params.insert("font".to_owned(), font.to_owned());
+        params.insert("charset".to_owned(), "classic-text".to_owned());
+        objects.push(GuiObject::Text(Text {
+            id: Some("wsz.shade.time".to_owned()),
+            display: Some("time".to_owned()),
+            rect: rect(127, 4, 25, 8),
+            params,
+        }));
+    }
+
+    // Mini position slider (titlebar.bmp rows: 17×7 trough at (0,36), 3×7
+    // thumb at (20,36)).
+    let track = out.bitmap("shade.pos", "titlebar.bmp", 0, 36, 17, 7);
+    let thumb = out.bitmap("shade.pos.thumb", "titlebar.bmp", 20, 36, 3, 7);
+    if let (Some(track), Some(thumb)) = (track, thumb) {
+        objects.push(slider(
+            "shade.pos",
+            "SEEK",
+            track,
+            Some(thumb),
+            place(226, 4, 17, 7),
+            Params::new(),
+        ));
+    }
+
+    // Transport hit areas (Webamp's shade action positions). Each image is
+    // cropped from the strip itself at the same window coordinates, so the
+    // background art shows through unchanged.
+    const TRANSPORT: [(&str, &str, i32, i32, i32, i32, &str); 6] = [
+        ("shade.prev", "PREV", 169, 2, 7, 10, "Previous Track"),
+        ("shade.play", "PLAY", 176, 2, 10, 10, "Play"),
+        ("shade.pause", "PAUSE", 186, 2, 9, 10, "Pause"),
+        ("shade.stop", "STOP", 195, 2, 9, 10, "Stop"),
+        ("shade.next", "NEXT", 204, 2, 10, 10, "Next Track"),
+        ("shade.eject", "EJECT", 215, 2, 10, 10, "Open File(s)"),
+    ];
+    for (id, action, x, y, w, h, tip) in TRANSPORT {
+        let crop = out.bitmap(
+            id,
+            "titlebar.bmp",
+            (27 + x) as u32,
+            (29 + y) as u32,
+            w as u32,
+            h as u32,
+        );
+        if let Some(img) = crop {
+            objects.push(button(
+                id,
+                action,
+                img.clone(),
+                Some(img),
+                place(x, y, w, h),
+                tip,
+            ));
+        }
+    }
+
+    // Window buttons: reuse the glyph bitmaps the normal layout emitted from
+    // the same titlebar.bmp (this helper only runs when that file exists), so
+    // no duplicate bitmap elements enter the payload.
+    const SYSBUTTONS: [(&str, &str, i32, i32, &str); 4] = [
+        ("sysmenu", "SYSMENU", 6, 3, "Winamp Menu"),
+        ("minimize", "MINIMIZE", 244, 3, "Minimize"),
+        ("shade", "TOGGLE_SHADE", 254, 3, "Toggle Windowshade"),
+        ("close", "CLOSE", 264, 3, "Close"),
+    ];
+    for (id, action, x, y, tip) in SYSBUTTONS {
+        objects.push(button(
+            id,
+            action,
+            format!("wsz.{id}"),
+            Some(format!("wsz.{id}.down")),
+            place(x, y, 9, 9),
+            tip,
+        ));
+    }
+
+    out.finish_layout("shade", WINDOW_W, 14, objects);
 }
 
 /// One of the four toggle buttons that live in shufrep.bmp (or their
@@ -910,7 +1012,9 @@ fn eq_window(out: &mut Builder) {
     }
     // EQ titlebar strip (active row y=134; the inactive row y=149 rides in
     // params, mirroring how the Wasabi parser preserves `inactiveimage`).
-    if let Some(bar) = out.bitmap("eq.titlebar", "eqmain.bmp", 0, 134, 275, 14) {
+    // The id is kept for the windowshade layout's fallback strip.
+    let titlebar = out.bitmap("eq.titlebar", "eqmain.bmp", 0, 134, 275, 14);
+    if let Some(bar) = &titlebar {
         let inactive = out.bitmap("eq.titlebar.off", "eqmain.bmp", 0, 149, 275, 14);
         let mut params = Params::new();
         if let Some(id) = inactive {
@@ -918,7 +1022,7 @@ fn eq_window(out: &mut Builder) {
         }
         objects.push(GuiObject::Layer(Layer {
             id: Some("wsz.eq.titlebar".to_owned()),
-            image: Some(bar),
+            image: Some(bar.clone()),
             rect: rect(0, 0, WINDOW_W, 14),
             params,
         }));
@@ -1013,6 +1117,51 @@ fn eq_window(out: &mut Builder) {
     }
 
     out.finish_layout("normal", WINDOW_W, WINDOW_H, objects);
+
+    eq_window_shade(out, titlebar.as_deref());
+}
+
+/// Windowshade strip for the EQ window (275×14).
+///
+/// Classic skins carry the real EQ shade art in the optional `eq_ex.bmp`
+/// (selected row y=0, normal row y=15). Skins without it fall back to the
+/// normal EQ titlebar strip from `eqmain.bmp`, which still shows the classic
+/// "EQ" bar. The close/shade buttons reuse titlebar.bmp's glyph grid.
+fn eq_window_shade(out: &mut Builder, titlebar: Option<&str>) {
+    // Probe eq_ex.bmp silently: its absence is normal and handled by the
+    // eqmain titlebar fallback (no ClassicMissingOptional warning).
+    let bg = if find_file(out.archive, "eq_ex.bmp").is_some() {
+        out.bitmap("eq.shade", "eq_ex.bmp", 0, 0, WINDOW_W as u32, 14)
+    } else {
+        titlebar.map(str::to_owned)
+    };
+    // No shade art at all → omit the layout so the resolver degrades to
+    // `normal` instead of collapsing to an empty strip.
+    let Some(bg) = bg else {
+        return;
+    };
+    let mut objects = vec![layer("eq.shade", bg, 0, 0, WINDOW_W, 14)];
+
+    push_sysbutton(
+        out,
+        &mut objects,
+        "eq.shade.toggle",
+        "TOGGLE_SHADE",
+        place(254, 3, 9, 9),
+        (0, 18),
+        (9, 18),
+    );
+    push_sysbutton(
+        out,
+        &mut objects,
+        "eq.shade.close",
+        "CLOSE",
+        place(264, 3, 9, 9),
+        (18, 0),
+        (18, 9),
+    );
+
+    out.finish_layout("shade", WINDOW_W, 14, objects);
 }
 
 // ---- playlist window --------------------------------------------------------
