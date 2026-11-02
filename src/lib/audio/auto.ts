@@ -126,9 +126,28 @@ function writeStore(store: AssocStore): void {
   }
 }
 
+/**
+ * Pre-aggregation remote paths were `navidrome://<remote_id>` with no server
+ * segment. Return that legacy key for a server-qualified path so curves saved
+ * before the migration still match.
+ */
+function legacyRemotePath(path: string): string | null {
+  const prefix = "navidrome://";
+  if (!path.startsWith(prefix)) return null;
+  const rest = path.slice(prefix.length);
+  const slash = rest.indexOf("/");
+  if (slash < 0) return null;
+  const remote = rest.slice(slash + 1);
+  return remote === "" ? null : `${prefix}${remote}`;
+}
+
 /** The saved curve for a track path, if any. */
 export function getTrackEq(path: string): EqTrackOverride | null {
-  return readStore().tracks[path] ?? null;
+  const store = readStore();
+  const direct = store.tracks[path];
+  if (direct != null) return direct;
+  const legacy = legacyRemotePath(path);
+  return legacy == null ? null : (store.tracks[legacy] ?? null);
 }
 
 /** The saved curve for an artist (case-insensitive), if any. */
@@ -163,8 +182,10 @@ export async function rememberEq(
     store.tracks[path] = { bandsDb: bands, artist: resolvedArtist };
   } else {
     // The artist curve should apply to this track now, so the narrower
-    // track override must go.
+    // track override must go (including the legacy-path copy).
     delete store.tracks[path];
+    const legacy = legacyRemotePath(path);
+    if (legacy != null) delete store.tracks[legacy];
     store.artists[artistKey(resolvedArtist)] = bands;
   }
   writeStore(store);
@@ -196,6 +217,11 @@ export async function clearEqFor(
   let changed = false;
   if (store.tracks[path] != null) {
     delete store.tracks[path];
+    changed = true;
+  }
+  const legacy = legacyRemotePath(path);
+  if (legacy != null && store.tracks[legacy] != null) {
+    delete store.tracks[legacy];
     changed = true;
   }
   const key = artistKey(resolvedArtist);
