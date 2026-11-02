@@ -51,6 +51,10 @@
     shadeActive?: boolean;
     /** TOGGLE_EQ on-state (the EQ window's visibility — player skin button). */
     eqVisible?: boolean;
+    /** TOGGLE_SHUFFLE on-state (the queue's shuffle flag). */
+    shuffle?: boolean;
+    /** TOGGLE_REPEAT on-state (the queue's repeat mode is not "off"). */
+    repeatOn?: boolean;
     /**
      * Live EQ state (the EQ window feeds its 2 Hz `eq_state` poll). Absent
      * → EQ_SET sliders render parked and EQ toggles render off.
@@ -82,6 +86,8 @@
     libraryVisible = false,
     shadeActive = false,
     eqVisible = false,
+    shuffle = false,
+    repeatOn = false,
     eq = null,
     onaction,
     onseek,
@@ -152,9 +158,10 @@
     return obj.object.kind !== "group" && obj.object.kind !== "other";
   }
 
-  // Togglebutton on-state: the App's visibility toggles + the EQ window's
-  // live state, matched by action. EQ_TOGGLE/EQ_AUTO are the canonical
-  // names (the .wsz synthesizer emits them); ON/AUTO are accepted aliases.
+  // Togglebutton on-state: the App's visibility toggles, the queue's
+  // shuffle/repeat flags and the EQ window's live state, matched by action.
+  // EQ_TOGGLE/EQ_AUTO are the canonical names (the .wsz synthesizer emits
+  // them); ON/AUTO are accepted aliases.
   function toggleState(object: GuiObject): boolean {
     if (object.kind !== "togglebutton") return false;
     switch (object.action?.trim().toUpperCase()) {
@@ -166,6 +173,10 @@
         return shadeActive;
       case "TOGGLE_EQ":
         return eqVisible;
+      case "TOGGLE_SHUFFLE":
+        return shuffle;
+      case "TOGGLE_REPEAT":
+        return repeatOn;
       case "EQ_TOGGLE":
       case "ON":
         return eq?.enabled ?? false;

@@ -285,6 +285,12 @@
       case "TOGGLE_EQ":
         windowSetVisible("eq", !windowIsVisible("eq")).catch(warnIpc);
         break;
+      case "TOGGLE_SHUFFLE":
+        queue.toggleShuffle();
+        break;
+      case "TOGGLE_REPEAT":
+        queue.cycleRepeat();
+        break;
       case "TOGGLE_SHADE":
         windowToggleLayout("main").catch(warnIpc);
         break;
@@ -365,6 +371,8 @@
       playlistVisible={windowIsVisible("playlist")}
       libraryVisible={windowIsVisible("library")}
       eqVisible={windowIsVisible("eq")}
+      shuffle={queue.shuffle}
+      repeatOn={queue.repeat !== "off"}
       shadeActive={layoutMode === "shade"}
       bitrateKbps={audio.bitrateKbps}
       sampleRateHz={audio.sampleRateHz}
