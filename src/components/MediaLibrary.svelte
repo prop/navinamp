@@ -417,14 +417,17 @@
       if (seq !== searchSeq) return;
       aiReport = report;
       searchDef = report.def;
-      const rows = await smartViewQuery(report.def, 5000);
+      const rows = report.def ? await smartViewQuery(report.def, 5000) : [];
       if (seq !== searchSeq) return;
       searchResults = rows;
       aiUsedPrompt = prompt;
       aiPrompt = ""; // next input is a refinement instruction
       onlog(
-        `ai search: ${rows.length} track${rows.length === 1 ? "" : "s"} via ` +
-          `${report.preset}/${report.model}` +
+        `ai search: ${rows.length} track${rows.length === 1 ? "" : "s"}` +
+          (report.catalog.length > 0
+            ? ` + ${report.catalog.length} Discogs release${report.catalog.length === 1 ? "" : "s"}`
+            : "") +
+          ` via ${report.preset}/${report.model}` +
           (report.toolCalls > 0 ? ` (${report.toolCalls} discogs call${report.toolCalls === 1 ? "" : "s"})` : ""),
       );
     } catch (e) {
@@ -439,7 +442,7 @@
   }
 
   function editAiRules(): void {
-    if (!aiReport) return;
+    if (!aiReport?.def) return;
     advancedSeed = aiReport.def;
     advancedKey++;
     searchMode = "advanced";
@@ -543,6 +546,27 @@
     if (rows.length === 0) return;
     onreplace(toMetas(rows));
     onlog(`search: replaced the playlist with ${rows.length} track${rows.length === 1 ? "" : "s"}`);
+  }
+
+  async function copyCatalog(): Promise<void> {
+    const catalog = aiReport?.catalog ?? [];
+    if (catalog.length === 0) return;
+    const lines = catalog.map((release) => {
+      const details = [
+        release.year,
+        release.label.join(", "),
+        release.format.join("/"),
+      ].filter((part) => part != null && part !== "");
+      return details.length > 0
+        ? `${release.title} — ${details.join(" · ")}`
+        : release.title;
+    });
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      onlog(`ai: copied ${lines.length} Discogs catalog entr${lines.length === 1 ? "y" : "ies"}`);
+    } catch (e) {
+      onlog(`ai: copy catalog failed: ${e}`);
+    }
   }
 
   // ── table selection (plain / ctrl+cmd toggle / shift ranges) ──────────────
@@ -1027,7 +1051,12 @@
 
   const emptyMessage = $derived.by(() => {
     if (searchResults != null) {
-      if (searchMode === "ai") return "no tracks match the AI query";
+      if (searchMode === "ai") {
+        if (aiReport != null && aiReport.def == null && aiReport.catalog.length > 0) {
+          return "catalog-only answer — the Discogs releases are listed above";
+        }
+        return "no tracks match the AI query";
+      }
       if (searchMode === "advanced") return "no tracks match these rules";
       return `no matches for “${searchQ.trim()}”`;
     }
@@ -2008,10 +2037,44 @@
         {#if aiReport.explanation}
           <div class="aiexpl">{aiReport.explanation}</div>
         {/if}
-        <div class="airules" title={plainRules(aiReport.def)}>{plainRules(aiReport.def)}</div>
-        <button class="editrules" onclick={editAiRules} title="load these rules into Advanced search">
-          EDIT RULES
-        </button>
+        {#if aiReport.def}
+          <div class="airules" title={plainRules(aiReport.def)}>{plainRules(aiReport.def)}</div>
+          <button class="editrules" onclick={editAiRules} title="load these rules into Advanced search">
+            EDIT RULES
+          </button>
+        {:else}
+          <div class="airules catalogonly">
+            catalog-only answer — no local-track rules for this prompt
+          </div>
+        {/if}
+        {#if aiReport.catalog.length > 0}
+          <div class="catalog">
+            <div class="cathead">
+              <span class="catlabel">DISCOGS CATALOG</span>
+              <span class="catcount">
+                {aiReport.catalogTotal > aiReport.catalog.length
+                  ? `${aiReport.catalog.length.toLocaleString()} of ${aiReport.catalogTotal.toLocaleString()}`
+                  : aiReport.catalog.length.toLocaleString()}
+                release{aiReport.catalog.length === 1 ? "" : "s"}
+              </span>
+              <button class="catcopy" onclick={() => void copyCatalog()} title="copy the catalog as text">
+                COPY LIST
+              </button>
+            </div>
+            <div class="catrows">
+              {#each aiReport.catalog as release, i (i)}
+                <div class="catrow">
+                  <span class="cattitle" title={release.title}>{release.title}</span>
+                  <span class="catmeta">
+                    {[release.year, release.label.join(", "), release.format.join("/")]
+                      .filter((part) => part != null && part !== "")
+                      .join(" · ")}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -2743,6 +2806,81 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 10px;
     color: #8dff9e;
+  }
+
+  .airules.catalogonly {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+    color: #d8a63c;
+    line-height: 1.35;
+  }
+
+  .catalog {
+    width: 100%;
+    margin-top: 2px;
+    border: 1px solid #243a28;
+    background: #0a0f0b;
+  }
+
+  .cathead {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 5px;
+    border-bottom: 1px solid #1c2a1d;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9px;
+  }
+
+  .catlabel {
+    color: #3ccb4e;
+    letter-spacing: 0.08em;
+  }
+
+  .catcount {
+    color: #707070;
+  }
+
+  .catcopy {
+    margin-left: auto;
+  }
+
+  .catrows {
+    max-height: 150px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #000;
+  }
+
+  .catrow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 2px 5px;
+    border-bottom: 1px solid #141a15;
+  }
+
+  .catrow:last-child {
+    border-bottom: 0;
+  }
+
+  .cattitle {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10px;
+    color: #b8b8c0;
+  }
+
+  .catmeta {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9px;
+    color: #707070;
   }
 
   .aibanner .editrules {

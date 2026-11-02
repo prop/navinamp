@@ -154,11 +154,27 @@ export function aiModels(config: AiConfig): Promise<string[]> {
 }
 
 export interface AiSearchReport {
-  def: SmartViewDef;
+  def: SmartViewDef | null;
   explanation: string;
+  catalog: DiscogsRelease[];
+  /** Total releases Discogs reported across the fetched pages (0 = unknown). */
+  catalogTotal: number;
   preset: string;
   model: string;
   toolCalls: number;
+}
+
+/** One Discogs catalog entry (shown even when no local tracks match). */
+export interface DiscogsRelease {
+  id: number;
+  title: string;
+  year: string | null;
+  label: string[];
+  format: string[];
+  genre: string[];
+  style: string[];
+  country: string;
+  kind: string;
 }
 
 /**
