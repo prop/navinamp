@@ -99,12 +99,18 @@
   server; the NAVIDROME tree lists each server with its count and selecting
   one filters the table. REMOTE TRACKS shows the union; SYNC NOW walks all
   servers (an unreachable one is reported and skipped). The active profile
-  only drives playlists, publishing and the status card; removing it
+  is only the default for publishing and the status card; removing it
   promotes the first remaining server to active. `navidrome.json`
   v1 files migrate to one `default` profile; existing remote rows/paths are
   qualified on first boot. Publish mappings are keyed per server
   (`smart_view_playlists.server`); legacy mappings move to the migrated
   profile on first boot.
+- Navidrome playlists are per server: the NAVIDROME tree lists each saved
+  server's live playlists under its name (fetched independently in parallel,
+  with a per-server error/loader). Playlist rows carry that server id, so
+  playback/star/rating route correctly. The smart-view PUBLISH button has a
+  server picker (active preselected) and each target updates its own
+  per-server playlist mapping.
 - Navidrome Settings UX: saved servers and the add form share one SERVERS
   block. The form starts empty as “+ ADD SERVER” after every completed
   action; typing a saved `url` + `user` flips it to UPDATE SERVER or
@@ -129,10 +135,8 @@
 
 ## Next up
 
-1. Per-server playlists and a smart-view publish target picker (both still
-   use the active profile).
-2. A–Z jump rail for the large tree groups (complements virtualization).
-3. A manager/list for saved EQ track/artist curves (today they are only
+1. A–Z jump rail for the large tree groups (complements virtualization).
+2. A manager/list for saved EQ track/artist curves (today they are only
    saved/cleared from row context menus).
 
 ## Known follow-ups / deferred
@@ -149,9 +153,6 @@
   its profile id; re-adding the same server later gets a fresh id, so the
   next publish creates a new `[NaVinaMP]` playlist instead of updating the
   old one
-- Playlist browsing and smart-view publishing still target only the active
-  profile; per-server playlist groups / a publish-target picker are a future
-  enhancement
 - `Warning::ClassicMissingOptional` missing from the frontend `Warning`
   union in `src/lib/skin/types.ts`
 - Signing ($99/yr) for prompt-free installs; auto-updater after that

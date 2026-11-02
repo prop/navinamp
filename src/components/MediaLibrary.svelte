@@ -117,9 +117,10 @@
     /** One saved server's synced rows (value = profile id). */
     | { kind: "remoteServer"; value: string }
     /** One server playlist, fetched live (value = Subsonic playlist id). */
-    | { kind: "playlist"; value: string };
+    | { kind: "playlist"; value: string; server: string };
 
   function selKey(s: Sel): string {
+    if (s.kind === "playlist") return `${s.kind}:${s.server}:${s.value}`;
     return "value" in s ? `${s.kind}:${s.value}` : s.kind;
   }
 
@@ -212,7 +213,7 @@
           rows = await libraryAlbumTracks(sel.value); // no source arg → filtered below
         } else if (sel.kind === "playlist") {
           // Ephemeral rows straight from the server — never imported.
-          rows = await navidromePlaylistTracks(sel.value);
+          rows = await navidromePlaylistTracks(sel.server, sel.value);
         } else if (sel.kind === "artist") {
           rows = await libraryTracks({
             artist: sel.value,
@@ -730,17 +731,19 @@
   }
 
   /** Publish a saved smart view as a Navidrome playlist (editor button). */
-  async function onEditorPublish(id: number): Promise<string> {
-    const report = await navidromePublishSmartView(id);
+  async function onEditorPublish(id: number, serverId: string): Promise<string> {
+    const report = await navidromePublishSmartView(id, serverId);
+    const serverName = navProfiles.find((p) => p.id === serverId)?.name ?? serverId;
     onlog(
-      `navidrome: ${report.created ? "created" : "updated"} playlist ` +
+      `navidrome[${serverName}]: ${report.created ? "created" : "updated"} playlist ` +
         `"${report.name}" (${report.trackCount} track${report.trackCount === 1 ? "" : "s"})`,
     );
-    // The server playlist list (NAVIDROME → PLAYLISTS) may have a new entry.
-    void refreshPlaylists();
+    // The target server's playlist list (NAVIDROME → PLAYLISTS) may have a
+    // new entry.
+    void refreshPlaylists(serverId);
     void refreshViews(); // publishing saves the edited name/rules
     return `${report.created ? "Published" : "Updated"} “${report.name}” — ` +
-      `${report.trackCount} track${report.trackCount === 1 ? "" : "s"} on the server`;
+      `${report.trackCount} track${report.trackCount === 1 ? "" : "s"} on ${serverName}`;
   }
 
   // ── loading ────────────────────────────────────────────────────────────────
@@ -951,29 +954,74 @@
     }
   });
 
-  // Server playlists (browse-only): fetched once per connection and on
-  // demand; opening one queries the server live via `getPlaylist`.
-  let navPlaylists = $state.raw<NavidromePlaylist[] | null>(null);
-  let navPlaylistsError = $state<string | null>(null);
+  // Server playlists (browse-only): one live list per saved server, fetched
+  // when the NAVIDROME group is open. Opening one queries that server live
+  // via `getPlaylist`; nothing is persisted.
+  interface ServerPlaylists {
+    serverId: string;
+    name: string;
+    playlists: NavidromePlaylist[] | null;
+    error: string | null;
+  }
+  let navPlaylists = $state.raw<ServerPlaylists[]>([]);
+  let playlistsSeq = 0;
 
-  async function refreshPlaylists(): Promise<void> {
-    try {
-      navPlaylists = await navidromePlaylists();
-      navPlaylistsError = null;
-    } catch (e) {
-      navPlaylists = null;
-      navPlaylistsError = friendlyIpcError("navidrome playlists", e);
+  async function refreshPlaylists(onlyServer?: string): Promise<void> {
+    const targets = navProfiles.filter((p) => onlyServer == null || p.id === onlyServer);
+    if (targets.length === 0) {
+      if (onlyServer == null) navPlaylists = [];
+      return;
     }
+    const seq = ++playlistsSeq;
+    if (onlyServer == null) {
+      navPlaylists = targets.map((p) => ({
+        serverId: p.id,
+        name: p.name,
+        playlists: null,
+        error: null,
+      }));
+    }
+    await Promise.all(
+      targets.map(async (profile) => {
+        try {
+          const list = await navidromePlaylists(profile.id);
+          if (seq !== playlistsSeq) return;
+          const entry: ServerPlaylists = {
+            serverId: profile.id,
+            name: profile.name,
+            playlists: list,
+            error: null,
+          };
+          navPlaylists = navPlaylists.some((s) => s.serverId === profile.id)
+            ? navPlaylists.map((s) => (s.serverId === profile.id ? entry : s))
+            : [...navPlaylists, entry];
+        } catch (e) {
+          if (seq !== playlistsSeq) return;
+          const message = friendlyIpcError("navidrome playlists", e);
+          const entry: ServerPlaylists = {
+            serverId: profile.id,
+            name: profile.name,
+            playlists: null,
+            error: message,
+          };
+          navPlaylists = navPlaylists.some((s) => s.serverId === profile.id)
+            ? navPlaylists.map((s) => (s.serverId === profile.id ? entry : s))
+            : [...navPlaylists, entry];
+        }
+      }),
+    );
   }
 
   $effect(() => {
-    if (navStatus?.configured === true) {
-      void refreshPlaylists();
-    } else {
-      navPlaylists = null;
-      navPlaylistsError = null;
-    }
+    void openGroups.navidrome;
+    void navProfiles;
+    if (!openGroups.navidrome || navProfiles.length === 0) return;
+    void refreshPlaylists();
   });
+
+  const playlistTotal = $derived(
+    navPlaylists.reduce((n, server) => n + (server.playlists?.length ?? 0), 0),
+  );
 
   async function syncNow(serverId: string | null = null): Promise<void> {
     if (navSyncing) return;
@@ -1686,34 +1734,44 @@
             </div>
           {/each}
         {/if}
-        {#if navStatus?.configured}
+        {#if navProfiles.length > 0}
           <div class="leaf sub">
             <span class="sublabel">PLAYLISTS</span>
-            <span class="cnt">({navPlaylists?.length ?? 0})</span>
-            <button class="edit" title="reload playlists from the server" onclick={() => void refreshPlaylists()}
-              >↻</button>
+            <span class="cnt">({playlistTotal})</span>
+            <button
+              class="edit"
+              title="reload playlists from every server"
+              onclick={() => void refreshPlaylists()}>↻</button>
           </div>
-          {#if navPlaylistsError}
-            <div class="leaf empty err" title={navPlaylistsError}>playlists unavailable</div>
-          {:else if navPlaylists == null}
-            <div class="leaf empty">loading playlists…</div>
-          {:else if navPlaylists.length === 0}
-            <div class="leaf empty">no server playlists</div>
-          {:else}
-            {#each navPlaylists as p (p.id)}
-              <div class="leaf smart" class:on={selKey(selection) === `playlist:${p.id}`}>
-                <button
-                  class="leafbtn"
-                  title={`${p.songCount} track${p.songCount === 1 ? "" : "s"} on the server`}
-                  onclick={() => {
-                    selectedIds = new Set(); // playlist rows use ephemeral ids
-                    selectAllMode = false;
-                    select({ kind: "playlist", value: p.id });
-                  }}>{p.name}</button>
-                <span class="cnt">{p.songCount}</span>
-              </div>
-            {/each}
-          {/if}
+          {#each navPlaylists as server (server.serverId)}
+            <div class="leaf sub">
+              <span class="sublabel">{server.name}</span>
+              <span class="cnt">({server.playlists?.length ?? 0})</span>
+            </div>
+            {#if server.error}
+              <div class="leaf empty err" title={server.error}>playlists unavailable</div>
+            {:else if server.playlists == null}
+              <div class="leaf empty">loading playlists…</div>
+            {:else if server.playlists.length === 0}
+              <div class="leaf empty">no playlists</div>
+            {:else}
+              {#each server.playlists as p (p.id)}
+                <div
+                  class="leaf smart"
+                  class:on={selKey(selection) === `playlist:${server.serverId}:${p.id}`}>
+                  <button
+                    class="leafbtn"
+                    title={`${p.songCount} track${p.songCount === 1 ? "" : "s"} on ${server.name}`}
+                    onclick={() => {
+                      selectedIds = new Set(); // playlist rows use ephemeral ids
+                      selectAllMode = false;
+                      select({ kind: "playlist", value: p.id, server: server.serverId });
+                    }}>{p.name}</button>
+                  <span class="cnt">{p.songCount}</span>
+                </div>
+              {/each}
+            {/if}
+          {/each}
         {/if}
         {#if navError}
           <div class="leaf empty err" title={navError}>navidrome unavailable</div>
@@ -1935,6 +1993,8 @@
       onsave={(id) => void onEditorSave(id)}
       ondelete={(id) => void onEditorDelete(id)}
       onpublish={onEditorPublish}
+      publishServers={navProfiles.map((p) => ({ id: p.id, name: p.name }))}
+      defaultPublishServer={navStatus?.profileId ?? null}
       oncancel={() => (editing = null)} />
   {/if}
 

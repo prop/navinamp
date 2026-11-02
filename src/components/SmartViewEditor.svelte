@@ -36,6 +36,12 @@
     opsForField,
   } from "../lib/library/smartView";
 
+  /** One saved Navidrome server the view can be published to. */
+  interface PublishServer {
+    id: string;
+    name: string;
+  }
+
   interface Props {
     /** null = creating a new view. */
     id: number | null;
@@ -47,11 +53,28 @@
      * user-facing success line (the editor shows it inline). Rejects with
      * the backend error when publishing fails.
      */
-    onpublish: (id: number) => Promise<string>;
+    onpublish: (id: number, serverId: string) => Promise<string>;
+    /** Saved servers; the picker appears when there is more than one. */
+    publishServers?: PublishServer[];
+    /** Preselected server (normally the active/default one). */
+    defaultPublishServer?: string | null;
     oncancel: () => void;
   }
 
-  let { id, initial, onsave, ondelete, onpublish, oncancel }: Props = $props();
+  let {
+    id,
+    initial,
+    onsave,
+    ondelete,
+    onpublish,
+    publishServers = [],
+    defaultPublishServer = null,
+    oncancel,
+  }: Props = $props();
+
+  // The editor remounts per open; the active/first server is the initial pick.
+  // svelte-ignore state_referenced_locally
+  let publishServer = $state(defaultPublishServer ?? publishServers[0]?.id ?? "");
 
   // The editing session snapshots the incoming def once (the parent passes a
   // fresh clone per open); all edits below happen on our own copy.
@@ -329,7 +352,7 @@
    * The component stays open and shows the outcome inline.
    */
   async function publish(): Promise<void> {
-    if (publishing || saving || deleting || id == null) return;
+    if (publishing || saving || deleting || id == null || publishServer === "") return;
     const built = buildDef(true);
     if (!built.ok) {
       rowErrors = built.rowErrors;
@@ -342,7 +365,7 @@
     publishing = true;
     try {
       await smartViewSave(id, built.def);
-      publishNote = await onpublish(id);
+      publishNote = await onpublish(id, publishServer);
     } catch (e) {
       applyBackendError(friendlyIpcError("publish smart view", e));
     } finally {
@@ -519,9 +542,21 @@
         {saving ? "SAVING…" : "SAVE"}
       </button>
       {#if id != null}
+        {#if publishServers.length > 1}
+          <select
+            class="sel psel"
+            bind:value={publishServer}
+            disabled={publishing || saving || deleting}
+            aria-label="publish to server"
+            title="server that receives this smart view's playlist">
+            {#each publishServers as server (server.id)}
+              <option value={server.id}>{server.name}</option>
+            {/each}
+          </select>
+        {/if}
         <button
           onclick={publish}
-          disabled={publishing || saving || deleting}
+          disabled={publishing || saving || deleting || publishServer === ""}
           title="create/update a Navidrome playlist from this view's remote tracks">
           {publishing ? "PUBLISHING…" : "PUBLISH"}
         </button>
@@ -602,6 +637,10 @@
   .sel:focus {
     outline: none;
     border-color: #3ccb4e;
+  }
+
+  .psel {
+    max-width: 150px;
   }
 
   .namerow .txt {

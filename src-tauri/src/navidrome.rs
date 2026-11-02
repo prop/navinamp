@@ -902,8 +902,10 @@ pub async fn navidrome_set_library(
 #[tauri::command]
 pub async fn navidrome_playlists(
     state: State<'_, NavidromeState>,
+    server_id: Option<String>,
 ) -> Result<Vec<PlaylistSummary>, String> {
-    let client = ensure_client(&state).await?;
+    let server = resolve_server(&state, server_id)?;
+    let client = ensure_client_for(&state, &server).await?;
     client
         .get_playlists()
         .await
@@ -917,9 +919,10 @@ pub async fn navidrome_playlists(
 #[tauri::command]
 pub async fn navidrome_playlist_tracks(
     state: State<'_, NavidromeState>,
+    server_id: Option<String>,
     playlist_id: String,
 ) -> Result<Vec<Track>, String> {
-    let server = active_server_id(&state)?;
+    let server = resolve_server(&state, server_id)?;
     let client = ensure_client_for(&state, &server).await?;
     let songs = client
         .get_playlist(&playlist_id)
@@ -993,8 +996,9 @@ pub async fn navidrome_publish_smart_view(
     app: AppHandle,
     state: State<'_, NavidromeState>,
     id: i64,
+    server_id: Option<String>,
 ) -> Result<PublishReport, String> {
-    let server = active_server_id(&state)?;
+    let server = resolve_server(&state, server_id)?;
     let client = ensure_client_for(&state, &server).await?;
     let library = Library::open(db_file(&app)?).map_err(|e| format!("cannot open library: {e}"))?;
     let view = library

@@ -191,8 +191,10 @@ export interface NavidromePlaylist {
 }
 
 /** All playlists visible to the connected user (browse-only). */
-export function navidromePlaylists(): Promise<NavidromePlaylist[]> {
-  return invoke<NavidromePlaylist[]>("navidrome_playlists");
+export function navidromePlaylists(
+  serverId: string | null = null,
+): Promise<NavidromePlaylist[]> {
+  return invoke<NavidromePlaylist[]>("navidrome_playlists", { serverId });
 }
 
 /** Libraries (music folders) accessible to the connected user. */
@@ -214,8 +216,11 @@ export function navidromeSetLibrary(libraryId: string | null): Promise<Navidrome
  * `navidrome`). They play like synced remote rows but are never written to
  * the local DB, so the view always reflects the server.
  */
-export function navidromePlaylistTracks(playlistId: string): Promise<Track[]> {
-  return invoke<Track[]>("navidrome_playlist_tracks", { playlistId });
+export function navidromePlaylistTracks(
+  serverId: string | null,
+  playlistId: string,
+): Promise<Track[]> {
+  return invoke<Track[]>("navidrome_playlist_tracks", { serverId, playlistId });
 }
 
 /** Result of publishing one smart view as a server playlist. */
@@ -232,8 +237,11 @@ export interface NavidromePublishReport {
  * first publish, `updatePlaylist` afterwards). Only the view's remote rows
  * are included; its limit/sort apply.
  */
-export function navidromePublishSmartView(id: number): Promise<NavidromePublishReport> {
-  return invoke<NavidromePublishReport>("navidrome_publish_smart_view", { id });
+export function navidromePublishSmartView(
+  id: number,
+  serverId: string | null = null,
+): Promise<NavidromePublishReport> {
+  return invoke<NavidromePublishReport>("navidrome_publish_smart_view", { id, serverId });
 }
 
 /** Persist streaming prefs; `bitrateKbps` is only meaningful for transcodes. */
