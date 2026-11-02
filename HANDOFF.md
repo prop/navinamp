@@ -8,7 +8,7 @@
 - All six roadmap milestones shipped. Latest release: **v0.8.0**
   (dmg on the Releases page; built successfully by the cached self-hosted
   runner — see the release-runner gotcha below).
-- Test suites: 25+ green across five crates + frontend. Clippy/fmt clean.
+- Test suites green across six crates + frontend. Clippy/fmt clean.
 - Four windows: player (skinned), playlist editor, media library, EQ.
 
 ## Just shipped (v0.5.0 + master since)
