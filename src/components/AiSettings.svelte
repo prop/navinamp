@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
    * AI search settings modal. Owns only configuration: provider shape,
-   * endpoint/model/key, timeout, and the optional Discogs token. The AI
-   * search prompt lives in the library bar; this panel never sends a search.
+   * endpoint/model/key, timeout, and the Discogs token (required for catalog
+   * lookups). The AI search prompt lives in the library bar; this panel never
+   * sends a search.
    *
    * Keys are stored plaintext in `<app_config>/ai.json` (same policy as
    * navidrome.json) and are never logged. TEST sends one tiny completion
@@ -257,21 +258,22 @@
         </div>
 
         <div class="block">
-          <div class="bh">DISCOGS (OPTIONAL)</div>
+          <div class="bh">DISCOGS CATALOG</div>
           <label class="row">
             token
             <input
               class="txt wide"
               type="password"
               bind:value={config.discogsToken}
-              placeholder="personal access token — higher rate limit"
+              placeholder="required for catalog lookups — free token"
               autocomplete="off"
               spellcheck="false" />
           </label>
           <div class="hint">
-            lets the AI resolve labels, styles, producers and original release years.
-            create a token at discogs.com/settings/developers; without one the shared
-            unauthenticated limit applies.
+            required to list labels, discographies and pressings from Discogs.
+            create a free personal access token at discogs.com/settings/developers.
+            without it the AI can still build local-track rules, but no catalog is
+            returned.
           </div>
         </div>
 

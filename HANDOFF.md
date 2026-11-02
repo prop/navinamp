@@ -19,7 +19,7 @@
 - **v0.9.0**: the equalizer's automatic headroom is now visible as a live
   `auto headroom −X.X dB` readout.
 - **v0.9.0**: three-mode library search — SIMPLE (full-text),
-  ADVANCED (field rules) and AI (LLM-built rules, optional Discogs lookup) —
+  ADVANCED (field rules) and AI (LLM-built rules, Discogs catalog lookups) —
   with save-to-smart-view, publish-to-server and replace-playlist actions.
   Detailed notes near the end of this section.
 - M4A/AAC playback (decoder priming for undeclared channel layouts)
@@ -167,7 +167,8 @@
   - AI sends a bounded library digest (counts, genres, sampled artists, server
     names/ids) and the rule schema to the configured provider. The model may
     call Discogs (structured artist/release/label/genre/style/year/format
-    filters, paged up to 100/call, max 4 calls, optional personal token) and
+    filters, paged up to 100/call, max 4 calls, personal token required for
+    catalog calls) and
     can finish with a Smart View definition, `def: null` for catalog-only
     answers, or both. Catalog entries are a first-class result: the UI shows
     a scrollable Discogs panel with COPY LIST, while library rules are
@@ -177,10 +178,15 @@
     published as a `[NaVinaMP]` server playlist (new publish-by-name command),
     or used to replace the playlist editor (new queue `replaceAll` intent).
     Catalog-only answers keep the library table empty and expose COPY LIST.
+  - Post-audit hardening: catalog totals sum distinct filter sets; the model
+    payload is capped at 25 releases and wrapped as untrusted data; a missing
+    Discogs token short-circuits with an explicit settings hint; `per_page`
+    defaults to 100.
 - AI settings (`ai.json`, plaintext like navidrome.json): provider presets for
   OpenRouter, OpenAI, Claude, DeepSeek, GLM, Kimi, MiniMax and a custom
-  OpenAI-compatible endpoint (covers local Ollama/LM Studio), plus an optional
-  Discogs token. The model picker lists current ids (DeepSeek V4.1 Flash is
+  OpenAI-compatible endpoint (covers local Ollama/LM Studio), plus a Discogs
+  token (required for catalog lookups). The model picker lists current ids
+  (DeepSeek V4.1 Flash is
   `deepseek-flash`, GLM-5.3-Flash, Kimi K3.1 Pro, MiniMax M3.1 Flash, GPT-5.2,
   Claude Sonnet 5) and REFRESH fetches the provider's live `/models` list.
   `navinamp-llm` has OpenAI-compatible and Anthropic adapters;
