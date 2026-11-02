@@ -5,8 +5,9 @@
    *
    * Everything stateful lives HERE and only here: the queue module, the
    * 10 Hz `audio_state` poll, the engine-event listener (queue feed-order
-   * correlation), the spectrum poller (via SkinVis) and the OS
-   * media-metadata push. The other windows are bus-driven views.
+   * correlation), the spectrum poller (via SkinVis), the OS media-metadata
+   * push and the desktop "now playing" notification gate. The other
+   * windows are bus-driven views.
    *
    * Layout: the resolved layout follows the window manager's layout mode
    * (normal / shade; a skin without a shade layout degrades to normal via
@@ -22,6 +23,11 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
+  import {
+    isPermissionGranted,
+    requestPermission,
+    sendNotification,
+  } from "@tauri-apps/plugin-notification";
 
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import { queue, isAudioPath } from "../lib/player/queue.svelte";
@@ -34,6 +40,7 @@
   import { dragWindow } from "../lib/window/drag";
   import type { SkinPayload, Warning } from "../lib/skin/types";
   import {
+    appFocused,
     playerLayoutMode,
     publishSkinTheme,
     setMediaCommandExecutor,
@@ -53,6 +60,8 @@
     bitrateKbps: number | null;
     sampleRateHz: number | null;
     channels: number | null;
+    /** Desktop "now playing" notifications enabled (menu preference). */
+    notifyTrack: boolean;
   };
 
   let audio = $state<AudioState>({
@@ -64,6 +73,7 @@
     bitrateKbps: null,
     sampleRateHz: null,
     channels: null,
+    notifyTrack: true,
   });
   let seeking = $state<number | null>(null);
 
@@ -100,12 +110,44 @@
     }
   }
 
+  // ── desktop notifications (issue #34) ────────────────────────────────────
+  // TrackStarted — not queue edits or the persisted-queue restore — is the
+  // trigger. Gate: the persisted menu preference (audio_state poll), OS
+  // permission (requested lazily on the first eligible start) and "no
+  // NaVinaMP window focused".
+  let notifyPermission: NotificationPermission | null = null;
+  let notifyWarned = false;
+
+  async function notifyTrackStarted(): Promise<void> {
+    if (!audio.notifyTrack || appFocused()) return;
+    const item = queue.currentItem;
+    if (!item) return;
+    try {
+      if (notifyPermission == null) {
+        notifyPermission = (await isPermissionGranted())
+          ? "granted"
+          : await requestPermission();
+      }
+      if (notifyPermission !== "granted") return;
+      sendNotification({
+        title: item.artist ? `${item.artist} — ${item.title}` : item.title,
+        body: "NaVinaMP",
+      });
+    } catch (e) {
+      if (!notifyWarned) {
+        notifyWarned = true;
+        console.warn(`[navinamp] notifications unavailable: ${e}`);
+      }
+    }
+  }
+
   // Engine events → queue correlation (the ONLY place that runs it).
   $effect(() => {
     const unlisten = listen<EngineEvent>("audio-event", (ev) => {
       const e = ev.payload;
       const note = queue.handleEngineEvent(e);
       console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);
+      if (e.type === "TrackStarted") void notifyTrackStarted();
       void refresh();
     });
     return () => {
