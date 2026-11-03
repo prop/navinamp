@@ -21,7 +21,7 @@ export interface AiConfig {
   model: string;
   apiKey: string;
   timeoutSecs: number;
-  /** Optional Discogs personal access token (higher rate limit). */
+  /** Required for Discogs catalog lookups (free personal access token). */
   discogsToken: string;
 }
 
