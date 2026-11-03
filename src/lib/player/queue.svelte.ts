@@ -423,6 +423,9 @@ function prev(): void {
 // (mutates) this module; other windows render bus snapshots.
 
 const PERSIST_KEY = "navinamp.queue.v1";
+/** Above this, the JSON (~250 B/item) no longer fits webview localStorage. */
+const MAX_PERSISTED_ITEMS = 10_000;
+let persistSkipWarned = false;
 
 export function persistQueue(snapshot: {
   items: QueueItem[];
@@ -431,6 +434,20 @@ export function persistQueue(snapshot: {
   repeat: RepeatMode;
 }): void {
   if (!IS_PLAYER) return;
+  if (snapshot.items.length > MAX_PERSISTED_ITEMS) {
+    // A 50k-track queue is ~10 MB and exceeds the storage quota; skip the
+    // stringify cost. Leave the last good snapshot in place — a transient
+    // PLAY ALL burst must not destroy a previously saved queue.
+    // (Warn once per session; a later shrink below the cap saves normally.)
+    if (!persistSkipWarned) {
+      persistSkipWarned = true;
+      console.warn(
+        `[navinamp] queue has ${snapshot.items.length} items; ` +
+          `persistence is limited to ${MAX_PERSISTED_ITEMS}`,
+      );
+    }
+    return;
+  }
   try {
     localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
   } catch {
@@ -448,6 +465,8 @@ if (IS_PLAYER) {
         shuffle?: boolean;
         repeat?: RepeatMode;
       };
+      // Loads accept any valid saved queue: the save cap only limits writes,
+      // so an older/larger snapshot is never truncated on restore.
       if (Array.isArray(saved.items)) {
         items = saved.items.filter(
           (it) =>

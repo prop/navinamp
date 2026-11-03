@@ -44,9 +44,65 @@
 
   // Must match the .row height so drag math stays trivial.
   const ROW_H = 20;
+  /** Extra rows above/below the viewport (smooth fast scrolling). */
+  const OVERSCAN = 8;
 
   let selected = $state<number | null>(null);
   let listEl: HTMLElement | null = null;
+
+  // Windowed rendering: PLAY ALL on a 50k-track library must not create 50k
+  // DOM rows. Only the visible slice (+overscan) is mounted; a full-height
+  // spacer keeps the scrollbar and drag geometry in whole-list coordinates.
+  let scrollTop = $state(0);
+  let viewportH = $state(160);
+  const totalH = $derived(items.length * ROW_H);
+  const start = $derived(
+    Math.max(0, Math.min(items.length, Math.floor(scrollTop / ROW_H) - OVERSCAN)),
+  );
+  const end = $derived(
+    Math.min(
+      items.length,
+      Math.max(start, Math.ceil((scrollTop + viewportH) / ROW_H) + OVERSCAN),
+    ),
+  );
+  const visible = $derived(items.slice(start, end));
+
+  $effect(() => {
+    const el = listEl;
+    if (!el) return;
+    viewportH = el.clientHeight;
+    const ro = new ResizeObserver(() => {
+      viewportH = el.clientHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  // The queue can shrink under the current scroll position (clear, removals
+  // from elsewhere); keep the virtual window inside the new bounds.
+  $effect(() => {
+    const el = listEl;
+    if (!el) return;
+    const max = Math.max(0, items.length * ROW_H - el.clientHeight);
+    if (el.scrollTop > max) {
+      el.scrollTop = max;
+      scrollTop = max;
+    }
+  });
+
+  function onScroll(e: Event & { currentTarget: HTMLElement }): void {
+    scrollTop = e.currentTarget.scrollTop;
+  }
+
+  /** Keep the selected row mounted/visible after keyboard navigation. */
+  function ensureVisible(index: number): void {
+    const el = listEl;
+    if (!el) return;
+    const top = index * ROW_H;
+    const bottom = top + ROW_H;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
+  }
 
   // `gap` is the insertion boundary (0..items.length) in pre-removal
   // coordinates; `moved` gates click-vs-drag on a small threshold.
@@ -83,13 +139,27 @@
     return gap > from ? gap - 1 : gap;
   }
 
-  function rowDown(e: PointerEvent & { currentTarget: HTMLElement }, i: number): void {
+  function detachDrag(): void {
+    window.removeEventListener("pointermove", rowMove);
+    window.removeEventListener("pointerup", rowUp);
+    window.removeEventListener("pointercancel", cancelDrag);
+  }
+
+  function cancelDrag(): void {
+    detachDrag();
+    drag = null;
+  }
+
+  function rowDown(e: PointerEvent, i: number): void {
     if (e.button !== 0) return;
     selected = i;
     drag = { from: i, gap: i, moved: false };
     dragStartY = e.clientY;
-    // Capture so moves keep tracking this row even outside the list.
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Window listeners (not pointer capture) keep the drag alive when the
+    // source row scrolls out of the virtual window and unmounts.
+    window.addEventListener("pointermove", rowMove);
+    window.addEventListener("pointerup", rowUp);
+    window.addEventListener("pointercancel", cancelDrag);
   }
 
   function rowMove(e: PointerEvent): void {
@@ -100,13 +170,18 @@
   }
 
   function rowUp(): void {
-    if (!drag) return;
-    const { from, gap, moved } = drag;
+    detachDrag();
+    const current = drag;
     drag = null;
-    if (!moved) return; // plain click: selection already happened on down
-    const to = dropIndex(from, gap);
-    if (to !== from) onmove(from, to);
+    if (!current || !current.moved) return; // plain click selected on down
+    const to = dropIndex(current.from, current.gap);
+    if (to !== current.from) onmove(current.from, to);
   }
+
+  // A window close/tab teardown mid-drag must not leave global listeners.
+  $effect(() => {
+    return () => detachDrag();
+  });
 
   // ── right-click menu (play / remove / star / rating) ─────────────────────
   // Playlist items carry no star/rating state, so the open menu looks the row
@@ -263,12 +338,14 @@
       case "ArrowDown": {
         e.preventDefault();
         const d = e.key === "ArrowUp" ? -1 : 1;
-        selected =
+        const next =
           selected == null
             ? d > 0
               ? 0
               : items.length - 1
             : Math.max(0, Math.min(items.length - 1, selected + d));
+        selected = next;
+        ensureVisible(next);
         break;
       }
       case "Delete":
@@ -301,30 +378,42 @@
 </script>
 
 <div class="pl" style={themeVars}>
-  <div class="list" bind:this={listEl} tabindex="0" role="listbox" aria-label="playlist" onkeydown={listKey}>
-    <div class="rows">
-      {#each items as item, i (item.id)}
-        <div
-          class="row"
-          class:current={i === currentIndex}
-          class:selected={i === selected}
-          role="option"
-          aria-selected={i === selected}
-          tabindex="-1"
-          onpointerdown={(e) => rowDown(e, i)}
-          onpointermove={rowMove}
-          onpointerup={rowUp}
-          onpointercancel={() => (drag = null)}
-          ondblclick={() => onplay(i)}
-          oncontextmenu={(e) => openMenu(e, i)}
-        >
-          <span class="marker">{i === currentIndex ? "▶" : ""}</span>
-          <span class="text">{i + 1}. {label(item)}</span>
-          <span class="time">{item.durationSecs != null ? fmt(item.durationSecs) : ""}</span>
-        </div>
-      {/each}
+  <div
+    class="list"
+    bind:this={listEl}
+    tabindex="0"
+    role="listbox"
+    aria-label="playlist"
+    onkeydown={listKey}
+    onscroll={onScroll}>
+    <div class="rows" style="height:{totalH}px">
       {#if items.length === 0}
         <div class="empty">playlist empty — ADD or eject files</div>
+      {:else}
+        <div class="vspacer" style="height:{start * ROW_H}px" aria-hidden="true" role="presentation"></div>
+        {#each visible as item, j (item.id)}
+          {@const i = start + j}
+          <div
+            class="row"
+            class:current={i === currentIndex}
+            class:selected={i === selected}
+            role="option"
+            aria-selected={i === selected}
+            tabindex="-1"
+            onpointerdown={(e) => rowDown(e, i)}
+            ondblclick={() => onplay(i)}
+            oncontextmenu={(e) => openMenu(e, i)}
+          >
+            <span class="marker">{i === currentIndex ? "▶" : ""}</span>
+            <span class="text">{i + 1}. {label(item)}</span>
+            <span class="time">{item.durationSecs != null ? fmt(item.durationSecs) : ""}</span>
+          </div>
+        {/each}
+        <div
+          class="vspacer"
+          style="height:{(items.length - end) * ROW_H}px"
+          aria-hidden="true"
+          role="presentation"></div>
       {/if}
       {#if drag && drag.moved && dropIndex(drag.from, drag.gap) !== drag.from}
         <div class="dropline" style="top:{drag.gap * ROW_H - 1}px"></div>
@@ -389,6 +478,10 @@
 
   .rows {
     position: relative;
+  }
+
+  .vspacer {
+    pointer-events: none;
   }
 
   /* Rows use the classic-editor treatment: small smooth UI text (real

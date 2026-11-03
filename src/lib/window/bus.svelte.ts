@@ -31,6 +31,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { IS_PLAYER, LABEL, PLAYER_LABEL, type WindowLabel } from "./identity";
 import { persistQueue, queue } from "../player/queue.svelte";
@@ -82,6 +83,8 @@ export type QueueIntent =
   | { type: "play"; index: number }
   | { type: "add"; paths: string[] }
   | { type: "addFromLibrary"; metas: QueueItemMeta[] }
+  /** Append and start the first appended item, resolved by the player. */
+  | { type: "addFromLibraryAndPlay"; metas: QueueItemMeta[] }
   | { type: "replaceAll"; metas: QueueItemMeta[] }
   | { type: "addNext"; path: string; index?: number }
   | { type: "remove"; index: number }
@@ -123,6 +126,11 @@ export function applyQueueIntent(intent: QueueIntent): void {
     case "addFromLibrary":
       queue.addFromLibrary(intent.metas);
       break;
+    case "addFromLibraryAndPlay": {
+      const first = queue.addFromLibrary(intent.metas);
+      queue.play(first);
+      break;
+    }
     case "replaceAll":
       queue.clear();
       queue.addFromLibrary(intent.metas);
@@ -170,20 +178,14 @@ export function queueIntent(intent: QueueIntent): void {
 }
 
 /**
- * "Play now" from a library view: append the metas, then play the first
- * appended index (mirrors queue.addFromLibrary + queue.play(first)). In a
- * non-player window without a snapshot yet we only enqueue — playing index
- * 0 of a stale view would start the wrong track.
+ * "Play now" from a library view: the player appends the metas and starts the
+ * first appended item itself. The index must never be computed from a
+ * cross-window snapshot — snapshots are debounced, so a stale length would
+ * start an already-queued track (or index 0 on a view without a snapshot).
  */
 export function queuePlayNow(metas: QueueItemMeta[]): void {
   if (metas.length === 0) return;
-  if (!IS_PLAYER && queueSnapshot.value == null) {
-    queueIntent({ type: "addFromLibrary", metas });
-    return;
-  }
-  const at = IS_PLAYER ? queue.items.length : (queueSnapshot.value?.items.length ?? 0);
-  queueIntent({ type: "addFromLibrary", metas });
-  queueIntent({ type: "play", index: at });
+  queueIntent({ type: "addFromLibraryAndPlay", metas });
 }
 
 /** Replace the playlist editor/queue contents with `metas`. */
@@ -405,13 +407,26 @@ export function initWindowBus(): void {
     // Heal: another window may have been focused before our listeners
     // existed (it answers by re-broadcasting its current state).
     void emit("app-focus-request", {});
-    // Broadcast after EVERY queue mutation: the effect deep-reads the queue
-    // (item spreads, index, toggles), so any change re-runs it.
+    // Broadcast after every queue mutation, coalesced: PLAY ALL can insert
+    // tens of thousands of items and the effect deep-reads the whole queue,
+    // so a burst of mutations must not serialize + broadcast it repeatedly.
+    // 150ms is below perception; the snapshot of the latest run wins.
     $effect(() => {
       const snapshot = readSnapshot();
-      void emit("queue-state", { from: "main", snapshot });
-      persistQueue(snapshot);
+      const timer = setTimeout(() => {
+        void emit("queue-state", { from: "main", snapshot });
+        persistQueue(snapshot);
+      }, 150);
+      return () => clearTimeout(timer);
     });
+    // Best-effort flush if the player window closes inside the debounce.
+    // `beforeunload` is not reliable in the Tauri webview; the close path is.
+    window.addEventListener("beforeunload", () => persistQueue(readSnapshot()));
+    void getCurrentWindow()
+      .onCloseRequested(() => {
+        persistQueue(readSnapshot());
+      })
+      .catch(() => undefined);
     return;
   }
 
