@@ -144,6 +144,10 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     }
 
     if !fixed.is_empty() {
+        eprintln!(
+            "navinamp library: repaired legacy tag text in {} row(s)",
+            fixed.len()
+        );
         let mut update = conn.prepare(
             "UPDATE tracks
                 SET title = ?2, artist = ?3, album_artist = ?4, album = ?5,
@@ -292,13 +296,19 @@ mod tests {
 
         // Seed a row the way a pre-repair scanner stored it (CP1251 bytes
         // mapped through Latin-1), then clear the marker so the pass runs.
+        // Artist and album differ and album_artist is empty: the shape where
+        // a wrong album_key derivation would diverge from a fresh scan.
         let (bytes, _, _) = encoding_rs::WINDOWS_1251.encode("Песня о любви");
-        let garbled: String = bytes.iter().map(|b| char::from(*b)).collect();
+        let garbled_title: String = bytes.iter().map(|b| char::from(*b)).collect();
+        let (bytes, _, _) = encoding_rs::WINDOWS_1251.encode("Исполнитель");
+        let garbled_artist: String = bytes.iter().map(|b| char::from(*b)).collect();
+        let (bytes, _, _) = encoding_rs::WINDOWS_1251.encode("Альбом");
+        let garbled_album: String = bytes.iter().map(|b| char::from(*b)).collect();
         conn.execute(
             "INSERT INTO tracks
                 (path, mtime, size, title, artist, album, album_key, genre, date_added)
              VALUES ('/a.mp3', 0, 0, ?1, ?2, ?3, '', '', 0)",
-            rusqlite::params![garbled, garbled, garbled],
+            rusqlite::params![garbled_title, garbled_artist, garbled_album],
         )
         .unwrap();
         conn.execute("DELETE FROM meta WHERE key = 'text_charset_repair_v1'", [])
@@ -314,11 +324,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(title, "Песня о любви");
-        assert_eq!(artist, "Песня о любви");
-        assert_eq!(album, "Песня о любви");
+        assert_eq!(artist, "Исполнитель");
+        assert_eq!(album, "Альбом");
         assert_eq!(
             key,
-            crate::scanner::album_key("", "Песня о любви", "Песня о любви")
+            crate::scanner::album_key("", "Исполнитель", "Альбом"),
+            "healed album_key must match what a fresh scan derives"
         );
 
         // Marker set: a later damaged row is not touched by a second run.

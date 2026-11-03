@@ -14,14 +14,21 @@
 //! - only Latin-1-mapped text is considered (every char ≤ U+00FF); proper
 //!   Unicode and pure ASCII pass through untouched, so the repair is
 //!   idempotent;
-//! - high-byte chars must dominate the visible text (a legitimate
-//!   `Motörhead`, `Björk` or `Été à Zürich` has one or two accents among
-//!   ASCII letters and is never touched);
+//! - high bytes must make up a meaningful share of the text's LETTERS
+//!   (~25%), which keeps `Motörhead`, `Björk` or `Été à Zürich` safe while
+//!   still repairing the common mixed shape `DJ … feat. <Russian title>`
+//!   (counting punctuation/spaces instead would dilute it);
 //! - a candidate must decode into plausible Cyrillic (letter-frequency
-//!   scored, which also settles CP1251 vs. KOI8-R).
+//!   scored). CP1251 and KOI8-R are both decoded; a near-tie or a degenerate
+//!   (near-zero-frequency) result is treated as ambiguous and left alone,
+//!   which keeps majority-accented Latin text out of the repair path.
 //!
 //! Unfixable by nature: UTF-16 bytes decoded as another wide encoding (the
 //! result is CJK-looking text with no reliable inverse) — left alone.
+//! Also inherently ambiguous: text made up ENTIRELY of accented Latin
+//! letters that happens to decode cleanly under a legacy Cyrillic codepage
+//! (e.g. an all-caps Scandinavian title) — without a language model there is
+//! no byte-level distinction, so such strings may be "repaired" wrongly.
 
 use std::borrow::Cow;
 
@@ -72,6 +79,10 @@ fn score(s: &str) -> f32 {
     s.chars().map(russian_weight).sum()
 }
 
+fn is_cyrillic(c: char) -> bool {
+    ('\u{0400}'..='\u{04FF}').contains(&c)
+}
+
 /// Tag text may legitimately contain letters, digits, whitespace and the
 /// usual punctuation; anything else after a candidate decode is a red flag
 /// (wrong codepage or garbage bytes).
@@ -79,48 +90,74 @@ fn useful(c: char) -> bool {
     c.is_alphanumeric() || c.is_whitespace() || " -_.,!?&'\"()[]{}:/\\+*=#@%…–—’‘“”«»".contains(c)
 }
 
-/// A candidate decoding is plausible when it is printable, contains mostly
-/// Cyrillic letters, and does not mix in much Latin text (a CP1251 decode of
-/// genuine Latin-1 prose would).
+/// A candidate decoding is plausible when it is printable and its LETTERS
+/// do not mix scripts inside a word:
+///
+/// - every alphanumeric token must be pure Latin/ASCII or pure Cyrillic
+///   (mangled Latin-1 text such as `Йtй` alternates scripts mid-word);
+/// - at least one pure-Cyrillic word of two or more letters, or — for tags
+///   that are a single Cyrillic letter (`Я`) — no Latin letters at all.
+///
+/// Mixed-language titles stay valid because the mixing is per WORD
+/// (`DJ Slon feat. Песня`), which is exactly the common real-world shape.
 fn plausible(s: &str) -> bool {
-    let mut cyrillic = 0usize;
-    let mut foreign = 0usize;
-    for c in s.chars() {
-        if !useful(c) {
-            return false;
+    if !s.chars().all(useful) {
+        return false;
+    }
+    let mut cyrillic_letters = 0usize;
+    let mut latin_letters = 0usize;
+    let mut cyrillic_words = 0usize;
+    for word in s.split(|c: char| !c.is_alphanumeric()) {
+        if word.is_empty() {
+            continue;
         }
-        if c.is_alphabetic() {
-            if ('\u{0400}'..='\u{04FF}').contains(&c) {
-                cyrillic += 1;
+        let mut word_cyrillic = 0usize;
+        let mut word_latin = 0usize;
+        for c in word.chars() {
+            if !c.is_alphabetic() {
+                continue; // digits inside a token are fine
+            }
+            if is_cyrillic(c) {
+                word_cyrillic += 1;
             } else {
-                foreign += 1;
+                word_latin += 1;
             }
         }
+        if word_cyrillic > 0 && word_latin > 0 {
+            return false; // scripts alternate inside one word: corruption
+        }
+        cyrillic_letters += word_cyrillic;
+        latin_letters += word_latin;
+        if word_cyrillic >= 2 {
+            cyrillic_words += 1;
+        }
     }
-    let letters = cyrillic + foreign;
-    letters > 0 && cyrillic > 0 && foreign * 2 <= letters
+    cyrillic_words > 0 || (cyrillic_letters > 0 && latin_letters == 0)
 }
 
 /// Repair one tag string (title / artist / album / …). Returns the input
 /// unchanged unless a credible legacy-Cyrillic decoding exists.
 pub fn repair_tag_text(text: &str) -> Cow<'_, str> {
     let mut high = 0usize;
-    let mut visible = 0usize;
+    let mut letters = 0usize;
     for c in text.chars() {
         let cp = c as u32;
         if cp > 0xFF {
             // Already proper Unicode (or an unrecoverable wide-encoding mix).
             return Cow::Borrowed(text);
         }
-        if !c.is_whitespace() {
-            visible += 1;
+        if c.is_alphabetic() {
+            letters += 1;
         }
         if cp >= 0x80 {
             high += 1;
         }
     }
-    // Pure ASCII, or accents are only a minority of the text: not mojibake.
-    if high == 0 || visible == 0 || high * 2 < visible {
+    // Pure ASCII, or high bytes are only a fringe of the letters: not
+    // mojibake. The 25% bar counts LETTERS (not spaces/punctuation) so
+    // "DJ Slon feat. <mangled title>" shapes still get repaired while a
+    // single accent in a Latin name never does.
+    if high == 0 || letters == 0 || high * 4 < letters {
         return Cow::Borrowed(text);
     }
 
@@ -137,16 +174,31 @@ pub fn repair_tag_text(text: &str) -> Cow<'_, str> {
     }
 
     // 2) Legacy Cyrillic codepages. Single-byte encodings are total, so both
-    //    decodes always succeed; the frequency score picks the real one.
+    //    decodes always succeed; unigram frequency picks the real one. CP1251
+    //    and KOI8-R mirror each other and short tags can score close (a real
+    //    KOI8-R title measured 54.9 vs 53.3 for its CP1251 misdecode), so no
+    //    margin rule is applied — the corpus is overwhelmingly CP1251, and a
+    //    margin would reject genuine KOI8-R and mixed-prefix titles.
     let (cp1251, _, _) = WINDOWS_1251.decode(&bytes);
     let (koi8r, _, _) = KOI8_R.decode(&bytes);
-    let best = if score(&cp1251) >= score(&koi8r) {
-        cp1251
+    let cp_score = if plausible(&cp1251) {
+        score(&cp1251)
     } else {
-        koi8r
+        -1.0
     };
-    if plausible(&best) {
-        Cow::Owned(best.into_owned())
+    let koi_score = if plausible(&koi8r) {
+        score(&koi8r)
+    } else {
+        -1.0
+    };
+    let (best, best_score) = if cp_score >= koi_score {
+        (&cp1251, cp_score)
+    } else {
+        (&koi8r, koi_score)
+    };
+    // The floor rejects degenerate decodes (near-zero Russian frequency).
+    if best_score >= 0.5 {
+        Cow::Owned(best.as_ref().to_owned())
     } else {
         Cow::Borrowed(text)
     }
@@ -202,6 +254,46 @@ mod tests {
         let good = "DJ Песня";
         let garbled = cp1251(good);
         assert_eq!(repair_tag_text(&garbled), good);
+    }
+
+    #[test]
+    fn repairs_titles_behind_long_ascii_prefixes() {
+        // The common feature/collab shape: the Latin prefix is longer than
+        // the Cyrillic part, so a whitespace-wide dominance gate would miss
+        // exactly the tags this repair exists for.
+        for good in [
+            "DJ Slon feat. Песня",
+            "Bad Sector - Ангел",
+            "VA - Сборник 2004",
+        ] {
+            let garbled = cp1251(good);
+            assert_ne!(garbled, good, "fixture really is mojibake");
+            assert_eq!(repair_tag_text(&garbled), good);
+        }
+    }
+
+    #[test]
+    fn repairs_short_cyrillic_words() {
+        assert_eq!(repair_tag_text(&cp1251("Я")), "Я");
+        assert_eq!(repair_tag_text(&cp1251("Ёж")), "Ёж");
+    }
+
+    #[test]
+    fn keeps_mixed_script_false_positives() {
+        // A CP1251 decode of genuine accented Latin alternates scripts inside
+        // words ("Йtй"), which the plausibility gate rejects.
+        for name in [
+            "Été à Zürich",
+            "Hüsker Dü",
+            "Niño",
+            "Coração",
+            "Motörhead",
+            "Björk",
+            "Café",
+            "Über",
+        ] {
+            assert_eq!(repair_tag_text(name), name, "{name} must stay untouched");
+        }
     }
 
     #[test]
