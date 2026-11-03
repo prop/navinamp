@@ -74,6 +74,7 @@
   const HOLD_SEEK_END_MARGIN_SECS = 0.1;
   let holdTimer: ReturnType<typeof setInterval> | null = null;
   let holdTarget = 0;
+  let holdItemId: string | null = null;
 
   // Feed errors inside the queue module surface on the console: the visible
   // M1 log moved to the library window's DEV block, and cross-window log
@@ -170,8 +171,15 @@
     if (audio.status === "stopped" || (audio.durationSecs ?? 0) <= 0) return false;
 
     holdTarget = clampHoldTarget(audio.positionSecs);
+    holdItemId = queue.currentItem?.id ?? null;
     const tick = () => {
-      if (audio.status === "stopped" || (audio.durationSecs ?? 0) <= 0) {
+      // A gapless advance / explicit next-prev during the hold must not
+      // continue seeking inside the newly started track.
+      if (
+        audio.status === "stopped" ||
+        (audio.durationSecs ?? 0) <= 0 ||
+        (queue.currentItem?.id ?? null) !== holdItemId
+      ) {
         stopSeekHold();
         return;
       }
@@ -189,6 +197,9 @@
       void cmd("audio_seek", { secs: holdTarget });
     };
     // Arm the interval before the first tick so a boundary stop can clear it.
+    // The immediate step gives feedback as soon as the hold threshold is
+    // crossed; otherwise a quick hold-release would swallow the click and
+    // move nothing.
     holdTimer = setInterval(tick, HOLD_SEEK_TICK_MS);
     tick();
     return true;
@@ -199,6 +210,7 @@
       clearInterval(holdTimer);
       holdTimer = null;
     }
+    holdItemId = null;
     if (seeking != null) {
       seeking = null;
       void refresh();

@@ -172,6 +172,7 @@
     onpointerup={release}
     onpointercancel={cancelPress}
     onkeydown={(e) => {
+      // Keyboard activation stays a one-shot action; hold seek is pointer-only.
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
       if (o?.action) onaction(o.action);
