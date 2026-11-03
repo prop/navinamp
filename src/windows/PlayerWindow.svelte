@@ -77,6 +77,15 @@
   });
   let seeking = $state<number | null>(null);
 
+  // Long-press transport seek: 1s per 100ms tick while PREV/NEXT is held.
+  // The end margin keeps fast-forward from tripping TrackFinished.
+  const HOLD_SEEK_STEP_SECS = 1;
+  const HOLD_SEEK_TICK_MS = 100;
+  const HOLD_SEEK_END_MARGIN_SECS = 0.1;
+  let holdTimer: ReturnType<typeof setInterval> | null = null;
+  let holdTarget = 0;
+  let holdItemId: string | null = null;
+
   // Feed errors inside the queue module surface on the console: the visible
   // M1 log moved to the library window's DEV block, and cross-window log
   // relay is deliberately not part of the bus contract.
@@ -171,6 +180,91 @@
   function warnIpc(e: unknown): void {
     console.warn(`[navinamp] window ipc: ${e}`);
   }
+
+  // ── seeking (media keys / long-press transport) ──────────────────────────
+
+  /** Clamp a target into the current track, keeping a hair off the end. */
+  function clampHoldTarget(secs: number): number {
+    const total = audio.durationSecs ?? 0;
+    if (total <= 0) return 0;
+    return Math.min(Math.max(secs, 0), Math.max(0, total - HOLD_SEEK_END_MARGIN_SECS));
+  }
+
+  /** One-shot seek for OS media seek/scrub events. */
+  function seekTo(secs: number): void {
+    if (!Number.isFinite(secs) || duration <= 0 || audio.status === "stopped") return;
+    const target = Math.min(Math.max(secs, 0), duration);
+    void cmd("audio_seek", { secs: target });
+  }
+
+  function seekBy(deltaSecs: number): void {
+    if (!Number.isFinite(deltaSecs)) return;
+    seekTo(position + deltaSecs);
+  }
+
+  /**
+   * Start a press-and-hold seek. Returns false when the engine can't seek
+   * (stopped or unknown duration), letting the button fall back to a click.
+   */
+  function startSeekHold(action: string): boolean {
+    const normalized = action.trim().toUpperCase();
+    const delta = normalized === "NEXT" ? 1 : normalized === "PREV" ? -1 : 0;
+    if (delta === 0) return false;
+    if (holdTimer != null) return true;
+    if (audio.status === "stopped" || (audio.durationSecs ?? 0) <= 0) return false;
+
+    holdTarget = clampHoldTarget(audio.positionSecs);
+    holdItemId = queue.currentItem?.id ?? null;
+    const tick = () => {
+      // A gapless advance / explicit next-prev during the hold must not
+      // continue seeking inside the newly started track.
+      if (
+        audio.status === "stopped" ||
+        (audio.durationSecs ?? 0) <= 0 ||
+        (queue.currentItem?.id ?? null) !== holdItemId
+      ) {
+        stopSeekHold();
+        return;
+      }
+      const next = clampHoldTarget(holdTarget + delta * HOLD_SEEK_STEP_SECS);
+      if (next === holdTarget) {
+        // At the track boundary: stop re-seeking and keep the position put.
+        if (holdTimer != null) {
+          clearInterval(holdTimer);
+          holdTimer = null;
+        }
+        return;
+      }
+      holdTarget = next;
+      seeking = holdTarget;
+      void cmd("audio_seek", { secs: holdTarget });
+    };
+    // Arm the interval before the first tick so a boundary stop can clear it.
+    // The immediate step gives feedback as soon as the hold threshold is
+    // crossed; otherwise a quick hold-release would swallow the click and
+    // move nothing.
+    holdTimer = setInterval(tick, HOLD_SEEK_TICK_MS);
+    tick();
+    return true;
+  }
+
+  function stopSeekHold(): void {
+    if (holdTimer != null) {
+      clearInterval(holdTimer);
+      holdTimer = null;
+    }
+    holdItemId = null;
+    if (seeking != null) {
+      seeking = null;
+      void refresh();
+    }
+  }
+
+  // A blurred window loses the pointer-up; never leave a seek loop running.
+  $effect(() => {
+    window.addEventListener("blur", stopSeekHold);
+    return () => window.removeEventListener("blur", stopSeekHold);
+  });
 
   // Multi-select audio dialog for EJECT.
   async function pickAudioPaths(): Promise<string[]> {
@@ -343,7 +437,8 @@
   }
 
   // Media keys / DEV transport route through the same executor, so PLAY
-  // resumes-when-paused exactly like the skin's play button.
+  // resumes-when-paused exactly like the skin's play button. OS seek events
+  // (remote seek buttons / scrubbers) are absolute or relative seeks.
   const MEDIA_TO_ACTION: Record<string, string> = {
     play: "PLAY",
     pause: "PAUSE",
@@ -351,7 +446,17 @@
     next: "NEXT",
     prev: "PREV",
   };
-  setMediaCommandExecutor((c) => skinAction(MEDIA_TO_ACTION[c]));
+  setMediaCommandExecutor((c, secs) => {
+    if (c === "seekBy") {
+      seekBy(secs ?? 0);
+      return;
+    }
+    if (c === "seekTo") {
+      seekTo(secs ?? 0);
+      return;
+    }
+    skinAction(MEDIA_TO_ACTION[c]);
+  });
 
   // ── OS media metadata (M6b) ─────────────────────────────────────────────
   // Pushed on track change (forced) and on ~1 Hz position ticks; playing
@@ -423,6 +528,8 @@
       sampleRateHz={audio.sampleRateHz}
       channels={audio.channels}
       onaction={skinAction}
+      onholdstart={startSeekHold}
+      onholdend={() => stopSeekHold()}
       onseek={(secs) => cmd("audio_seek", { secs })}
       onvolume={(v) => cmd("audio_set_volume", { volume: v })}
     />

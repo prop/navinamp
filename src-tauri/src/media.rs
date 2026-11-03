@@ -4,7 +4,8 @@
 //!
 //! The player window pushes state through two commands; hardware/OS
 //! controls come back as the `media-command` event
-//! (`{ command: "play" | "pause" | "stop" | "next" | "prev" }`), which the
+//! (`{ command: "play" | "pause" | "stop" | "next" | "prev" }`, plus
+//! `seekBy`/`seekTo` with a `secs` field for OS seek events), which the
 //! player window treats like a skin action.
 //!
 //! ## Construction (lazy, never fatal)
@@ -42,11 +43,23 @@ use std::time::Duration;
 use serde::Serialize;
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
+    SeekDirection,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Position pushes are coarsened to whole-ish seconds.
 const POSITION_PUSH_SECS: f64 = 1.0;
+
+/// `souvlaki`'s undetermined Seek events move by this many seconds.
+const MEDIA_SEEK_STEP_SECS: f64 = 5.0;
+
+/// A media event mapped to the frontend `media-command` contract.
+#[derive(Debug, PartialEq)]
+struct MappedCommand {
+    command: &'static str,
+    /// Present only for `seekBy` (signed delta) / `seekTo` (absolute).
+    secs: Option<f64>,
+}
 
 /// MPRIS identity on Linux (D-Bus name rules: alnum + dots).
 const DBUS_NAME: &str = "com.prop.navinamp";
@@ -111,20 +124,40 @@ fn playback_dirty(old: Option<&Snapshot>, new: &Snapshot) -> bool {
 }
 
 /// Map an OS media event to a contract command. `Toggle` (the play/pause
-/// key on many keyboards) resolves against the last-known playing state;
-/// everything else the player cannot express yet (seek, volume, …) is
-/// dropped — see the report notes.
-fn map_event(event: &MediaControlEvent, playing: Option<bool>) -> Option<&'static str> {
+/// key on many keyboards) resolves against the last-known playing state.
+/// Seek / SeekBy / SetPosition become relative or absolute seeks; events
+/// the player cannot express (volume, shuffle, open-uri, …) are dropped.
+fn map_event(event: &MediaControlEvent, playing: Option<bool>) -> Option<MappedCommand> {
+    let command = |command| MappedCommand {
+        command,
+        secs: None,
+    };
+    let seek_by = |secs| MappedCommand {
+        command: "seekBy",
+        secs: Some(secs),
+    };
     match event {
-        MediaControlEvent::Play => Some("play"),
-        MediaControlEvent::Pause => Some("pause"),
-        MediaControlEvent::Stop => Some("stop"),
-        MediaControlEvent::Next => Some("next"),
-        MediaControlEvent::Previous => Some("prev"),
+        MediaControlEvent::Play => Some(command("play")),
+        MediaControlEvent::Pause => Some(command("pause")),
+        MediaControlEvent::Stop => Some(command("stop")),
+        MediaControlEvent::Next => Some(command("next")),
+        MediaControlEvent::Previous => Some(command("prev")),
         MediaControlEvent::Toggle => match playing {
-            Some(true) => Some("pause"),
-            _ => Some("play"),
+            Some(true) => Some(command("pause")),
+            _ => Some(command("play")),
         },
+        MediaControlEvent::Seek(SeekDirection::Forward) => Some(seek_by(MEDIA_SEEK_STEP_SECS)),
+        MediaControlEvent::Seek(SeekDirection::Backward) => Some(seek_by(-MEDIA_SEEK_STEP_SECS)),
+        MediaControlEvent::SeekBy(SeekDirection::Forward, delta) => {
+            Some(seek_by(delta.as_secs_f64()))
+        }
+        MediaControlEvent::SeekBy(SeekDirection::Backward, delta) => {
+            Some(seek_by(-delta.as_secs_f64()))
+        }
+        MediaControlEvent::SetPosition(MediaPosition(position)) => Some(MappedCommand {
+            command: "seekTo",
+            secs: Some(position.as_secs_f64()),
+        }),
         _ => None,
     }
 }
@@ -185,8 +218,14 @@ fn on_media_event(app: &AppHandle, event: MediaControlEvent) {
         .lock()
         .map(|inner| inner.snap.playing)
         .unwrap_or(None);
-    if let Some(command) = map_event(&event, playing) {
-        let _ = app.emit("media-command", MediaCommandPayload { command });
+    if let Some(mapped) = map_event(&event, playing) {
+        let _ = app.emit(
+            "media-command",
+            MediaCommandPayload {
+                command: mapped.command,
+                secs: mapped.secs,
+            },
+        );
     }
 }
 
@@ -233,8 +272,10 @@ fn push_playback(inner: &mut MediaInner) {
 // -- IPC commands ---------------------------------------------------------------
 
 #[derive(Serialize, Clone)]
-struct MediaCommandPayload<'a> {
-    command: &'a str,
+struct MediaCommandPayload {
+    command: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secs: Option<f64>,
 }
 
 /// Push track metadata + position from the player window. Position updates
@@ -301,6 +342,10 @@ mod tests {
         }
     }
 
+    fn mapped(command: &'static str, secs: Option<f64>) -> Option<MappedCommand> {
+        Some(MappedCommand { command, secs })
+    }
+
     #[test]
     fn metadata_dirty_detects_field_changes() {
         let old = snap(None, None);
@@ -351,38 +396,84 @@ mod tests {
 
     #[test]
     fn map_event_covers_contract_commands() {
-        assert_eq!(map_event(&MediaControlEvent::Play, None), Some("play"));
-        assert_eq!(map_event(&MediaControlEvent::Pause, None), Some("pause"));
-        assert_eq!(map_event(&MediaControlEvent::Stop, None), Some("stop"));
-        assert_eq!(map_event(&MediaControlEvent::Next, None), Some("next"));
-        assert_eq!(map_event(&MediaControlEvent::Previous, None), Some("prev"));
+        assert_eq!(
+            map_event(&MediaControlEvent::Play, None),
+            mapped("play", None)
+        );
+        assert_eq!(
+            map_event(&MediaControlEvent::Pause, None),
+            mapped("pause", None)
+        );
+        assert_eq!(
+            map_event(&MediaControlEvent::Stop, None),
+            mapped("stop", None)
+        );
+        assert_eq!(
+            map_event(&MediaControlEvent::Next, None),
+            mapped("next", None)
+        );
+        assert_eq!(
+            map_event(&MediaControlEvent::Previous, None),
+            mapped("prev", None)
+        );
     }
 
     #[test]
     fn map_event_toggle_resolves_against_playing_state() {
         assert_eq!(
             map_event(&MediaControlEvent::Toggle, Some(true)),
-            Some("pause")
+            mapped("pause", None)
         );
         assert_eq!(
             map_event(&MediaControlEvent::Toggle, Some(false)),
-            Some("play")
+            mapped("play", None)
         );
-        assert_eq!(map_event(&MediaControlEvent::Toggle, None), Some("play"));
+        assert_eq!(
+            map_event(&MediaControlEvent::Toggle, None),
+            mapped("play", None)
+        );
+    }
+
+    #[test]
+    fn map_event_converts_os_seeks() {
+        assert_eq!(
+            map_event(&MediaControlEvent::Seek(SeekDirection::Forward), None),
+            mapped("seekBy", Some(MEDIA_SEEK_STEP_SECS))
+        );
+        assert_eq!(
+            map_event(&MediaControlEvent::Seek(SeekDirection::Backward), None),
+            mapped("seekBy", Some(-MEDIA_SEEK_STEP_SECS))
+        );
+        assert_eq!(
+            map_event(
+                &MediaControlEvent::SeekBy(SeekDirection::Forward, Duration::from_millis(2500)),
+                None
+            ),
+            mapped("seekBy", Some(2.5))
+        );
+        assert_eq!(
+            map_event(
+                &MediaControlEvent::SeekBy(SeekDirection::Backward, Duration::from_secs(10)),
+                None
+            ),
+            mapped("seekBy", Some(-10.0))
+        );
+        assert_eq!(
+            map_event(
+                &MediaControlEvent::SetPosition(MediaPosition(Duration::from_secs(42))),
+                None
+            ),
+            mapped("seekTo", Some(42.0))
+        );
     }
 
     #[test]
     fn map_event_drops_unmapped_events() {
+        assert_eq!(map_event(&MediaControlEvent::SetVolume(0.5), None), None);
+        assert_eq!(map_event(&MediaControlEvent::SetShuffle(true), None), None);
         assert_eq!(
             map_event(
-                &MediaControlEvent::Seek(souvlaki::SeekDirection::Forward),
-                None
-            ),
-            None
-        );
-        assert_eq!(
-            map_event(
-                &MediaControlEvent::SetPosition(MediaPosition(Duration::from_secs(3))),
+                &MediaControlEvent::OpenUri("https://example.test".into()),
                 None
             ),
             None

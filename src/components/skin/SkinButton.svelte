@@ -11,7 +11,14 @@
    * skin's dedicated active cell (`params["activeimage"]`, shufrep.bmp's
    * third row) stays rendered — the lit glyph, not the momentary pressed
    * one. Skins without an activeimage fall back to downimage.
+   *
+   * Transport buttons can also be held: after HOLD_DELAY_MS the component
+   * reports `onholdstart` and suppresses the eventual click; `onholdend`
+   * fires on release/cancel. A hold that the owner declines (false) falls
+   * back to a normal click.
    */
+  import { onDestroy } from "svelte";
+
   import type { ResolvedObject } from "../../lib/skin/resolver";
 
   interface Props {
@@ -20,9 +27,48 @@
     onaction: (action: string) => void;
     /** Toggle active (SkinSurface maps the action to the App's state). */
     toggled?: boolean;
+    /** Whether this action has press-and-hold behavior (PREV/NEXT). */
+    holdable?: boolean;
+    /** Begin a hold; return false when the owner can't seek right now. */
+    onholdstart?: (action: string) => boolean;
+    /** End a hold that actually started. */
+    onholdend?: (action: string) => void;
   }
 
-  let { obj, images, onaction, toggled = false }: Props = $props();
+  let {
+    obj,
+    images,
+    onaction,
+    toggled = false,
+    holdable = false,
+    onholdstart,
+    onholdend,
+  }: Props = $props();
+
+  /** Delay before a press becomes a hold instead of a click. */
+  const HOLD_DELAY_MS = 250;
+
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  let holdActive = false;
+  let holdAction: string | null = null;
+
+  function clearHoldTimer(): void {
+    if (holdTimer != null) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  }
+
+  function endHold(): void {
+    const action = holdAction;
+    const wasHolding = holdActive;
+    holdAction = null;
+    holdActive = false;
+    clearHoldTimer();
+    if (wasHolding && action) onholdend?.(action);
+  }
+
+  onDestroy(endHold);
 
   const o = $derived(
     obj.object.kind === "button" || obj.object.kind === "togglebutton" ? obj.object : null,
@@ -30,6 +76,17 @@
 
   let hover = $state(false);
   let down = $state(false);
+
+  // Losing focus also loses the pointer-up; cancel a pending/active hold.
+  $effect(() => {
+    if (!holdable) return;
+    const cancel = () => {
+      down = false;
+      endHold();
+    };
+    window.addEventListener("blur", cancel);
+    return () => window.removeEventListener("blur", cancel);
+  });
 
   // The togglebutton's lit cell. The model has no typed `activeimage` (it
   // rides in `params`, where a Wasabi parser would keep unknown attributes).
@@ -52,11 +109,33 @@
     down = true;
     // Capture so the press tracks even if the pointer leaves the button.
     e.currentTarget.setPointerCapture(e.pointerId);
+    const action = o?.action;
+    if (!holdable || !action || !onholdstart || !onholdend) return;
+    clearHoldTimer();
+    holdAction = action;
+    holdActive = false;
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      if (holdAction !== action) return;
+      // The owner may refuse (stopped engine, unknown duration); in that
+      // case leave holdActive false so release still performs the click.
+      holdActive = onholdstart(action) === true;
+    }, HOLD_DELAY_MS);
   }
 
   function release(e: PointerEvent & { currentTarget: HTMLElement }) {
     if (!down) return;
     down = false;
+    const action = holdAction;
+    const wasHolding = holdActive;
+    holdAction = null;
+    holdActive = false;
+    clearHoldTimer();
+    if (wasHolding && action) {
+      // A completed hold is a seek gesture, not a track change.
+      onholdend?.(action);
+      return;
+    }
     // Captured releases arrive here even outside the button; only fire when
     // the release point is actually inside.
     const r = e.currentTarget.getBoundingClientRect();
@@ -65,8 +144,13 @@
       e.clientX <= r.right &&
       e.clientY >= r.top &&
       e.clientY <= r.bottom;
-    const action = o?.action;
-    if (inside && action) onaction(action);
+    const clicked = o?.action;
+    if (inside && clicked) onaction(clicked);
+  }
+
+  function cancelPress(): void {
+    down = false;
+    endHold();
   }
 </script>
 
@@ -86,8 +170,9 @@
     onpointerleave={() => (hover = false)}
     onpointerdown={press}
     onpointerup={release}
-    onpointercancel={() => (down = false)}
+    onpointercancel={cancelPress}
     onkeydown={(e) => {
+      // Keyboard activation stays a one-shot action; hold seek is pointer-only.
       if (e.key !== "Enter" && e.key !== " ") return;
       e.preventDefault();
       if (o?.action) onaction(o.action);

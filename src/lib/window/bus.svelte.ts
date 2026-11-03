@@ -101,7 +101,15 @@ export interface QueueSnapshot {
   repeat: RepeatMode;
 }
 
-export type MediaCommand = "play" | "pause" | "stop" | "next" | "prev";
+/** `seekBy` carries a signed delta in `secs`; `seekTo` an absolute position. */
+export type MediaCommand =
+  | "play"
+  | "pause"
+  | "stop"
+  | "next"
+  | "prev"
+  | "seekBy"
+  | "seekTo";
 
 /** Apply one intent to the local queue — only meaningful in the player. */
 export function applyQueueIntent(intent: QueueIntent): void {
@@ -254,20 +262,22 @@ export function playerLayoutMode(): "normal" | "shade" {
 
 // ── media commands (media keys / DEV transport) ────────────────────────────
 
-let mediaExecutor: ((command: MediaCommand) => void) | null = null;
+let mediaExecutor: ((command: MediaCommand, secs?: number) => void) | null = null;
 
 /**
  * Player-side hook: how to run media commands. Wired to the SAME executor
  * as the skin's action buttons so PLAY/PAUSE keep their resume-vs-restart
  * semantics no matter where the command originated.
  */
-export function setMediaCommandExecutor(fn: (command: MediaCommand) => void): void {
+export function setMediaCommandExecutor(
+  fn: (command: MediaCommand, secs?: number) => void,
+): void {
   mediaExecutor = fn;
 }
 
 /** Frontend→frontend transport command (the library's DEV block uses it). */
-export function emitMediaCommand(command: MediaCommand): void {
-  void emit("media-command", { command });
+export function emitMediaCommand(command: MediaCommand, secs?: number): void {
+  void emit("media-command", secs == null ? { command } : { command, secs });
 }
 
 // ── snapshot plumbing ──────────────────────────────────────────────────────
@@ -382,11 +392,14 @@ export function initWindowBus(): void {
       if (ev.payload?.relayed !== true) return;
       broadcastSkinTheme();
     });
-    // Media keys / DEV transport → the skin's action executor.
-    void listen<{ command: MediaCommand }>("media-command", (ev) => {
+    // Media keys / DEV transport / OS seek → the skin's action executor.
+    void listen<{ command: MediaCommand; secs?: number }>("media-command", (ev) => {
       const c = ev.payload?.command;
       if (c === "play" || c === "pause" || c === "stop" || c === "next" || c === "prev") {
         mediaExecutor?.(c);
+      } else if (c === "seekBy" || c === "seekTo") {
+        const secs = ev.payload?.secs;
+        if (typeof secs === "number" && Number.isFinite(secs)) mediaExecutor?.(c, secs);
       }
     });
     // Heal: another window may have been focused before our listeners

@@ -61,6 +61,10 @@
      */
     eq?: EqLive | null;
     onaction: (action: string) => void;
+    /** Press-and-hold start (transport buttons only). */
+    onholdstart?: (action: string) => boolean;
+    /** Press-and-hold end after a started hold. */
+    onholdend?: (action: string) => void;
     onseek?: (secs: number) => void;
     onvolume?: (v: number) => void;
     /**
@@ -90,10 +94,20 @@
     repeatOn = false,
     eq = null,
     onaction,
+    onholdstart,
+    onholdend,
     onseek,
     onvolume,
     oneqset,
   }: Props = $props();
+
+  /** Transport actions that rewind/fast-forward while held. */
+  const HOLD_ACTIONS = new Set(["PREV", "NEXT"]);
+
+  function holdable(object: GuiObject): boolean {
+    if (object.kind !== "button") return false;
+    return HOLD_ACTIONS.has((object.action ?? "").trim().toUpperCase());
+  }
 
   // Per-slider wiring, decided by the Wasabi `action` attribute. The helpers
   // take a GuiObject (templates cannot keep narrowing inside callbacks) and
@@ -204,7 +218,15 @@
           <SkinEqCurve {obj} {eq} />
         {/if}
       {:else if obj.object.kind === "button" || obj.object.kind === "togglebutton"}
-        <SkinButton {obj} images={layout.images} {onaction} toggled={toggleState(obj.object)} />
+        <SkinButton
+          {obj}
+          images={layout.images}
+          {onaction}
+          toggled={toggleState(obj.object)}
+          holdable={holdable(obj.object)}
+          {onholdstart}
+          {onholdend}
+        />
       {:else if obj.object.kind === "slider"}
         <SkinSlider
           {obj}
