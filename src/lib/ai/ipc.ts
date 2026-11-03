@@ -8,6 +8,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import type { SmartViewDef } from "../library/ipc";
 
 export type AiProviderKind = "openAiCompatible" | "anthropic";
@@ -204,4 +205,19 @@ export function aiSearch(
   baseDef: SmartViewDef | null = null,
 ): Promise<AiSearchReport> {
   return invoke<AiSearchReport>("ai_search", { prompt, baseDef });
+}
+
+/**
+ * Deterministic offline rules search — never contacts a provider. Used by the
+ * onboarding AI demo so it works with zero configuration and no network.
+ */
+export function aiOfflineSearch(prompt: string): Promise<AiSearchReport> {
+  return invoke<AiSearchReport>("ai_offline_search", { prompt });
+}
+
+/** Broadcast after the onboarding wizard saves ai.json (all windows). */
+export const AI_CONFIG_EVENT = "ai-config-changed";
+
+export function notifyAiConfigChanged(): Promise<void> {
+  return emit(AI_CONFIG_EVENT);
 }
