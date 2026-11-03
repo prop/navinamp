@@ -70,7 +70,7 @@
       const target = event.target as HTMLElement | null;
       const editing =
         target?.closest("input, textarea, select, [contenteditable='true']") != null;
-      if (event.key === "Escape") {
+      if (!editing && event.key === "Escape") {
         event.preventDefault();
         onclose();
       } else if (!editing && event.key === "ArrowRight" && !isPanel && !isLast) {
@@ -93,15 +93,28 @@
 <div
   class="overlay"
   class:centered={!targetRect}
-  class:with-hole={targetRect != null}
   role="dialog"
   aria-modal="true"
   aria-label={tour.title}>
   {#if targetRect}
+    <!-- Four scrim rectangles leave a real, click-through hole around the
+         target. A clip-path or a higher hole layer is less portable. -->
+    <div class="scrim top" style="height:{Math.max(0, targetRect.top - 3)}px"></div>
+    <div
+      class="scrim bottom"
+      style="top:{targetRect.top + targetRect.height + 3}px"></div>
+    <div
+      class="scrim left"
+      style="top:{Math.max(0, targetRect.top - 3)}px; width:{Math.max(0, targetRect.left - 3)}px; height:{targetRect.height + 6}px"></div>
+    <div
+      class="scrim right"
+      style="top:{Math.max(0, targetRect.top - 3)}px; left:{targetRect.left + targetRect.width + 3}px; height:{targetRect.height + 6}px"></div>
     <div
       class="hole"
-      style="left:{targetRect.left - 3}px; top:{targetRect.top - 3}px; width:{targetRect.width + 6}px; height:{targetRect.height + 6}px">
+      style="left:{Math.max(0, targetRect.left - 3)}px; top:{Math.max(0, targetRect.top - 3)}px; width:{targetRect.width + 6}px; height:{targetRect.height + 6}px">
     </div>
+  {:else}
+    <div class="scrim full"></div>
   {/if}
 
   <div class="card" class:centered={!targetRect} tabindex="-1">
@@ -147,16 +160,42 @@
     justify-content: center;
     padding: 12px;
     box-sizing: border-box;
-    background: rgba(0, 0, 0, 0.55);
-    pointer-events: auto;
+    pointer-events: none;
   }
 
   .overlay.centered {
     align-items: center;
   }
 
-  .overlay.with-hole {
-    background: transparent;
+  .scrim {
+    position: fixed;
+    z-index: 80;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: auto;
+  }
+
+  .scrim.full {
+    inset: 0;
+  }
+
+  .scrim.top {
+    left: 0;
+    right: 0;
+    top: 0;
+  }
+
+  .scrim.bottom {
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+
+  .scrim.left {
+    left: 0;
+  }
+
+  .scrim.right {
+    right: 0;
   }
 
   .hole {
@@ -164,7 +203,6 @@
     z-index: 81;
     border: 2px solid #3ccb4e;
     border-radius: 3px;
-    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
     pointer-events: none;
   }
 
@@ -172,6 +210,7 @@
     position: relative;
     z-index: 82;
     width: min(560px, calc(100% - 8px));
+    pointer-events: auto;
     max-height: calc(100% - 4px);
     overflow-y: auto;
     box-sizing: border-box;

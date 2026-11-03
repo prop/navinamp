@@ -27,6 +27,7 @@
   function start(id: string, index = 0): void {
     const tour = tourById(id);
     if (!tour) return;
+    if (active != null && active.tour.id === id && active.index === index) return;
     onensurelibrary?.();
     clearPendingLaunch();
     active = {

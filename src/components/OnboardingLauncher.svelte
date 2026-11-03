@@ -44,11 +44,10 @@
     })();
   });
 
-  function startWelcome(): void {
-    markVersionSeen(version);
+  async function startWelcome(): Promise<void> {
+    const shown = await launchTour("welcome.v1", 1);
+    if (shown) markVersionSeen(version);
     mode = null;
-    // The player card is the welcome; start at the tour's search-bar step.
-    launchTour("welcome.v1", 1);
   }
 
   function skipWelcome(): void {
@@ -57,12 +56,14 @@
     mode = null;
   }
 
-  function startUpdate(): void {
-    const tour = pending[pending.length - 1];
+  async function startUpdate(): Promise<void> {
+    const tour = pending[0];
     if (tour == null) return;
-    markVersionSeen(version);
+    const shown = await launchTour(tour.id, 0);
+    // With more than one pending tour, keep seenVersion unchanged so the next
+    // one can be offered after this one is completed or dismissed.
+    if (shown && pending.length === 1) markVersionSeen(version);
     mode = null;
-    launchTour(tour.id, 0);
   }
 
   function dismissUpdate(): void {

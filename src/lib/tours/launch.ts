@@ -19,15 +19,21 @@ export interface TourLaunch {
 }
 
 /** Open the library and start a tour there (player/what's-new entry point). */
-export function launchTour(id: string, index = 0): void {
+export async function launchTour(id: string, index = 0): Promise<boolean> {
   const payload: TourLaunch = { id, index };
   try {
     localStorage.setItem(PENDING_KEY, JSON.stringify(payload));
   } catch {
     // storage-less webview: the event still covers an already-open library
   }
-  void windowSetVisible("library", true).catch(() => undefined);
+  let shown = true;
+  try {
+    await windowSetVisible("library", true);
+  } catch {
+    shown = false;
+  }
   void emit(TOUR_EVENT, payload);
+  return shown;
 }
 
 /** Start a tour from inside the library (replay button). */
