@@ -6,6 +6,7 @@ description = "NaVinaMP music library: incremental SQLite/FTS5 scanner + queries
 license = "MIT"
 
 [dependencies]
+encoding_rs = "0.8"
 lofty = "0.25"
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

@@ -14,6 +14,12 @@
 //! - `smart_views` stores Smart View definitions as JSON blobs (see
 //!   `smart.rs`); the scanner never touches it.
 
+use std::borrow::Cow;
+
+use rusqlite::OptionalExtension;
+
+use crate::text::repair_tag_text;
+
 /// Applies the full schema, idempotently. Adds columns introduced after the
 /// first release to databases created by older builds (`CREATE TABLE IF NOT
 /// EXISTS` never alters an existing table).
@@ -66,6 +72,102 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
              DROP TABLE smart_view_playlists_legacy;",
         )?;
     }
+    repair_legacy_tag_text(conn)?;
+    Ok(())
+}
+
+/// One-shot repair of tag text stored before charset recovery existed:
+/// legacy ID3v1 / ISO-8859-1 ID3v2 tags often carry CP1251 or KOI8-R bytes,
+/// which arrive Latin-1-mapped (`Ïåñíÿ î ëþáâè`). The scanner repairs new
+/// reads (`text.rs`); this heals rows already in the database, which an
+/// incremental rescan would skip (unchanged mtime/size).
+///
+/// Marker-guarded via `meta` so it runs exactly once per database. Local
+/// rows only: remote/Navidrome text comes from the server as UTF-8 and has a
+/// different trust boundary. The FTS update trigger keeps the search index
+/// in step with the rewrites.
+fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    const MARK: &str = "text_charset_repair_v1";
+    let done = conn
+        .query_row("SELECT 1 FROM meta WHERE key = ?1", [MARK], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if done {
+        return Ok(());
+    }
+
+    struct Fixed {
+        id: i64,
+        title: String,
+        artist: String,
+        album_artist: String,
+        album: String,
+        album_key: String,
+        genre: String,
+    }
+
+    let mut fixed: Vec<Fixed> = Vec::new();
+    {
+        let mut select = conn.prepare(
+            "SELECT id, title, artist, album_artist, album, genre
+               FROM tracks WHERE source = 'local'",
+        )?;
+        let mut rows = select.query([])?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let raw_title: String = row.get(1)?;
+            let raw_artist: String = row.get(2)?;
+            let raw_album_artist: String = row.get(3)?;
+            let raw_album: String = row.get(4)?;
+            let raw_genre: String = row.get(5)?;
+            let title = repair_tag_text(&raw_title);
+            let artist = repair_tag_text(&raw_artist);
+            let album_artist = repair_tag_text(&raw_album_artist);
+            let album = repair_tag_text(&raw_album);
+            let genre = repair_tag_text(&raw_genre);
+            let changed = [&title, &artist, &album_artist, &album, &genre]
+                .iter()
+                .any(|c| matches!(c, Cow::Owned(_)));
+            if !changed {
+                continue;
+            }
+            fixed.push(Fixed {
+                id,
+                album_key: crate::scanner::album_key(&album_artist, &artist, &album),
+                title: title.into_owned(),
+                artist: artist.into_owned(),
+                album_artist: album_artist.into_owned(),
+                album: album.into_owned(),
+                genre: genre.into_owned(),
+            });
+        }
+    }
+
+    if !fixed.is_empty() {
+        let mut update = conn.prepare(
+            "UPDATE tracks
+                SET title = ?2, artist = ?3, album_artist = ?4, album = ?5,
+                    album_key = ?6, genre = ?7
+              WHERE id = ?1",
+        )?;
+        for f in &fixed {
+            update.execute(rusqlite::params![
+                f.id,
+                f.title,
+                f.artist,
+                f.album_artist,
+                f.album,
+                f.album_key,
+                f.genre
+            ])?;
+        }
+    }
+
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES(?1, 'done')
+         ON CONFLICT(key) DO UPDATE SET value = 'done'",
+        [MARK],
+    )?;
     Ok(())
 }
 
@@ -178,3 +280,54 @@ CREATE TRIGGER IF NOT EXISTS tracks_fts_upd AFTER UPDATE ON tracks BEGIN
     VALUES (new.id, new.title, new.artist, new.album, new.genre, new.album_artist, new.path);
 END;
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repairs_existing_mojibake_rows_once() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        init(&conn).unwrap();
+
+        // Seed a row the way a pre-repair scanner stored it (CP1251 bytes
+        // mapped through Latin-1), then clear the marker so the pass runs.
+        let (bytes, _, _) = encoding_rs::WINDOWS_1251.encode("Песня о любви");
+        let garbled: String = bytes.iter().map(|b| char::from(*b)).collect();
+        conn.execute(
+            "INSERT INTO tracks
+                (path, mtime, size, title, artist, album, album_key, genre, date_added)
+             VALUES ('/a.mp3', 0, 0, ?1, ?2, ?3, '', '', 0)",
+            rusqlite::params![garbled, garbled, garbled],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM meta WHERE key = 'text_charset_repair_v1'", [])
+            .unwrap();
+
+        repair_legacy_tag_text(&conn).unwrap();
+
+        let (title, artist, album, key): (String, String, String, String) = conn
+            .query_row(
+                "SELECT title, artist, album, album_key FROM tracks",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Песня о любви");
+        assert_eq!(artist, "Песня о любви");
+        assert_eq!(album, "Песня о любви");
+        assert_eq!(
+            key,
+            crate::scanner::album_key("", "Песня о любви", "Песня о любви")
+        );
+
+        // Marker set: a later damaged row is not touched by a second run.
+        conn.execute("UPDATE tracks SET title = 'oops'", [])
+            .unwrap();
+        repair_legacy_tag_text(&conn).unwrap();
+        let title: String = conn
+            .query_row("SELECT title FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "oops");
+    }
+}

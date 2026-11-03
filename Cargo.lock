@@ -2696,6 +2696,7 @@ dependencies = [
 name = "navinamp-library"
 version = "0.9.0"
 dependencies = [
+ "encoding_rs",
  "lofty",
  "rusqlite",
  "serde",

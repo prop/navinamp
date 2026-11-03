@@ -62,6 +62,7 @@ mod remote;
 mod scanner;
 mod schema;
 mod smart;
+mod text;
 
 pub use model::{
     Album, LibraryStats, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress, ScanReport,
