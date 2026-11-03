@@ -34,6 +34,7 @@
    * friendly inline notes via `friendlyIpcError` — never a crash.
    */
   import { open } from "@tauri-apps/plugin-dialog";
+  import { listen } from "@tauri-apps/api/event";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import SmartViewEditor from "./SmartViewEditor.svelte";
   import AdvancedSearch from "./AdvancedSearch.svelte";
@@ -45,6 +46,7 @@
     rememberEq,
   } from "../lib/audio/auto";
   import {
+    AI_CONFIG_EVENT,
     aiGetConfig,
     aiSearch,
     type AiConfig,
@@ -100,6 +102,7 @@
     type NavidromeSyncReport,
   } from "../lib/navidrome/ipc";
   import NavidromeSettings from "./NavidromeSettings.svelte";
+  import { startTourHere } from "../lib/tours/launch";
   import type { QueueItemMeta } from "../lib/player/queue.svelte";
 
   interface Props {
@@ -333,6 +336,17 @@
 
   $effect(() => {
     void refreshAiConfig();
+  });
+
+  // The onboarding wizard saves ai.json from the library window's TourHost;
+  // reflect the enabled state in the AI mode row immediately.
+  $effect(() => {
+    const unlisten = listen(AI_CONFIG_EVENT, () => {
+      void refreshAiConfig();
+    }).catch(() => () => undefined);
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
   });
 
   function switchMode(mode: SearchMode): void {
@@ -1919,6 +1933,9 @@
       title="AI search provider, model and Discogs token">
       AI
     </button>
+    <button class="hdrbtn" onclick={() => startTourHere("welcome.v1")} title="replay the welcome tour">
+      TOUR
+    </button>
   </header>
 
   <!-- TASK 3: scan management strip -->
@@ -1941,7 +1958,7 @@
   </div>
 
   <!-- search deck: three modes, then the shared result table below -->
-  <div class="searchbar">
+  <div class="searchbar" data-tour="search">
     <div class="modes" role="group" aria-label="search mode">
       <button
         class="mode"
@@ -1955,6 +1972,7 @@
         title="field-by-field rules (album, artist, year, rating, path…)">ADVANCED</button>
       <button
         class="mode"
+        data-tour="ai-mode"
         class:on={searchMode === "ai"}
         onclick={() => switchMode("ai")}
         title="describe the music you want; the model builds the rules">AI</button>

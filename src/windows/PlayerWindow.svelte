@@ -30,6 +30,7 @@
   } from "@tauri-apps/plugin-notification";
 
   import SkinSurface from "../components/skin/SkinSurface.svelte";
+  import OnboardingLauncher from "../components/OnboardingLauncher.svelte";
   import { queue, isAudioPath } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
   import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
@@ -567,6 +568,8 @@
       </button>
     </div>
   {/if}
+
+  <OnboardingLauncher />
 </div>
 
 <style>

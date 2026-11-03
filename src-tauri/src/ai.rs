@@ -585,6 +585,21 @@ pub async fn ai_search(
     ))
 }
 
+/// Deterministic offline search — the onboarding AI demo uses this so the
+/// demo never depends on a configured provider or makes a network call.
+#[tauri::command]
+pub fn ai_offline_search(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    prompt: String,
+) -> Result<AiSearchReport, String> {
+    let clean = prompt.trim();
+    if clean.is_empty() {
+        return Err("enter a search prompt first".into());
+    }
+    offline_search(&app, &state, clean, None)
+}
+
 /// Local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp, a LAN box)
 /// legitimately run without an API key.
 ///

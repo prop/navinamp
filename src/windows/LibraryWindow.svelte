@@ -27,6 +27,7 @@
   import EqPanel from "../components/EqPanel.svelte";
   import MediaLibrary from "../components/MediaLibrary.svelte";
   import TabStrip from "../components/TabStrip.svelte";
+  import TourHost from "../components/TourHost.svelte";
   import {
     POPULAR_PROGRESS_EVENT,
     chooseSkin,
@@ -456,6 +457,8 @@
       </div>
     </section>
   {/if}
+
+  <TourHost onensurelibrary={() => (tab = "library")} />
 </div>
 
 <style>

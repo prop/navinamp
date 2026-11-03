@@ -65,6 +65,7 @@ pub fn run() {
             ai::ai_test,
             ai::ai_models,
             ai::ai_search,
+            ai::ai_offline_search,
             audio::eq_set_enabled,
             audio::eq_set_preamp,
             audio::eq_set_band,
