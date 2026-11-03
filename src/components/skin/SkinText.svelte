@@ -194,6 +194,35 @@
   /** What the glyph path draws: padded time, otherwise the shared content. */
   const glyphContent = $derived((o?.display === "time" ? glyphTime : content));
 
+  /**
+   * Text the glyph renderer actually blits: the numbers charmap has no
+   * colon cell (the classic time skips it), so coverage is checked against
+   * the drawn characters.
+   */
+  const coverageText = $derived(
+    o?.display === "time" && charset !== "classic-text"
+      ? glyphContent.replace(":", "")
+      : glyphContent,
+  );
+
+  /**
+   * Whether the bitmap font can represent the text: every non-space char
+   * needs a cell (after foldLower/aliases). The classic text.bmp has no
+   * Cyrillic (or CJK/emoji) glyphs, so repaired UTF-8 titles would render as
+   * blanks — those objects fall back to the HTML path instead.
+   */
+  const glyphsFit = $derived.by(() => {
+    const f = font;
+    if (!f) return false;
+    for (const ch of coverageText) {
+      if (ch === " " || ch === "\u00a0") continue;
+      if (!f.cell(ch)) return false;
+    }
+    return true;
+  });
+
+  const useGlyphs = $derived(font != null && glyphsFit);
+
   // ── bitmap-glyph canvas ────────────────────────────────────────────────────
 
   let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -301,7 +330,7 @@
     void content; // label drives the probe's width
     const box = boxEl;
     const probe = probeEl;
-    if (!marquee || font || !box || !probe) {
+    if (!marquee || useGlyphs || !box || !probe) {
       overflow = false;
       return;
     }
@@ -312,7 +341,7 @@
 
   // Scroll loop — only while a songticker actually overflows.
   $effect(() => {
-    if (!marquee || font || !overflow) return;
+    if (!marquee || useGlyphs || !overflow) return;
     let raf = 0;
     let last = performance.now();
     const step = (t: number) => {
@@ -330,7 +359,7 @@
 </script>
 
 {#if o}
-  {#if font}
+  {#if useGlyphs}
     <!-- Bitmap glyphs: one canvas per object; the surface scales it with
          image-rendering: pixelated, so 2x mode stays crisp. -->
     <canvas

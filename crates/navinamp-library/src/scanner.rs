@@ -16,6 +16,7 @@ use lofty::tag::{Accessor, ItemKey};
 
 use crate::art;
 use crate::model::{ScanFileError, ScanProgress, ScanReport};
+use crate::text::repair_tag_text;
 
 /// Audio extensions the scanner picks up (compared case-insensitively).
 /// Unknown extensions are skipped silently — a music folder is full of
@@ -147,6 +148,14 @@ fn read_track(path: &Path) -> Result<FreshTrack, String> {
             None,
         ),
     };
+    // Legacy Cyrillic tags (ID3v1 / ISO-8859-1 ID3v2 carrying CP1251 or
+    // KOI8-R bytes) arrive Latin-1-mapped; normalize before the album key is
+    // derived from them (see `text.rs`).
+    let title = repair_tag_text(&title).into_owned();
+    let artist = repair_tag_text(&artist).into_owned();
+    let album_artist = repair_tag_text(&album_artist).into_owned();
+    let album = repair_tag_text(&album).into_owned();
+    let genre = repair_tag_text(&genre).into_owned();
     let album_key = album_key(&album_artist, &artist, &album);
 
     Ok(FreshTrack {
