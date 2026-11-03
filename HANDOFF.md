@@ -1,18 +1,23 @@
 # NaVinaMP — current status & next steps
 
-> Handoff note for the next development session. Last updated: 2026-11-02,
-> after v0.9.0.
+> Handoff note for the next development session. Last updated: 2026-11-03,
+> after v0.10.0.
 
 ## State
 
-- All six roadmap milestones shipped. Latest release: **v0.9.0**
+- All six roadmap milestones shipped. Latest release: **v0.10.0**
   (dmg on the Releases page; built successfully by the cached self-hosted
-  runner — see the release-runner gotcha below).
+  runner after clearing a root-owned npm cache — see the gotchas below).
+  v0.10.0 dmg SHA-256: `1eb43a1a9710bd0182939eac7738677da777a49d6ca8a8f62d9e3f606764e506`.
 - Test suites green across six crates + frontend. Clippy/fmt clean.
 - Four windows: player (skinned), playlist editor, media library, EQ.
 
 ## Just shipped (v0.5.0 + master since)
 
+- **v0.10.0**: first-run onboarding tour + What's-new tours, offline AI search
+  demo and provider wizard, windowshade fold/unfold, desktop notifications and
+  the global now-playing shortcut, long-press transport seek, library tabs,
+  the curated popular-skins pack, and CP1251/KOI8-R tag repair.
 - **v0.8.0**: per-server Navidrome playlists + publish-target picker, sticky
   A–Z tree rails, the EQ AUTO curve manager, EQ clipping/headroom fix with
   Bass Boost, selection-aware row context menus and global Always on Top.
@@ -196,8 +201,8 @@
 ## Next up
 
 The backlog lives in GitHub issues — `gh issue list` (labels:
-`enhancement`, `bug`). Release-please has staged **0.10.0** (windowshade +
-AI setup copy polish).
+`enhancement`, `bug`). Nothing is staged for release right now; cut the next
+version when the next batch lands.
 
 ## Design notes & deferred
 
@@ -222,13 +227,17 @@ AI setup copy polish).
 - Deleting/re-pushing a release tag can detach the GitHub Release into an
   untagged draft. Re-publish it with
   `gh release edit vX.Y.Z --draft=false --tag vX.Y.Z`.
+- The self-hosted runner's npm cache can contain root-owned directories,
+  making `npm ci` fail with `EACCES ... _cacache`. Move it aside
+  (`mv ~/.npm/_cacache ~/.npm/_cacache.root-owned-backup`) and rerun the
+  failed release job; this is what unblocked v0.10.0.
 - Self-hosted mac-mini release builds: a cold tauri release build can
   starve the 2014 2-core/8 GB runner — rustc stalls its heartbeat for 10+
   minutes and GitHub cancels the job (later `CompleteJob` returns "job not
   found"). `ci.yml` caches the release target and caps
-  `CARGO_BUILD_JOBS=2`; v0.8.0 built, packaged and uploaded on the runner
-  in ~16 minutes this way. v0.7.0 predated the cache and needed a local
-  build. If a tag job still stalls, build locally:
+  `CARGO_BUILD_JOBS=2`; v0.8.0, v0.9.0 and v0.10.0 built, packaged and
+  uploaded on the runner this way (each ~16–18 minutes). v0.7.0 predated the
+  cache and needed a local build. If a tag job still stalls, build locally:
   `CARGO_BUILD_JOBS=2 npm run tauri build -- --bundles app`, package with
   the workflow's `hdiutil` command, and
   `gh release upload vX.Y.Z <dmg> --clobber`.
