@@ -405,13 +405,20 @@ export function initWindowBus(): void {
     // Heal: another window may have been focused before our listeners
     // existed (it answers by re-broadcasting its current state).
     void emit("app-focus-request", {});
-    // Broadcast after EVERY queue mutation: the effect deep-reads the queue
-    // (item spreads, index, toggles), so any change re-runs it.
+    // Broadcast after every queue mutation, coalesced: PLAY ALL can insert
+    // tens of thousands of items and the effect deep-reads the whole queue,
+    // so a burst of mutations must not serialize + broadcast it repeatedly.
+    // 150ms is below perception; the snapshot of the latest run wins.
     $effect(() => {
       const snapshot = readSnapshot();
-      void emit("queue-state", { from: "main", snapshot });
-      persistQueue(snapshot);
+      const timer = setTimeout(() => {
+        void emit("queue-state", { from: "main", snapshot });
+        persistQueue(snapshot);
+      }, 150);
+      return () => clearTimeout(timer);
     });
+    // Best-effort flush if the player window closes inside the debounce.
+    window.addEventListener("beforeunload", () => persistQueue(readSnapshot()));
     return;
   }
 
