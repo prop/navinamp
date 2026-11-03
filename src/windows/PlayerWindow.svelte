@@ -129,9 +129,10 @@
           : await requestPermission();
       }
       if (notifyPermission !== "granted") return;
+      // No body: the OS already shows the app name as the toast source,
+      // and QueueItem carries no album to use as a secondary line.
       sendNotification({
         title: item.artist ? `${item.artist} — ${item.title}` : item.title,
-        body: "NaVinaMP",
       });
     } catch (e) {
       if (!notifyWarned) {

@@ -11,9 +11,11 @@
 //! `audio.json` ([`crate::audio`]) — the player window reads it from the
 //! 10 Hz `audio_state` poll, so no extra sync path is needed.
 //!
-//! Accelerators are app-wide (`⌘⇧L` / `⌘⇧E` / `⌘⇧P` / `⌘⇧T` / `⌘⇧N` on
-//! macOS). The player window additionally keeps its skin-independent `Alt+L`
-//! opener.
+//! Accelerators are app-wide (`⌘⇧L` / `⌘⇧E` / `⌘⇧P` / `⌘⇧T` on macOS).
+//! "Notify on Track Change" is menu-only on purpose: `⌘⇧N` is the
+//! browser-incognito chord and would silently lose to the foreground app
+//! for most users. The player window additionally keeps its
+//! skin-independent `Alt+L` opener.
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Manager, Wry};
@@ -84,7 +86,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         "Notify on Track Change",
         true,
         audio::notify_track(&app.state::<audio::Audio>()),
-        Some("CmdOrCtrl+Shift+N"),
+        None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;

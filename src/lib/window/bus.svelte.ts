@@ -32,7 +32,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 
-import { IS_PLAYER, LABEL, type WindowLabel } from "./identity";
+import { IS_PLAYER, LABEL, PLAYER_LABEL, type WindowLabel } from "./identity";
 import { persistQueue, queue } from "../player/queue.svelte";
 import type { QueueItem, QueueItemMeta, RepeatMode } from "../player/queue.svelte";
 import {
@@ -206,10 +206,11 @@ export const skinTheme = $state<{ value: SkinTheme }>({ value: DEFAULT_SKIN_THEM
 
 /**
  * Labels of windows that currently hold focus. Every window reports its own
- * focus/blur (plus an answer to `app-focus-request`); the player aggregates
- * them to suppress desktop notifications while ANY NaVinaMP window is
- * focused. Native `emit` broadcasts to every webview and the updates are
- * idempotent, so this needs no backend relay (unlike queue intents).
+ * focus/blur (plus an answer to `app-focus-request`) and every window
+ * aggregates the set, so `appFocused()` is accurate wherever it is called —
+ * the player gates desktop notifications on it. Native `emit` broadcasts to
+ * every webview and the updates are idempotent, so this needs no backend
+ * relay (unlike queue intents).
  */
 export const appFocus = $state<{ labels: Set<string> }>({ labels: new Set() });
 
@@ -343,6 +344,15 @@ export function initWindowBus(): void {
   });
   reportFocus();
 
+  // Other windows' focus state (our own comes from `reportFocus` above).
+  // Idempotent updates, so every native copy is safe to process in every
+  // window — `appFocused()` stays correct wherever it is read.
+  void listen<{ from: string; focused: boolean }>("app-focus", (ev) => {
+    const p = ev.payload;
+    if (!p || p.from === PLAYER_LABEL) return;
+    setFocused(p.from, p.focused);
+  });
+
   if (IS_PLAYER) {
     // Intents relayed from other windows. Tauri 2's frontend `emit()` already
     // broadcasts cross-window natively, and the backend relays the same event
@@ -378,13 +388,6 @@ export function initWindowBus(): void {
       if (c === "play" || c === "pause" || c === "stop" || c === "next" || c === "prev") {
         mediaExecutor?.(c);
       }
-    });
-    // Focus of the OTHER windows — our own is tracked locally above.
-    // Idempotent updates, so every native copy is safe to process.
-    void listen<{ from: string; focused: boolean }>("app-focus", (ev) => {
-      const p = ev.payload;
-      if (!p || p.from === "main") return;
-      setFocused(p.from, p.focused);
     });
     // Heal: another window may have been focused before our listeners
     // existed (it answers by re-broadcasting its current state).
