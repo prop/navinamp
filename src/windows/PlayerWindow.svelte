@@ -127,8 +127,11 @@
   let notifyPermission: NotificationPermission | null = null;
   let notifyWarned = false;
 
-  async function notifyTrackStarted(): Promise<void> {
-    if (!audio.notifyTrack || appFocused()) return;
+  async function showNowPlaying(manual = false): Promise<void> {
+    // Automatic notifications obey the menu preference and suppress while
+    // the app is focused. The global shortcut is an explicit request, so it
+    // raises the toast even then.
+    if (!manual && (!audio.notifyTrack || appFocused())) return;
     const item = queue.currentItem;
     if (!item) return;
     try {
@@ -157,9 +160,18 @@
       const e = ev.payload;
       const note = queue.handleEngineEvent(e);
       console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);
-      if (e.type === "TrackStarted") void notifyTrackStarted();
+      if (e.type === "TrackStarted") void showNowPlaying();
       void refresh();
     });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  });
+
+  // Native global shortcut (registered in Rust) asks for the current track
+  // even when another app is focused.
+  $effect(() => {
+    const unlisten = listen("notify-now-request", () => void showNowPlaying(true));
     return () => {
       void unlisten.then((f) => f());
     };
