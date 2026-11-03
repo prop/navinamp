@@ -390,7 +390,7 @@
       {#if items.length === 0}
         <div class="empty">playlist empty — ADD or eject files</div>
       {:else}
-        <div class="vspacer" style="height:{start * ROW_H}px" aria-hidden="true"></div>
+        <div class="vspacer" style="height:{start * ROW_H}px" aria-hidden="true" role="presentation"></div>
         {#each visible as item, j (item.id)}
           {@const i = start + j}
           <div
@@ -412,7 +412,8 @@
         <div
           class="vspacer"
           style="height:{(items.length - end) * ROW_H}px"
-          aria-hidden="true"></div>
+          aria-hidden="true"
+          role="presentation"></div>
       {/if}
       {#if drag && drag.moved && dropIndex(drag.from, drag.gap) !== drag.from}
         <div class="dropline" style="top:{drag.gap * ROW_H - 1}px"></div>
