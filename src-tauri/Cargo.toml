@@ -30,6 +30,7 @@ sha2 = "0.10"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "gzip", "json", "query"] }
 navinamp-skin = { path = "../crates/navinamp-skin" }
 souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
+tauri-plugin-global-shortcut = "2"
 
 [dev-dependencies]
 zip = { version = "9.1.3", default-features = false, features = ["deflate"] }

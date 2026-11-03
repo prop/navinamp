@@ -22,6 +22,7 @@
    */
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import {
     isPermissionGranted,
@@ -122,23 +123,68 @@
 
   // ── desktop notifications (issue #34) ────────────────────────────────────
   // TrackStarted — not queue edits or the persisted-queue restore — is the
-  // trigger. Gate: the persisted menu preference (audio_state poll), OS
-  // permission (requested lazily on the first eligible start) and "no
-  // NaVinaMP window focused".
+  // trigger. Automatic toasts require the menu preference and "no NaVinaMP
+  // window focused"; the native global shortcut is an explicit request and
+  // bypasses those gates.
   let notifyPermission: NotificationPermission | null = null;
   let notifyWarned = false;
+  let notifyDeniedWarned = false;
 
-  async function notifyTrackStarted(): Promise<void> {
-    if (!audio.notifyTrack || appFocused()) return;
-    const item = queue.currentItem;
-    if (!item) return;
+  async function ensureNotifyPermission(manual: boolean): Promise<boolean> {
     try {
-      if (notifyPermission == null) {
-        notifyPermission = (await isPermissionGranted())
-          ? "granted"
-          : await requestPermission();
+      // Re-check the OS state first: the user may have granted or revoked
+      // it in system settings since the last call.
+      if (await isPermissionGranted()) {
+        notifyPermission = "granted";
+        return true;
       }
-      if (notifyPermission !== "granted") return;
+      if (notifyPermission === "denied") {
+        if (!notifyDeniedWarned) {
+          notifyDeniedWarned = true;
+          console.warn("[navinamp] notifications denied — enable them in the OS settings");
+        }
+        return false;
+      }
+      if (!manual) {
+        // Automatic path: keep the existing lazy permission request.
+        notifyPermission = await requestPermission();
+        return notifyPermission === "granted";
+      }
+      // Do not prompt a user who opted out of automatic notifications.
+      if (!audio.notifyTrack) return false;
+      // A permission prompt raised from a background app may never appear.
+      // Bring the player forward for this one-time grant; afterwards the
+      // shortcut works while any other app is focused.
+      if (!appFocused()) {
+        try {
+          await getCurrentWindow().setFocus();
+        } catch {
+          // Best effort — still try the prompt.
+        }
+      }
+      notifyPermission = await requestPermission();
+      return notifyPermission === "granted";
+    } catch (e) {
+      if (!notifyWarned) {
+        notifyWarned = true;
+        console.warn(`[navinamp] notifications unavailable: ${e}`);
+      }
+      return false;
+    }
+  }
+
+  async function showNowPlaying(manual = false): Promise<void> {
+    // Automatic notifications obey the menu preference and suppress while
+    // the app is focused. The global shortcut is an explicit request, so it
+    // raises the toast even then.
+    if (!manual && (!audio.notifyTrack || appFocused())) return;
+    const item = queue.currentItem;
+    if (!item) {
+      if (manual) console.warn("[navinamp] notify shortcut: nothing is playing");
+      return;
+    }
+    if (!(await ensureNotifyPermission(manual))) return;
+    try {
       // No body: the OS already shows the app name as the toast source,
       // and QueueItem carries no album to use as a secondary line.
       sendNotification({
@@ -158,9 +204,18 @@
       const e = ev.payload;
       const note = queue.handleEngineEvent(e);
       console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);
-      if (e.type === "TrackStarted") void notifyTrackStarted();
+      if (e.type === "TrackStarted") void showNowPlaying();
       void refresh();
     });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  });
+
+  // Native global shortcut (registered in Rust) asks for the current track
+  // even when another app is focused.
+  $effect(() => {
+    const unlisten = listen("notify-now-request", () => void showNowPlaying(true));
     return () => {
       void unlisten.then((f) => f());
     };

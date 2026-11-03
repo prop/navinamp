@@ -11,13 +11,25 @@ mod skin;
 mod smart;
 mod windows;
 
+#[cfg(desktop)]
+use tauri::Emitter;
 use tauri::Manager;
+
+/// Global "raise now playing" shortcut. macOS uses Control+Command+O;
+/// Windows/Linux use Control+Alt+O (the common cross-platform analogue).
+#[cfg(all(desktop, target_os = "macos"))]
+const NOTIFY_SHORTCUT: &str = "Control+Command+O";
+#[cfg(all(desktop, not(target_os = "macos")))]
+const NOTIFY_SHORTCUT: &str = "Control+Alt+O";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    let app = builder
         // Serves cached album-art bytes to the webview (`<img src>`), see
         // `art.rs` for the accepted URL shapes.
         .register_uri_scheme_protocol(art::SCHEME, art::handle)
@@ -38,6 +50,24 @@ pub fn run() {
             // checkmarks match the restored visibility.
             if let Err(e) = menu::init(app.handle()) {
                 eprintln!("navinamp: cannot install menu: {e}");
+            }
+            // System-wide "raise now playing" shortcut. The player window
+            // owns the notification, so only the event crosses the bridge.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+                if let Err(e) =
+                    app.global_shortcut()
+                        .on_shortcut(NOTIFY_SHORTCUT, |app, _shortcut, event| {
+                            if event.state == ShortcutState::Pressed {
+                                let _ = app.emit_to("main", "notify-now-request", ());
+                            }
+                        })
+                {
+                    eprintln!(
+                        "navinamp: cannot register notification shortcut {NOTIFY_SHORTCUT}: {e}"
+                    );
+                }
             }
             Ok(())
         })
