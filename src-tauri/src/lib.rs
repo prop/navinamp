@@ -17,6 +17,7 @@ use tauri::Manager;
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         // Serves cached album-art bytes to the webview (`<img src>`), see
         // `art.rs` for the accepted URL shapes.
         .register_uri_scheme_protocol(art::SCHEME, art::handle)
@@ -56,6 +57,7 @@ pub fn run() {
             audio::audio_seek,
             audio::audio_set_volume,
             audio::audio_state,
+            audio::audio_set_notify_track,
             audio::eq_state,
             audio::eq_headroom,
             ai::ai_get_config,

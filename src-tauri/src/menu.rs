@@ -1,25 +1,33 @@
 //! Native menu wiring: app-wide Window-menu toggles for the auxiliary
-//! windows (Media Library / Equalizer / Playlist Editor).
+//! windows (Media Library / Equalizer / Playlist Editor) plus playback
+//! preferences ("Always on Top", "Notify on Track Change").
 //!
 //! The app uses Tauri's stock menu ([`Menu::default`]) and prepends the
-//! three toggles to its Window submenu, so File/Edit/View keep the standard
+//! toggles to its Window submenu, so File/Edit/View keep the standard
 //! entries. Each item is checkable; [`sync_visibility`] keeps the
-//! checkmarks in step no matter where visibility changed (menu click, skin
-//! button, window IPC, or the titlebar close button routing into the
-//! window manager).
+//! visibility checkmarks in step no matter where visibility changed (menu
+//! click, skin button, window IPC, or the titlebar close button routing
+//! into the window manager). The notification preference is owned by
+//! `audio.json` ([`crate::audio`]) — the player window reads it from the
+//! 10 Hz `audio_state` poll, so no extra sync path is needed.
 //!
-//! Accelerators are app-wide (`⌘⇧L` / `⌘⇧E` / `⌘⇧P` on macOS). The player
-//! window additionally keeps its skin-independent `Alt+L` opener.
+//! Accelerators are app-wide (`⌘⇧L` / `⌘⇧E` / `⌘⇧P` / `⌘⇧T` on macOS).
+//! "Notify on Track Change" is menu-only on purpose: `⌘⇧N` is the
+//! browser-incognito chord and would silently lose to the foreground app
+//! for most users. The player window additionally keeps its
+//! skin-independent `Alt+L` opener.
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Manager, Wry};
 
+use crate::audio;
 use crate::windows::{WindowManager, WindowsInfo};
 
 const MENU_LIBRARY: &str = "window_toggle_library";
 const MENU_EQ: &str = "window_toggle_eq";
 const MENU_PLAYLIST: &str = "window_toggle_playlist";
 const MENU_ALWAYS_ON_TOP: &str = "window_always_on_top";
+const MENU_NOTIFY_TRACK: &str = "playback_notify_track";
 
 /// Handles for the checkable Window-menu items.
 pub struct WindowMenu {
@@ -27,6 +35,7 @@ pub struct WindowMenu {
     eq: CheckMenuItem<Wry>,
     playlist: CheckMenuItem<Wry>,
     always_on_top: CheckMenuItem<Wry>,
+    notify_track: CheckMenuItem<Wry>,
 }
 
 /// Installs the native menu. Must run after [`WindowManager::init`] so the
@@ -71,6 +80,14 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         app.state::<WindowManager>().all_always_on_top(),
         Some("CmdOrCtrl+Shift+T"),
     )?;
+    let notify_track = CheckMenuItem::with_id(
+        app,
+        MENU_NOTIFY_TRACK,
+        "Notify on Track Change",
+        true,
+        audio::notify_track(&app.state::<audio::Audio>()),
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     window_menu.prepend_items(&[
@@ -80,6 +97,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         &separator,
         &always_on_top,
         &separator2,
+        &notify_track,
     ])?;
 
     app.set_menu(menu)?;
@@ -89,6 +107,17 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
             let on = !manager.all_always_on_top();
             if let Err(e) = manager.set_all_always_on_top(app, on) {
                 eprintln!("navinamp menu: always-on-top failed: {e}");
+            }
+            return;
+        }
+        if event.id().as_ref() == MENU_NOTIFY_TRACK {
+            // Single source of truth is `audio.json`; the player picks the
+            // new value up from its next `audio_state` poll (≤100 ms).
+            let state = app.state::<audio::Audio>();
+            let on = !audio::notify_track(&state);
+            audio::set_notify_track(&state, on);
+            if let Some(menu) = app.try_state::<WindowMenu>() {
+                let _ = menu.notify_track.set_checked(on);
             }
             return;
         }
@@ -109,6 +138,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         eq,
         playlist,
         always_on_top,
+        notify_track,
     });
     Ok(())
 }
@@ -171,6 +201,7 @@ mod tests {
         assert_eq!(label_for(MENU_LIBRARY), Some("library"));
         assert_eq!(label_for(MENU_EQ), Some("eq"));
         assert_eq!(label_for(MENU_PLAYLIST), Some("playlist"));
+        assert_eq!(label_for(MENU_NOTIFY_TRACK), None);
         assert_eq!(label_for("minimize"), None);
         assert_eq!(label_for(""), None);
     }

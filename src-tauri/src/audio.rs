@@ -36,6 +36,8 @@ pub struct Audio {
     engine: Mutex<Option<EngineHandle>>,
     eq: Mutex<EqState>,
     volume: Mutex<f32>,
+    /// Desktop "now playing" notification preference (menu + frontend gate).
+    notify_track: Mutex<bool>,
     /// User-saved EQ curves (name + bands), persisted in `audio.json`.
     presets: Mutex<Vec<StoredPreset>>,
     /// Debounced writer channel; `None` before [`init`] (and in tests).
@@ -48,6 +50,7 @@ impl Default for Audio {
             engine: Mutex::new(None),
             eq: Mutex::new(EqState::default()),
             volume: Mutex::new(1.0),
+            notify_track: Mutex::new(true),
             presets: Mutex::new(Vec::new()),
             prefs_tx: Mutex::new(None),
         }
@@ -62,6 +65,8 @@ struct StoredPrefs {
     eq: StoredEq,
     /// User-saved presets (built-in Winamp curves stay in the audio crate).
     eq_presets: Vec<StoredPreset>,
+    /// Desktop notifications on track change (absent in older files = on).
+    notify_track: bool,
 }
 
 impl Default for StoredPrefs {
@@ -70,6 +75,7 @@ impl Default for StoredPrefs {
             volume: 1.0,
             eq: StoredEq::default(),
             eq_presets: Vec::new(),
+            notify_track: true,
         }
     }
 }
@@ -175,10 +181,12 @@ pub fn init(app: &AppHandle) {
         && let Ok(stored) = serde_json::from_str::<StoredPrefs>(&text)
     {
         let state = app.state::<Audio>();
+        let notify_track = stored.notify_track;
         let (volume, eq, presets) = stored.sanitized();
         *state.volume.lock().unwrap() = volume;
         *state.eq.lock().unwrap() = eq;
         *state.presets.lock().unwrap() = presets;
+        *state.notify_track.lock().unwrap() = notify_track;
     }
 
     let (tx, rx) = channel();
@@ -228,10 +236,22 @@ fn persist(state: &Audio) {
         volume: *state.volume.lock().unwrap(),
         eq: StoredEq::from(*state.eq.lock().unwrap()),
         eq_presets: state.presets.lock().unwrap().clone(),
+        notify_track: *state.notify_track.lock().unwrap(),
     };
     if let Some(tx) = state.prefs_tx.lock().unwrap().as_ref() {
         let _ = tx.send(prefs);
     }
+}
+
+/// Current desktop-notification preference (also read by the native menu).
+pub fn notify_track(state: &Audio) -> bool {
+    *state.notify_track.lock().unwrap()
+}
+
+/// Update + persist the desktop-notification preference (menu / IPC).
+pub fn set_notify_track(state: &Audio, on: bool) {
+    *state.notify_track.lock().unwrap() = on;
+    persist(state);
 }
 
 /// Snapshot returned by [`audio_state`] (polled by the UI at ~10 Hz).
@@ -249,6 +269,8 @@ pub struct AudioStatePayload {
     pub sample_rate_hz: Option<u32>,
     /// Source channel count (mono/stereo indicators).
     pub channels: Option<u16>,
+    /// Desktop "now playing" notifications enabled (player-side gate).
+    pub notify_track: bool,
 }
 
 fn status_name(s: PlaybackStatus) -> &'static str {
@@ -389,6 +411,7 @@ pub fn audio_set_volume(state: State<'_, Audio>, volume: f32) -> Result<(), Stri
 #[tauri::command]
 pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
     let guard = state.engine.lock().unwrap();
+    let notify = notify_track(&state);
     match guard.as_ref() {
         Some(engine) => {
             let meta = engine.metadata();
@@ -401,6 +424,7 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
                 bitrate_kbps: meta.and_then(|m| m.bitrate_kbps),
                 sample_rate_hz: meta.map(|m| m.sample_rate_hz),
                 channels: meta.map(|m| m.channels),
+                notify_track: notify,
             }
         }
         None => AudioStatePayload {
@@ -413,8 +437,18 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
             bitrate_kbps: None,
             sample_rate_hz: None,
             channels: None,
+            notify_track: notify,
         },
     }
+}
+
+/// Persisted toggle for desktop "now playing" notifications. The player
+/// window applies it (gated on window focus and OS permission) on track
+/// changes; the native menu flips the same preference.
+#[tauri::command]
+pub fn audio_set_notify_track(state: State<'_, Audio>, on: bool) -> Result<(), String> {
+    set_notify_track(&state, on);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -609,11 +643,16 @@ mod tests {
             bitrate_kbps: Some(192),
             sample_rate_hz: Some(44_100),
             channels: Some(2),
+            notify_track: true,
         };
         let v = serde_json::to_value(&payload).expect("serialize");
         assert_eq!(v["bitrateKbps"], 192);
         assert_eq!(v["sampleRateHz"], 44_100);
         assert_eq!(v["channels"], 2);
+        assert_eq!(
+            v["notifyTrack"], true,
+            "preference rides the camelCase poll"
+        );
     }
 
     #[test]
@@ -627,11 +666,13 @@ mod tests {
             bitrate_kbps: None,
             sample_rate_hz: None,
             channels: None,
+            notify_track: false,
         };
         let v = serde_json::to_value(&payload).expect("serialize");
         assert!(v["bitrateKbps"].is_null());
         assert!(v["sampleRateHz"].is_null());
         assert!(v["channels"].is_null());
+        assert_eq!(v["notifyTrack"], false);
     }
 
     #[test]
@@ -647,6 +688,7 @@ mod tests {
                 ] }"#,
         )
         .expect("tolerant parse");
+        assert!(stored.notify_track, "missing notifyTrack defaults to on");
         let (volume, eq, presets) = stored.sanitized();
         assert_eq!(volume, 1.0, "volume clamps to 0..=1");
         assert!(eq.enabled);
@@ -667,6 +709,7 @@ mod tests {
     #[test]
     fn stored_prefs_defaults_and_round_trips_camel_case() {
         let stored: StoredPrefs = serde_json::from_str("{}").expect("empty object");
+        assert!(stored.notify_track, "default desktop notifications: on");
         let (volume, eq, presets) = stored.sanitized();
         assert_eq!(volume, 1.0, "default volume is unity");
         assert_eq!(eq, EqState::default());
@@ -683,6 +726,7 @@ mod tests {
                 name: "Mine".into(),
                 bands_db: vec![1.0; EQ_BAND_COUNT],
             }],
+            notify_track: false,
         })
         .expect("serialize");
         assert_eq!(value["volume"], 0.5);
@@ -690,5 +734,16 @@ mod tests {
         assert_eq!(value["eq"]["preampDb"], 1.5);
         assert_eq!(value["eq"]["bandsDb"][0], 2.0);
         assert_eq!(value["eqPresets"][0]["name"], "Mine");
+        assert_eq!(value["notifyTrack"], false);
+    }
+
+    #[test]
+    fn notify_track_accessors_default_on_and_toggle() {
+        let audio = Audio::default();
+        assert!(notify_track(&audio), "defaults on");
+        set_notify_track(&audio, false);
+        assert!(!notify_track(&audio));
+        set_notify_track(&audio, true);
+        assert!(notify_track(&audio));
     }
 }
