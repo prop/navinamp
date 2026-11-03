@@ -12,8 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use navinamp_skin::{Skin, SkinArchive, Warning, bitmap_payloads};
 
@@ -191,6 +192,262 @@ fn load_archive(archive: SkinArchive) -> Result<SkinPayload, String> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Curated "popular skins" pack (downloaded on request — never in the binary)
+// ---------------------------------------------------------------------------
+
+/// The pack manifest. Archives live on the Internet Archive, so the dmg ships
+/// no fan-made skins: the user explicitly downloads them into the skins dir.
+const POPULAR_PACK_JSON: &str = include_str!("../resources/popular-skins.json");
+const POPULAR_PROGRESS_EVENT: &str = "popular-skins-progress";
+const POPULAR_USER_AGENT: &str = "NaVinaMP/0.9 (+https://github.com/prop/navinamp)";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularSkin {
+    pub id: String,
+    pub name: String,
+    /// Skin author when the museum/archive metadata names one.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Destination file name (`<id>.wsz`), independent of the archive's name.
+    pub file_name: String,
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+    /// License stated by the source item (usually "not stated on archive.org").
+    pub license: String,
+    pub source_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularPack {
+    pub version: u32,
+    pub curated_at: String,
+    pub source: String,
+    pub note: String,
+    pub license_note: String,
+    pub skins: Vec<PopularSkin>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularSkinStatus {
+    #[serde(flatten)]
+    pub skin: PopularSkin,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularPackStatus {
+    pub version: u32,
+    pub curated_at: String,
+    pub source: String,
+    pub note: String,
+    pub license_note: String,
+    pub skins: Vec<PopularSkinStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularFailure {
+    pub id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopularInstallReport {
+    pub installed: u32,
+    pub skipped: u32,
+    pub failed: Vec<PopularFailure>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PopularProgress {
+    done: u32,
+    total: u32,
+    id: String,
+    name: String,
+    error: Option<String>,
+}
+
+fn popular_pack() -> Result<PopularPack, String> {
+    serde_json::from_str(POPULAR_PACK_JSON)
+        .map_err(|e| format!("popular skins manifest is corrupt: {e}"))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// A pack file counts as installed only when its bytes still match the
+/// manifest checksum (a user edit or a partial download re-installs).
+fn pack_file_ok(dir: &Path, skin: &PopularSkin) -> bool {
+    let path = dir.join(&skin.file_name);
+    std::fs::read(&path)
+        .map(|bytes| bytes.len() as u64 == skin.size && sha256_hex(&bytes) == skin.sha256)
+        .unwrap_or(false)
+}
+
+/// The curated pack and which entries are already installed.
+#[tauri::command]
+pub fn popular_skins(app: AppHandle) -> Result<PopularPackStatus, String> {
+    let pack = popular_pack()?;
+    let dir = skins_dir(&app)?;
+    Ok(PopularPackStatus {
+        version: pack.version,
+        curated_at: pack.curated_at,
+        source: pack.source,
+        note: pack.note,
+        license_note: pack.license_note,
+        skins: pack
+            .skins
+            .into_iter()
+            .map(|skin| {
+                let installed = pack_file_ok(&dir, &skin);
+                PopularSkinStatus { skin, installed }
+            })
+            .collect(),
+    })
+}
+
+/// Downloads the missing pack entries into `<app-config-dir>/skins`.
+///
+/// User-initiated only. Sequential (20 small files, gentle on archive.org),
+/// verifies size + SHA-256, writes `<id>.wsz.part` then renames, and keeps
+/// going on per-file failures. Progress streams on `popular-skins-progress`.
+#[tauri::command]
+pub async fn skin_install_popular(app: AppHandle) -> Result<PopularInstallReport, String> {
+    let pack = popular_pack()?;
+    let dir = skins_dir(&app)?;
+    let client = reqwest::Client::builder()
+        .user_agent(POPULAR_USER_AGENT)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("cannot create the download client: {e}"))?;
+
+    let total = pack.skins.len() as u32;
+    let mut report = PopularInstallReport {
+        installed: 0,
+        skipped: 0,
+        failed: Vec::new(),
+    };
+    // Offline/blocked networks fail fast per file; stop after a few in a row
+    // instead of letting the user wait through twenty timeouts.
+    let mut consecutive_failures = 0u32;
+    for (index, skin) in pack.skins.iter().enumerate() {
+        if consecutive_failures >= 3 {
+            break;
+        }
+        let _ = app.emit(
+            POPULAR_PROGRESS_EVENT,
+            PopularProgress {
+                done: index as u32,
+                total,
+                id: skin.id.clone(),
+                name: skin.name.clone(),
+                error: None,
+            },
+        );
+        if pack_file_ok(&dir, skin) {
+            report.skipped += 1;
+            consecutive_failures = 0;
+            continue;
+        }
+        // Never clobber an unrelated user skin that happens to share the id.
+        if dir.join(&skin.file_name).exists() {
+            report.failed.push(PopularFailure {
+                id: skin.id.clone(),
+                error: format!(
+                    "`{}` already exists with different content — remove it to install the pack version",
+                    skin.file_name
+                ),
+            });
+            continue;
+        }
+        match download_pack_skin(&client, &dir, skin).await {
+            Ok(()) => {
+                report.installed += 1;
+                consecutive_failures = 0;
+            }
+            Err(error) => {
+                consecutive_failures += 1;
+                let _ = app.emit(
+                    POPULAR_PROGRESS_EVENT,
+                    PopularProgress {
+                        done: index as u32,
+                        total,
+                        id: skin.id.clone(),
+                        name: skin.name.clone(),
+                        error: Some(error.clone()),
+                    },
+                );
+                report.failed.push(PopularFailure {
+                    id: skin.id.clone(),
+                    error,
+                });
+            }
+        }
+    }
+    let processed = report.installed + report.skipped + report.failed.len() as u32;
+    let _ = app.emit(
+        POPULAR_PROGRESS_EVENT,
+        PopularProgress {
+            done: processed,
+            total,
+            id: String::new(),
+            name: String::new(),
+            error: None,
+        },
+    );
+    Ok(report)
+}
+
+async fn download_pack_skin(
+    client: &reqwest::Client,
+    dir: &Path,
+    skin: &PopularSkin,
+) -> Result<(), String> {
+    let response = client
+        .get(&skin.url)
+        .send()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("archive.org returned HTTP {}", response.status()));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("download interrupted: {e}"))?;
+    if bytes.len() as u64 != skin.size {
+        return Err(format!(
+            "size mismatch ({} bytes, expected {})",
+            bytes.len(),
+            skin.size
+        ));
+    }
+    let got = sha256_hex(&bytes);
+    if got != skin.sha256 {
+        return Err(format!(
+            "checksum mismatch ({got}, expected {})",
+            skin.sha256
+        ));
+    }
+    let dest = dir.join(&skin.file_name);
+    let tmp = dir.join(format!("{}.part", skin.file_name));
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write `{}`: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &dest).map_err(|e| format!("cannot install `{}`: {e}", dest.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +532,74 @@ mod tests {
             "unexpected warnings: {:?}",
             payload.warnings
         );
+    }
+
+    #[test]
+    fn popular_pack_manifest_is_valid() {
+        let pack = popular_pack().expect("manifest");
+        assert_eq!(pack.version, 1);
+        assert_eq!(pack.skins.len(), 24, "the pack is curated at 24 skins");
+        let mut ids = std::collections::HashSet::new();
+        let mut files = std::collections::HashSet::new();
+        for skin in &pack.skins {
+            assert!(ids.insert(skin.id.clone()), "duplicate id `{}`", skin.id);
+            assert!(
+                files.insert(skin.file_name.clone()),
+                "duplicate file `{}`",
+                skin.file_name
+            );
+            assert_eq!(skin.file_name, format!("{}.wsz", skin.id));
+            assert!(
+                skin.url.starts_with("https://archive.org/download/"),
+                "`{}` must download from the archive",
+                skin.id
+            );
+            assert!(
+                skin.source_url.starts_with("https://archive.org/details/"),
+                "`{}` needs an attribution URL",
+                skin.id
+            );
+            assert!(!skin.license.is_empty(), "`{}` license note", skin.id);
+            assert_eq!(skin.sha256.len(), 64, "`{}` checksum length", skin.id);
+            assert!(
+                skin.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                "`{}` checksum must be hex",
+                skin.id
+            );
+            assert!(skin.size > 10_000, "`{}` size looks wrong", skin.id);
+        }
+    }
+
+    #[test]
+    fn sha256_hex_matches_a_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn pack_file_check_detects_missing_and_corrupt_files() {
+        let skin = &popular_pack().expect("manifest").skins[0];
+        let dir = std::env::temp_dir().join(format!("navinamp-pack-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(!pack_file_ok(&dir, skin), "missing file is not installed");
+
+        std::fs::write(dir.join(&skin.file_name), b"corrupt").unwrap();
+        assert!(!pack_file_ok(&dir, skin), "bad checksum is not installed");
+
+        // Write bytes matching the manifest checksum (size and hash only).
+        // The file is not a real archive; this tests the integrity gate.
+        let bytes = vec![0u8; skin.size as usize];
+        std::fs::write(dir.join(&skin.file_name), &bytes).unwrap();
+        let mut forged = skin.clone();
+        forged.sha256 = sha256_hex(&bytes);
+        assert!(
+            pack_file_ok(&dir, &forged),
+            "matching bytes count as installed"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -28,6 +28,62 @@ export async function listSkins(): Promise<SkinInfo[]> {
   return invoke<SkinInfo[]>("skin_list");
 }
 
+/**
+ * The curated "popular skins" pack (20 classic skins from the Winamp Skin
+ * Museum's archive.org collection). Archives are downloaded on request — the
+ * app ships only this manifest.
+ */
+export interface PopularSkin {
+  id: string;
+  name: string;
+  author: string | null;
+  fileName: string;
+  url: string;
+  size: number;
+  sha256: string;
+  /** License stated by the source item. */
+  license: string;
+  sourceUrl: string;
+  /** Bytes on disk already match the manifest checksum. */
+  installed: boolean;
+}
+
+export interface PopularPack {
+  version: number;
+  curatedAt: string;
+  source: string;
+  note: string;
+  licenseNote: string;
+  skins: PopularSkin[];
+}
+
+export interface PopularInstallReport {
+  installed: number;
+  skipped: number;
+  failed: { id: string; error: string }[];
+}
+
+/** Progress event streamed by `skin_install_popular`. */
+export const POPULAR_PROGRESS_EVENT = "popular-skins-progress";
+
+export interface PopularProgress {
+  done: number;
+  total: number;
+  id: string;
+  name: string;
+  error: string | null;
+}
+
+/** The curated pack + which entries are already installed. */
+export function popularSkins(): Promise<PopularPack> {
+  return invoke<PopularPack>("popular_skins");
+}
+
+/** Download missing pack skins into the app's skins directory (user action). */
+export function installPopularSkins(): Promise<PopularInstallReport> {
+  return invoke<PopularInstallReport>("skin_install_popular");
+}
+
 /** The persisted skin choice, or null when the loader should pick. */
 export function selectedSkinId(): string | null {
   try {
