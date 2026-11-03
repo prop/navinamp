@@ -23,33 +23,44 @@ import urllib.request
 
 COLLECTION = "winampskins"
 SOURCE_URL = "https://archive.org/details/winampskins"
+UNSTATED = "not stated on archive.org"
 LICENSE_NOTE = (
-    "No license is stated on the archive.org items; authors retain all rights. "
-    "Skin files are downloaded only at the user's request."
+    "No license is stated for most archive.org items; some skins are explicitly "
+    "all rights reserved (see each entry). Skin files are downloaded only at the "
+    "user's request; authors retain all rights."
 )
 
-# (archive identifier, source file name, destination id, display name, author)
+# (archive identifier, source file name, destination id, display name, author, license)
 CURATED = [
-    ("winampskin_nightcrawler_by_t_k", "nightcrawler_by_t_k.wsz", "nightcrawler", "Nightcrawler", "t-k"),
-    ("winampskin_zlomp", "zlomp.wsz", "zlomp", "Zlomp", "herod"),
-    ("winampskin_Black_SlanXP2_Update", "Black_SlanXP2_Update.wsz", "black-slanxp2", "Black SlanXP2", None),
-    ("winampskin_Expensive_Hi-Fi_1_2", "ExpensiveHi-Fi.wsz", "expensive-hi-fi", "Expensive Hi-Fi", None),
-    ("winampskin_Nucleo_NLog_v2G", "Nucleo_NLog_v102_.wsz", "nucleo-nlog-v2g", "Nucleo NLog v2G", None),
-    ("winampskins_Frutiger_Aero", "Frutiger Aero.wsz", "frutiger-aero", "Frutiger Aero", None),
-    ("winampskin_Cyanian", "Cyanian.wsz", "cyanian", "Cyanian", None),
-    ("winampskins_AMPER", "AMPER.wsz", "amper", "AMPER", None),
-    ("winampskin_Nightshade", "Nightshade.wsz", "nightshade", "Nightshade", None),
-    ("winampskin_TopazAmp_v5", "TopazAmp_v5.wsz", "topazamp-v5", "TopazAmp v5", None),
-    ("winampskin_elaysia", "elaysia.wsz", "elaysia", "Elaysia", "x4-deejay"),
-    ("winampskins_LimeAmp_3", "LimeAmp.wsz", "limeamp-3", "LimeAmp 3", None),
-    ("winampskin_winstepamp", "winstepamp.wsz", "winstepamp", "Winstep Amp", "dangeruss"),
-    ("winampskin_Major_Tom_v5", "Major_Tom_v5.wsz", "major-tom-v5", "Major Tom v5", None),
-    ("winampskin_CHROMEngine_Indigo_v5", "CHROMEngine_Indigo_v5.wsz", "chromengine-indigo-v5", "CHROMEngine Indigo v5", None),
-    ("winampskin_Rebel_Amp_2k", "Rebel_Amp_2k.wsz", "rebel-amp-2k", "Rebel Amp 2k", None),
-    ("winampskin_Void_dark", "Void_dark.wsz", "void-dark", "Void (dark)", None),
-    ("winampskin_Classic_Ebony", "Classic_Ebony.wsz", "classic-ebony", "Classic Ebony", None),
-    ("winampskin_Moonlight_night", "Moonlight_night.wsz", "moonlight-night", "Moonlight Night", None),
-    ("winampskin_yboris_minimal_winamp_by_yboris", "yboris_minimal_winamp_by_yboris.wsz", "yboris-minimal", "yboris minimal", "yboris"),
+    ("winampskin_nightcrawler_by_t_k", "nightcrawler_by_t_k.wsz", "nightcrawler", "Nightcrawler", "t-k", UNSTATED),
+    ("winampskin_zlomp", "zlomp.wsz", "zlomp", "Zlomp", "herod", UNSTATED),
+    ("winampskin_Black_SlanXP2_Update", "Black_SlanXP2_Update.wsz", "black-slanxp2", "Black SlanXP2", None, UNSTATED),
+    ("winampskin_Expensive_Hi-Fi_1_2", "ExpensiveHi-Fi.wsz", "expensive-hi-fi", "Expensive Hi-Fi", None, UNSTATED),
+    ("winampskin_Nucleo_NLog_v2G", "Nucleo_NLog_v102_.wsz", "nucleo-nlog-v2g", "Nucleo NLog v2G", None, UNSTATED),
+    ("winampskins_Frutiger_Aero", "Frutiger Aero.wsz", "frutiger-aero", "Frutiger Aero", None, UNSTATED),
+    ("winampskin_Cyanian", "Cyanian.wsz", "cyanian", "Cyanian", None, UNSTATED),
+    ("winampskins_AMPER", "AMPER.wsz", "amper", "AMPER", None, UNSTATED),
+    ("winampskin_Nightshade", "Nightshade.wsz", "nightshade", "Nightshade", None, UNSTATED),
+    ("winampskin_TopazAmp_v5", "TopazAmp_v5.wsz", "topazamp-v5", "TopazAmp v5", None, UNSTATED),
+    ("winampskin_elaysia", "elaysia.wsz", "elaysia", "Elaysia", "x4-deejay", UNSTATED),
+    ("winampskins_LimeAmp_3", "LimeAmp.wsz", "limeamp-3", "LimeAmp 3", None, UNSTATED),
+    ("winampskin_winstepamp", "winstepamp.wsz", "winstepamp", "Winstep Amp", "dangeruss", UNSTATED),
+    ("winampskin_Major_Tom_v5", "Major_Tom_v5.wsz", "major-tom-v5", "Major Tom v5", None, UNSTATED),
+    ("winampskin_CHROMEngine_Indigo_v5", "CHROMEngine_Indigo_v5.wsz", "chromengine-indigo-v5", "CHROMEngine Indigo v5", None, UNSTATED),
+    ("winampskin_Rebel_Amp_2k", "Rebel_Amp_2k.wsz", "rebel-amp-2k", "Rebel Amp 2k", None, UNSTATED),
+    ("winampskin_Void_dark", "Void_dark.wsz", "void-dark", "Void (dark)", None, UNSTATED),
+    ("winampskin_Classic_Ebony", "Classic_Ebony.wsz", "classic-ebony", "Classic Ebony", None, UNSTATED),
+    ("winampskin_Moonlight_night", "Moonlight_night.wsz", "moonlight-night", "Moonlight Night", None, UNSTATED),
+    ("winampskin_yboris_minimal_winamp_by_yboris", "yboris_minimal_winamp_by_yboris.wsz", "yboris-minimal", "yboris minimal", "yboris", UNSTATED),
+    # User-requested additions (base/default and "Classified" family skins).
+    ("winampskins_base-2.91", "base-2.91.wsz", "base-2-91", "Winamp 2.91 Base", "Nullsoft",
+     "Winamp base skin (Nullsoft/AOL) — no license stated; downloaded from archive.org on request"),
+    ("winampskin_Winamp3_Classified", "Winamp3_Classified.wsz", "winamp3-classified-v55", "Winamp3 Classified v5.5",
+     "PeterPan, John Slegers, Wildrose-Wally", "All rights reserved (author readme)"),
+    ("winampskin_Winamp5_Classified_v5.5", "Winamp5_Classified_v5.5.wsz", "winamp5-classified-v55", "Winamp5 Classified v5.5",
+     "GuidoD, Wildrose-Wally", "All rights reserved (author readme)"),
+    ("winampskin_Bento_Classified", "Bento_Classified.wsz", "bento-classified", "Bento Classified",
+     "LuigiHann", "All rights reserved (author readme)"),
 ]
 
 
@@ -78,7 +89,7 @@ def main() -> None:
 
     skins = []
     with tempfile.TemporaryDirectory() as tmp:
-        for identifier, file_name, skin_id, name, author in CURATED:
+        for identifier, file_name, skin_id, name, author, license_note in CURATED:
             url = (
                 f"https://archive.org/download/{identifier}/"
                 f"{urllib.parse.quote(file_name)}"
@@ -94,7 +105,7 @@ def main() -> None:
                     "url": url,
                     "size": len(data),
                     "sha256": hashlib.sha256(data).hexdigest(),
-                    "license": "not stated on archive.org",
+                    "license": license_note,
                     "sourceUrl": f"https://archive.org/details/{identifier}",
                 }
             )

@@ -223,7 +223,51 @@
       "sha256": "1ddfb40466401304abbeb1e43d06951b1bea92c1f0829d7fef153e3b22697f99",
       "sourceUrl": "https://archive.org/details/winampskin_yboris_minimal_winamp_by_yboris",
       "license": "not stated on archive.org"
+    },
+    {
+      "id": "base-2-91",
+      "name": "Winamp 2.91 Base",
+      "author": "Nullsoft",
+      "fileName": "base-2-91.wsz",
+      "url": "https://archive.org/download/winampskins_base-2.91/base-2.91.wsz",
+      "size": 114148,
+      "sha256": "33fff100062f89a55b3e67fa0547df62f867f3cfceceba41afaa58562c37f01c",
+      "license": "Winamp base skin (Nullsoft/AOL) \u2014 no license stated; downloaded from archive.org on request",
+      "sourceUrl": "https://archive.org/details/winampskins_base-2.91"
+    },
+    {
+      "id": "winamp3-classified-v55",
+      "name": "Winamp3 Classified v5.5",
+      "author": "PeterPan, John Slegers, Wildrose-Wally",
+      "fileName": "winamp3-classified-v55.wsz",
+      "url": "https://archive.org/download/winampskin_Winamp3_Classified/Winamp3_Classified.wsz",
+      "size": 211533,
+      "sha256": "c0c06717b0f32f0619b14ff37d8cc93f7024848f89b600987721c2528ad4ea27",
+      "license": "All rights reserved (author readme)",
+      "sourceUrl": "https://archive.org/details/winampskin_Winamp3_Classified"
+    },
+    {
+      "id": "winamp5-classified-v55",
+      "name": "Winamp5 Classified v5.5",
+      "author": "GuidoD, Wildrose-Wally",
+      "fileName": "winamp5-classified-v55.wsz",
+      "url": "https://archive.org/download/winampskin_Winamp5_Classified_v5.5/Winamp5_Classified_v5.5.wsz",
+      "size": 178176,
+      "sha256": "ad749cb68339f443537ce1167e69f9b4b6a28ba3d9690d02b6426175f8772976",
+      "license": "All rights reserved (author readme)",
+      "sourceUrl": "https://archive.org/details/winampskin_Winamp5_Classified_v5.5"
+    },
+    {
+      "id": "bento-classified",
+      "name": "Bento Classified",
+      "author": "LuigiHann",
+      "fileName": "bento-classified.wsz",
+      "url": "https://archive.org/download/winampskin_Bento_Classified/Bento_Classified.wsz",
+      "size": 78699,
+      "sha256": "5a526d01240d8a4c642bda901a86726c4ede19327582b8b0be6189747542ab67",
+      "license": "All rights reserved (author readme)",
+      "sourceUrl": "https://archive.org/details/winampskin_Bento_Classified"
     }
   ],
-  "licenseNote": "No license is stated on the archive.org items; authors retain all rights. Skin files are downloaded only at the user's request."
+  "licenseNote": "No license is stated for most archive.org items; some skins are explicitly all rights reserved (see each entry). Skin files are downloaded only at the user's request; authors retain all rights."
 }

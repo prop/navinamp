@@ -538,7 +538,7 @@ mod tests {
     fn popular_pack_manifest_is_valid() {
         let pack = popular_pack().expect("manifest");
         assert_eq!(pack.version, 1);
-        assert_eq!(pack.skins.len(), 20, "the pack is curated at 20 skins");
+        assert_eq!(pack.skins.len(), 24, "the pack is curated at 24 skins");
         let mut ids = std::collections::HashSet::new();
         let mut files = std::collections::HashSet::new();
         for skin in &pack.skins {
