@@ -64,6 +64,7 @@ mod schema;
 mod smart;
 mod text;
 
+pub use art::sniff_ext;
 pub use model::{
     Album, LibraryStats, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress, ScanReport,
     ServerStats, SourceStats, Track, TrackFilter,
