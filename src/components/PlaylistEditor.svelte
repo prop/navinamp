@@ -16,7 +16,7 @@
   import type { SkinTheme } from "../lib/skin/theme";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import { clearEqFor, getArtistEq, getTrackEq, rememberEq } from "../lib/audio/auto";
-  import { librarySetRating, libraryTrack } from "../lib/library/ipc";
+  import { librarySetRating, libraryTrack, type Track } from "../lib/library/ipc";
   import { navidromeRate, navidromeStar } from "../lib/navidrome/ipc";
 
   interface Props {
@@ -96,12 +96,29 @@
 
   /** Keep the selected row mounted/visible after keyboard navigation. */
   function ensureVisible(index: number): void {
+    scrollToIndex(index);
+  }
+
+  /** Scroll one row into view; `center` is used by the NOW button. */
+  function scrollToIndex(index: number, center = false): void {
     const el = listEl;
     if (!el) return;
     const top = index * ROW_H;
-    const bottom = top + ROW_H;
-    if (top < el.scrollTop) el.scrollTop = top;
-    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
+    if (center) {
+      el.scrollTop = Math.max(0, top - (el.clientHeight - ROW_H) / 2);
+    } else if (top < el.scrollTop) {
+      el.scrollTop = top;
+    } else if (top + ROW_H > el.scrollTop + el.clientHeight) {
+      el.scrollTop = top + ROW_H - el.clientHeight;
+    }
+  }
+
+  /** Jump to the playing row (the queue can be tens of thousands of rows). */
+  function goToCurrent(): void {
+    if (currentIndex == null) return;
+    selected = currentIndex;
+    scrollToIndex(currentIndex, true);
+    listEl?.focus();
   }
 
   // `gap` is the insertion boundary (0..items.length) in pre-removal
@@ -195,11 +212,71 @@
     x: number;
     y: number;
     index: number;
+    /** Queue identity guard for async detail lookups. */
+    path: string;
   }
 
   let menu = $state<MenuState | null>(null);
   let menuInfo = $state<StarInfo | null>(null);
+  let menuTrack = $state<Track | null>(null);
   const starCache = new Map<string, StarInfo>();
+  /** Full library row per path; `null` caches "not indexed". */
+  const trackCache = new Map<string, Track | null>();
+
+  /** Non-interactive details block for the open menu (queue fallbacks). */
+  const menuDetails = $derived.by(() => {
+    const m = menu;
+    if (!m) return [];
+    const item = items[m.index];
+    if (!item) return [];
+    const t = menuTrack;
+    const rows: { label: string; value: string }[] = [];
+    const add = (label: string, value: string | null | undefined): void => {
+      if (value != null && value.trim() !== "") rows.push({ label, value });
+    };
+
+    add("title", t?.title || item.title);
+    add("artist", t?.artist || item.artist);
+    add(
+      "album",
+      t
+        ? [t.album, t.year != null ? `(${t.year})` : ""].filter(Boolean).join(" ")
+        : null,
+    );
+    add("genre", t?.genre);
+
+    const secs = t?.durationSecs ?? item.durationSecs;
+    const trackNo =
+      t?.trackNo != null
+        ? `track ${t.discNo != null ? `${t.discNo}.` : ""}${t.trackNo}`
+        : "";
+    add("length", [secs != null ? fmt(secs) : "", trackNo].filter(Boolean).join(" · "));
+
+    add(
+      "quality",
+      [
+        t?.codec ? t.codec.toUpperCase() : "",
+        t?.bitrateKbps != null ? `${t.bitrateKbps} kbps` : "",
+        t?.samplerate != null ? `${(t.samplerate / 1000).toFixed(1)} kHz` : "",
+        t?.channels === 1 ? "mono" : t?.channels === 2 ? "stereo" : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+
+    if (t) {
+      const added =
+        t.dateAdded > 0 ? new Date(t.dateAdded * 1000).toLocaleDateString() : "";
+      add(
+        "plays",
+        [`${t.playCount}×`, added ? `added ${added}` : ""].filter(Boolean).join(" · "),
+      );
+      add("source", t.source === "navidrome" ? "Navidrome" : "Local");
+    } else {
+      add("source", "not in library");
+    }
+    return rows;
+  });
 
   const menuItems = $derived.by((): ContextMenuItem[] => {
     const m = menu;
@@ -246,20 +323,35 @@
     const item = items[index];
     if (!item) return;
     selected = index;
-    const cached = item.remoteId != null ? starCache.get(item.path) : null;
-    menuInfo = cached ?? null;
-    menu = { x: e.clientX, y: e.clientY, index };
-    if (item.remoteId != null && cached == null) {
-      void libraryTrack(item.path)
-        .then((track) => {
-          const info = { starred: track?.starred ?? false, rating: track?.rating ?? 0 };
-          starCache.set(item.path, info);
-          if (menu?.index === index) menuInfo = info;
-        })
-        .catch(() => {
-          if (menu?.index === index) menuInfo = { starred: false, rating: 0 };
-        });
-    }
+    const cachedTrack = trackCache.get(item.path) ?? null;
+    const cachedStar = starCache.get(item.path) ?? null;
+    menuTrack = cachedTrack;
+    menuInfo = item.remoteId != null ? cachedStar : null;
+    menu = { x: e.clientX, y: e.clientY, index, path: item.path };
+
+    const needsTrack = !trackCache.has(item.path);
+    const needsStar = item.remoteId != null && cachedStar == null;
+    if (!needsTrack && !needsStar) return;
+    void libraryTrack(item.path)
+      .then((track) => {
+        trackCache.set(item.path, track);
+        const info = {
+          starred: track?.starred ?? false,
+          rating: track?.rating ?? 0,
+        };
+        if (item.remoteId != null) starCache.set(item.path, info);
+        if (menu?.path === item.path) {
+          menuTrack = track;
+          if (item.remoteId != null) menuInfo = info;
+        }
+      })
+      .catch(() => {
+        trackCache.set(item.path, null);
+        if (menu?.path === item.path) {
+          menuTrack = null;
+          if (item.remoteId != null) menuInfo = { starred: false, rating: 0 };
+        }
+      });
   }
 
   async function mirrorStar(item: QueueItem, starred: boolean): Promise<void> {
@@ -428,8 +520,10 @@
       onclick={() => selected != null && onremove(selected)}
       disabled={selected == null}>REM</button
     >
-    <!-- TODO(M4): select helpers / sort & misc ops. -->
-    <button disabled title="TODO(M4): selection helpers">SEL</button>
+    <button
+      onclick={goToCurrent}
+      disabled={currentIndex == null}
+      title="scroll to the current queue item">NOW</button>
     <button disabled title="TODO(M4): sort and misc ops">MISC</button>
     <span class="totals">{totalText}</span>
   </footer>
@@ -440,6 +534,7 @@
     x={menu.x}
     y={menu.y}
     items={menuItems}
+    info={menuDetails}
     onselect={menuSelect}
     onclose={() => (menu = null)} />
 {/if}
