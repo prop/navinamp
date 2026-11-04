@@ -299,6 +299,22 @@ CREATE TABLE IF NOT EXISTS smart_view_playlists (
     remote_playlist_id TEXT NOT NULL,
     PRIMARY KEY (server, smart_view_id)
 );
+
+-- Per-track embedding vectors for semantic search. Keyed by the embedding
+-- model id: switching providers keeps older vectors around (switching back is
+-- free) and lets the status query detect tracks whose metadata changed since
+-- they were embedded. `vector` is little-endian f32 * dims; the metadata text
+-- itself is not duplicated (only its hash).
+CREATE TABLE IF NOT EXISTS track_embeddings (
+    track_id   INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    model      TEXT NOT NULL,
+    dims       INTEGER NOT NULL,
+    text_hash  INTEGER NOT NULL,
+    vector     BLOB NOT NULL,
+    updated_at INTEGER NOT NULL,               -- unix seconds
+    PRIMARY KEY (track_id, model)
+);
+CREATE INDEX IF NOT EXISTS idx_track_embeddings_model ON track_embeddings(model);
 COMMIT;
 ";
 

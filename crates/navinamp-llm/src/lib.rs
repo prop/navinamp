@@ -3,8 +3,10 @@
 //! Two wire shapes cover every provider we support:
 //! * **OpenAI-compatible** (`POST {base}/chat/completions`, bearer auth) —
 //!   OpenRouter, OpenAI, DeepSeek, Zhipu GLM, Moonshot Kimi, MiniMax and
-//!   local Ollama/LM Studio.
+//!   local Ollama/LM Studio. Their `{base}/embeddings` endpoint is used for
+//!   semantic search ([`embed`]).
 //! * **Anthropic** (`POST {base}/v1/messages`, `x-api-key`) — Claude.
+//!   Anthropic has no embeddings API.
 //!
 //! Tool use is deliberately *not* provider-native: the search orchestrator
 //! (in the Tauri layer) asks the model to emit a JSON tool request and loops
@@ -103,6 +105,8 @@ pub enum LlmError {
     Shape(String),
     #[error("provider returned an empty reply")]
     Empty,
+    #[error("this provider does not expose an embeddings endpoint")]
+    Unsupported,
 }
 
 pub type Result<T> = std::result::Result<T, LlmError>;
@@ -349,6 +353,112 @@ pub async fn list_models(config: &LlmConfig) -> Result<Vec<String>> {
     parse_models(&body)
 }
 
+fn embeddings_endpoint(config: &LlmConfig) -> String {
+    format!("{}/embeddings", config.base_url.trim_end_matches('/'))
+}
+
+/// Parse an OpenAI-compatible `/embeddings` response body. Responses may
+/// arrive out of order (the `index` field restores input order); every vector
+/// must have the same non-zero dimension.
+fn parse_embeddings(body: &str, expected: usize) -> Result<Vec<Vec<f32>>> {
+    if expected == 0 {
+        return Ok(Vec::new());
+    }
+    let value: Value = serde_json::from_str(body).map_err(|e| LlmError::Shape(e.to_string()))?;
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| LlmError::Shape("embedding response has no data array".into()))?;
+    if data.len() != expected {
+        return Err(LlmError::Shape(format!(
+            "embedding response has {} vectors for {expected} inputs",
+            data.len()
+        )));
+    }
+    let mut indexed: Vec<(usize, Vec<f32>)> = Vec::with_capacity(data.len());
+    for (position, item) in data.iter().enumerate() {
+        let index = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .map(|index| index as usize)
+            .unwrap_or(position);
+        let values = item
+            .get("embedding")
+            .and_then(Value::as_array)
+            .ok_or_else(|| LlmError::Shape("embedding item has no vector".into()))?;
+        let mut vector = Vec::with_capacity(values.len());
+        for value in values {
+            let number = value
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| LlmError::Shape("embedding has a non-finite value".into()))?;
+            vector.push(number as f32);
+        }
+        if vector.is_empty() {
+            return Err(LlmError::Shape("embedding vector is empty".into()));
+        }
+        indexed.push((index, vector));
+    }
+    indexed.sort_by_key(|(index, _)| *index);
+    if indexed
+        .iter()
+        .enumerate()
+        .any(|(position, (index, _))| position != *index)
+    {
+        return Err(LlmError::Shape(
+            "embedding response has duplicate or out-of-range indices".into(),
+        ));
+    }
+    let dims = indexed[0].1.len();
+    if indexed.iter().any(|(_, vector)| vector.len() != dims) {
+        return Err(LlmError::Shape(
+            "embedding response mixes vector dimensions".into(),
+        ));
+    }
+    Ok(indexed.into_iter().map(|(_, vector)| vector).collect())
+}
+
+/// Embed `inputs` with an OpenAI-compatible `/embeddings` endpoint. Anthropic
+/// has no equivalent API, so it returns [`LlmError::Unsupported`].
+///
+/// The caller owns batching and persistence; this is one request.
+pub async fn embed(config: &LlmConfig, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    if config.provider != ProviderKind::OpenAiCompatible {
+        return Err(LlmError::Unsupported);
+    }
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(LlmError::Shape("embedding model is empty".into()));
+    }
+    let timeout = Duration::from_secs(config.timeout_secs.clamp(5, 300));
+    let client = reqwest::Client::builder()
+        .timeout(timeout)
+        .user_agent(USER_AGENT)
+        .build()?;
+    let url = embeddings_endpoint(config);
+    let mut request = client.post(&url).json(&json!({
+        "model": model,
+        "input": inputs,
+        // Force the portable float-array shape (some gateways default to
+        // base64, which this parser does not accept).
+        "encoding_format": "float",
+    }));
+    if !config.api_key.trim().is_empty() {
+        request = request.bearer_auth(config.api_key.trim());
+    }
+    let response = request.send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        let excerpt: String = body.chars().take(400).collect();
+        return Err(LlmError::Status(status.as_u16(), excerpt));
+    }
+    parse_embeddings(&body, inputs.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +521,76 @@ mod tests {
             parse_anthropic(r#"{"content":[]}"#),
             Err(LlmError::Empty)
         ));
+    }
+
+    #[test]
+    fn embedding_endpoint_uses_the_openai_suffix() {
+        assert_eq!(
+            embeddings_endpoint(&cfg(ProviderKind::OpenAiCompatible, "https://x.test/v1/")),
+            "https://x.test/v1/embeddings"
+        );
+    }
+
+    #[test]
+    fn parses_embeddings_in_index_order_and_validates_shape() {
+        let body = r#"{"data":[
+            {"index":1,"embedding":[0.3,0.4]},
+            {"index":0,"embedding":[0.1,0.2]}
+        ]}"#;
+        let vectors = parse_embeddings(body, 2).unwrap();
+        assert_eq!(vectors, vec![vec![0.1, 0.2], vec![0.3, 0.4]]);
+
+        assert!(parse_embeddings(body, 1).is_err(), "count mismatch");
+        let mixed = r#"{"data":[
+            {"index":0,"embedding":[0.1,0.2]},
+            {"index":1,"embedding":[0.3]}
+        ]}"#;
+        assert!(parse_embeddings(mixed, 2).is_err(), "dimension mismatch");
+        let bad_index = r#"{"data":[
+            {"index":0,"embedding":[0.1]},
+            {"index":0,"embedding":[0.2]}
+        ]}"#;
+        assert!(parse_embeddings(bad_index, 2).is_err(), "duplicate index");
+        assert!(
+            parse_embeddings(r#"{"data":[]}"#, 0)
+                .expect("no inputs")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn embed_posts_to_the_compatible_endpoint() {
+        use wiremock::matchers::{body_string_contains, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
+            .and(header("authorization", "Bearer sk-secret"))
+            .and(body_string_contains("\"model\":\"embed-test\""))
+            .and(body_string_contains("\"input\":[\"a\",\"b\"]"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"data":[{"index":0,"embedding":[1,2]},{"index":1,"embedding":[3,4]}]}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let config = LlmConfig {
+            provider: ProviderKind::OpenAiCompatible,
+            base_url: format!("{}/v1", server.uri()),
+            api_key: "sk-secret".into(),
+            ..LlmConfig::default()
+        };
+        let inputs = vec!["a".to_owned(), "b".to_owned()];
+        let vectors = embed(&config, "embed-test", &inputs).await.unwrap();
+        assert_eq!(vectors, vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+    }
+
+    #[tokio::test]
+    async fn anthropic_embeddings_are_unsupported() {
+        let config = cfg(ProviderKind::Anthropic, "https://api.anthropic.com");
+        let error = embed(&config, "any", &["a".to_owned()]).await.unwrap_err();
+        assert!(matches!(error, LlmError::Unsupported));
     }
 
     #[tokio::test]

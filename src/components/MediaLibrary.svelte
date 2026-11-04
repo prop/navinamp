@@ -47,10 +47,17 @@
   } from "../lib/audio/auto";
   import {
     AI_CONFIG_EVENT,
+    SEMANTIC_PROGRESS_EVENT,
     aiGetConfig,
     aiSearch,
+    semanticIndex,
+    semanticSearch,
+    semanticStatus,
     type AiConfig,
     type AiSearchReport,
+    type SemanticProgress,
+    type SemanticSearchReport,
+    type SemanticStatus,
   } from "../lib/ai/ipc";
   import {
     friendlyIpcError,
@@ -266,19 +273,22 @@
     };
   });
 
-  // ── search: simple / advanced / AI ────────────────────────────────────────
+  // ── search: simple / advanced / AI / semantic ─────────────────────────────
   // Simple = debounced FTS. Advanced = the Smart View rule engine. AI = one
   // LLM call that emits (and optionally Discogs-enriches) a Smart View def,
-  // then the same local query runs. All three feed `searchResults`, so the
-  // table, selection and bulk actions are shared.
+  // then the same local query runs. Semantic = provider embeddings + cosine
+  // over the local vector index. All four feed `searchResults`, so the table,
+  // selection and bulk actions are shared.
 
-  type SearchMode = "simple" | "advanced" | "ai";
+  type SearchMode = "simple" | "advanced" | "ai" | "semantic";
   const SEARCH_MODE_KEY = "navinamp.search.mode";
 
   function readSearchMode(): SearchMode {
     try {
       const raw = localStorage.getItem(SEARCH_MODE_KEY);
-      return raw === "advanced" || raw === "ai" ? raw : "simple";
+      return raw === "advanced" || raw === "ai" || raw === "semantic"
+        ? raw
+        : "simple";
     } catch {
       return "simple";
     }
@@ -298,6 +308,14 @@
   let aiUsedPrompt = $state("");
   let aiConfig = $state.raw<AiConfig | null>(null);
   let showAiSettings = $state(false);
+
+  // Semantic search (provider embeddings + local cosine index).
+  let semanticPrompt = $state("");
+  let semanticInfo = $state.raw<SemanticStatus | null>(null);
+  let semanticReport = $state.raw<SemanticSearchReport | null>(null);
+  let semanticIndexing = $state(false);
+  let semanticProgress = $state.raw<SemanticProgress | null>(null);
+  let semanticNote = $state<string | null>(null);
   let advancedSeed = $state.raw<SmartViewDef>(emptySearchDef());
   let advancedKey = $state(0);
 
@@ -334,15 +352,35 @@
     }
   }
 
+  async function refreshSemanticStatus(): Promise<void> {
+    try {
+      semanticInfo = await semanticStatus();
+    } catch {
+      semanticInfo = null;
+    }
+  }
+
   $effect(() => {
     void refreshAiConfig();
+    void refreshSemanticStatus();
   });
 
-  // The onboarding wizard saves ai.json from the library window's TourHost;
-  // reflect the enabled state in the AI mode row immediately.
+  // The onboarding wizard / AI settings modal saves ai.json; reflect both the
+  // chat enabled state and the embedding model immediately.
   $effect(() => {
     const unlisten = listen(AI_CONFIG_EVENT, () => {
       void refreshAiConfig();
+      void refreshSemanticStatus();
+    }).catch(() => () => undefined);
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  });
+
+  // Index progress (batch events from `semantic_index`).
+  $effect(() => {
+    const unlisten = listen<SemanticProgress>(SEMANTIC_PROGRESS_EVENT, (event) => {
+      if (semanticIndexing) semanticProgress = event.payload;
     }).catch(() => () => undefined);
     return () => {
       void unlisten.then((stop) => stop());
@@ -355,10 +393,13 @@
     searchResults = null;
     searchDef = null;
     aiReport = null;
+    semanticReport = null;
+    semanticNote = null;
     searchError = null;
     searchBusy = false;
     playlistSaveOpen = false;
     searchSeq++;
+    if (mode === "semantic") void refreshSemanticStatus();
   }
 
   function onSearchInput(e: Event & { currentTarget: HTMLInputElement }): void {
@@ -471,14 +512,80 @@
     playlistSaveOpen = false;
   }
 
+  async function runSemanticSearch(): Promise<void> {
+    const prompt = semanticPrompt.trim();
+    if (prompt === "" || searchBusy) return;
+    const seq = ++searchSeq;
+    searchBusy = true;
+    searchError = null;
+    semanticNote = null;
+    semanticReport = null;
+    searchResults = null;
+    playlistSaveOpen = false;
+    try {
+      const report = await semanticSearch(prompt, 100);
+      if (seq !== searchSeq) return;
+      semanticReport = report;
+      searchDef = null;
+      aiReport = null;
+      searchResults = report.tracks;
+      onlog(
+        `semantic search: ${report.tracks.length} track${report.tracks.length === 1 ? "" : "s"} via ${report.model}`,
+      );
+    } catch (e) {
+      if (seq !== searchSeq) return;
+      semanticReport = null;
+      searchResults = null;
+      searchError = friendlyIpcError("semantic search", e);
+    } finally {
+      if (seq === searchSeq) searchBusy = false;
+    }
+  }
+
+  async function buildSemanticIndex(rebuild: boolean): Promise<void> {
+    if (semanticIndexing) return;
+    semanticIndexing = true;
+    semanticNote = null;
+    semanticReport = null;
+    searchResults = null;
+    searchError = null;
+    semanticProgress = null;
+    try {
+      const report = await semanticIndex(rebuild);
+      const note =
+        report.embedded === 0
+          ? "index is already up to date"
+          : `embedded ${report.embedded.toLocaleString()} track${report.embedded === 1 ? "" : "s"}`;
+      onlog(`semantic index: ${note}`);
+      semanticIndexing = false;
+      semanticProgress = null;
+      await refreshSemanticStatus();
+      if (searchMode === "semantic" && semanticPrompt.trim() !== "") {
+        await runSemanticSearch();
+      }
+      semanticNote = note;
+    } catch (e) {
+      searchError = friendlyIpcError("semantic index", e);
+    } finally {
+      semanticIndexing = false;
+      semanticProgress = null;
+    }
+  }
+
   /** Build a saveable def for the current results (simple search fallback). */
   function searchDefForSave(): SmartViewDef | null {
     if (searchDef != null) return searchDef;
     const rows = searchResults ?? [];
     if (rows.length === 0) return null;
     const sample = rows.slice(0, 500);
+    const prompt =
+      searchMode === "ai"
+        ? aiUsedPrompt || aiPrompt
+        : searchMode === "semantic"
+          ? semanticPrompt
+          : searchQ;
     return {
-      name: (searchQ.trim() || "search results").slice(0, 60),
+      name: (prompt.trim() || "search results").slice(0, 60),
       group: {
         match: "any",
         rules: sample.map((t) => ({ field: "path" as const, op: "is" as const, value: t.path })),
@@ -493,7 +600,7 @@
     const def = searchDefForSave();
     if (def == null) return;
     if (searchDef == null && (searchResults?.length ?? 0) > 500) {
-      onlog("search: simple-mode save covers the first 500 results as path rules");
+      onlog("search: result save covers the first 500 rows as path rules");
     }
     editing = { id: null, def };
   }
@@ -501,10 +608,14 @@
   function openPlaylistSave(): void {
     const rows = searchResults ?? [];
     if (rows.length === 0) return;
+    const prompt =
+      searchMode === "ai"
+        ? aiUsedPrompt || aiPrompt
+        : searchMode === "semantic"
+          ? semanticPrompt
+          : searchQ;
     const suggested =
-      searchDef?.name?.trim() ||
-      (searchMode === "ai" ? aiPrompt : searchQ).trim() ||
-      "search results";
+      searchDef?.name?.trim() || prompt.trim() || "search results";
     playlistName = suggested.slice(0, 40);
     playlistServer =
       navProfiles.find((p) => p.id === navStatus?.profileId)?.id ??
@@ -1061,6 +1172,17 @@
     return nodeError;
   });
 
+  const resultRuleLabel = $derived.by(() => {
+    if (searchDef != null) return plainRules(searchDef);
+    if (searchMode === "semantic") {
+      return semanticReport != null
+        ? `${semanticReport.model} · cosine top ${semanticReport.indexed.toLocaleString()}`
+        : "semantic search";
+    }
+    if (searchMode === "ai") return "AI search";
+    return "simple search";
+  });
+
   const emptyMessage = $derived.by(() => {
     if (searchResults != null) {
       if (searchMode === "ai") {
@@ -1069,6 +1191,7 @@
         }
         return "no tracks match the AI query";
       }
+      if (searchMode === "semantic") return "no semantic matches — try another phrase";
       if (searchMode === "advanced") return "no tracks match these rules";
       return `no matches for “${searchQ.trim()}”`;
     }
@@ -1245,6 +1368,7 @@
         onlog(`media library: scan failed: ${payload.error}`);
       }
       void refreshAll();
+      void refreshSemanticStatus();
       dataVersion++; // re-run the current node's query
     });
     return () => {
@@ -1713,6 +1837,7 @@
         void refreshNavStatus();
         void refreshNavProfiles();
         void refreshAll();
+        void refreshSemanticStatus();
         ratingOverrides = new Map(); // pick up server-seeded ratings
         starOverrides = new Map(); // ...and server-owned stars
         dataVersion++; // re-run the current node's query (synced rows landed)
@@ -1964,7 +2089,7 @@
     </span>
   </div>
 
-  <!-- search deck: three modes, then the shared result table below -->
+  <!-- search deck: four modes, then the shared result table below -->
   <div class="searchbar" data-tour="search">
     <div class="modes" role="group" aria-label="search mode">
       <button
@@ -1983,6 +2108,11 @@
         class:on={searchMode === "ai"}
         onclick={() => switchMode("ai")}
         title="describe the music you want; the model builds the rules">AI</button>
+      <button
+        class="mode"
+        class:on={searchMode === "semantic"}
+        onclick={() => switchMode("semantic")}
+        title="find tracks by meaning using embeddings">SEMANTIC</button>
     </div>
 
     {#if searchMode === "simple"}
@@ -2028,12 +2158,95 @@
           SET UP
         </button>
       {/if}
+    {:else if searchMode === "semantic"}
+      <input
+        class="search prompt"
+        type="text"
+        bind:value={semanticPrompt}
+        placeholder="describe a mood, era, or similar sound…"
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off"
+        autocomplete="off"
+        aria-label="semantic search prompt"
+        onkeydown={(e) => {
+          if (e.key === "Enter") void runSemanticSearch();
+        }} />
+      <button
+        class="runai"
+        onclick={() => void runSemanticSearch()}
+        disabled={searchBusy || semanticPrompt.trim() === "" || semanticInfo?.configured !== true}
+        title="embed the prompt and rank tracks by cosine similarity">
+        {searchBusy ? "SEARCHING…" : "SEARCH"}
+      </button>
+      <button
+        class="runai"
+        onclick={() => void buildSemanticIndex(false)}
+        disabled={semanticIndexing || semanticInfo?.configured !== true || (semanticInfo?.stale ?? 0) === 0}
+        title="embed tracks that are new or whose metadata changed">
+        {semanticIndexing ? "INDEXING…" : "INDEX"}
+      </button>
+      {#if semanticInfo?.configured !== true}
+        <button
+          class="runai setup"
+          onclick={() => (showAiSettings = true)}
+          title="configure an embedding model and provider">
+          SET UP
+        </button>
+      {/if}
     {:else}
       <span class="advhint">
         {searchBusy ? "searching…" : "build rules below, then RUN"}
       </span>
     {/if}
   </div>
+
+  {#if searchMode === "semantic"}
+    <div class="aibanner">
+      <div class="aihead">
+        <span class="aibadge">SEMANTIC</span>
+        {#if semanticInfo?.configured}
+          <span class="aimeta">
+            {semanticInfo.model} · {semanticInfo.indexed.toLocaleString()}/{semanticInfo.total.toLocaleString()} embedded
+            {#if semanticInfo.stale > 0}
+              · {semanticInfo.stale.toLocaleString()} stale
+            {/if}
+          </span>
+          <button
+            class="new"
+            onclick={() => void buildSemanticIndex(true)}
+            disabled={semanticIndexing}
+            title="drop this model's vectors and re-embed every track">
+            REBUILD
+          </button>
+        {:else}
+          <span class="aimeta">not configured</span>
+          <button class="new" onclick={() => (showAiSettings = true)}>SET UP</button>
+        {/if}
+      </div>
+      {#if semanticIndexing}
+        <div class="aiexpl">
+          Embedding
+          {semanticProgress && semanticProgress.total > 0
+            ? `${semanticProgress.done.toLocaleString()} / ${semanticProgress.total.toLocaleString()}`
+            : "…"}
+          track metadata…
+        </div>
+      {:else if semanticNote}
+        <div class="aiexpl">{semanticNote}</div>
+      {:else if semanticInfo?.configured}
+        <div class="aiexpl">
+          {semanticReport?.explanation ??
+            "Cosine similarity over a local index. Track metadata is sent to your provider only when indexing."}
+        </div>
+      {:else}
+        <div class="aiexpl">
+          {semanticInfo?.message ??
+            "Configure an OpenAI-compatible embedding model in AI settings."}
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   {#if searchMode === "advanced"}
     {#key advancedKey}
@@ -2132,8 +2345,8 @@
       <span class="rbcount">
         {searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"}
       </span>
-      <span class="rbrule" title={searchDef ? plainRules(searchDef) : "simple full-text search"}>
-        {searchDef ? plainRules(searchDef) : "simple search"}
+      <span class="rbrule" title={resultRuleLabel}>
+        {resultRuleLabel}
       </span>
       <button onclick={saveSearchAsView} title="save these results as a smart view">
         SAVE VIEW
@@ -2695,7 +2908,10 @@
   {#if showAiSettings}
     <AiSettings
       onclose={() => (showAiSettings = false)}
-      onchanged={() => void refreshAiConfig()} />
+      onchanged={() => {
+        void refreshAiConfig();
+        void refreshSemanticStatus();
+      }} />
   {/if}
 
   {#if rowMenu}
@@ -2831,7 +3047,15 @@
     font-weight: 600;
   }
 
+  .aihead .aimeta {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
   .aihead .new {
+    flex: none;
     margin-left: auto;
   }
 

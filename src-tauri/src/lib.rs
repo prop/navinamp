@@ -7,6 +7,7 @@ mod library;
 mod media;
 mod menu;
 mod navidrome;
+mod semantic;
 mod skin;
 mod smart;
 mod windows;
@@ -35,6 +36,7 @@ pub fn run() {
         .manage(skin::SkinCache::default())
         .manage(library::LibraryState::default())
         .manage(navidrome::NavidromeState::default())
+        .manage(semantic::SemanticState::default())
         .manage(windows::WindowManager::default())
         .manage(media::MediaHub::default())
         .setup(|app| {
@@ -95,6 +97,9 @@ pub fn run() {
             ai::ai_models,
             ai::ai_search,
             ai::ai_offline_search,
+            semantic::semantic_status,
+            semantic::semantic_index,
+            semantic::semantic_search,
             audio::eq_set_enabled,
             audio::eq_set_preamp,
             audio::eq_set_band,

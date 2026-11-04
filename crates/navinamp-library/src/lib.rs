@@ -56,6 +56,7 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
 }
 
 mod art;
+mod embedding;
 mod model;
 mod query;
 mod remote;
@@ -65,6 +66,7 @@ mod smart;
 mod text;
 
 pub use art::sniff_ext;
+pub use embedding::{EmbeddingJob, EmbeddingStatus};
 pub use model::{
     Album, LibraryStats, RemoteAlbum, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress,
     ScanReport, ServerStats, SourceStats, Track, TrackFilter,
