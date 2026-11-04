@@ -31,12 +31,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navinamp_library::{Library, RemoteTrack, Track, remote_path, repair_tag_text};
+use navinamp_library::{Library, RemoteAlbum, RemoteTrack, Track, remote_path, repair_tag_text};
 use navinamp_subsonic::{
-    AlbumDetail, MusicFolder, PlaylistSummary, SongSummary, StreamFormat, SubsonicClient,
+    AlbumDetail, AlbumSummary, MusicFolder, PlaylistSummary, SongSummary, StreamFormat,
+    SubsonicClient,
 };
 
 use crate::library::{LibraryState, db_file, with_library};
@@ -51,6 +53,9 @@ const SYNCED_EVENT: &str = "navidrome-synced";
 const PROGRESS_EVERY: u64 = 32;
 /// Page size for the pre-walk `getAlbumList2` pass that sums `songCount`.
 const TRACK_COUNT_PAGE: u32 = 500;
+/// Concurrent `getAlbum` requests during a sync. Bounded to stay friendly to
+/// modest servers while cutting a large full rescan's wall time.
+const SYNC_CONCURRENCY: usize = 6;
 /// Flush decoded rows to the library at least every N tracks (so the UI can
 /// render partial results during a long sync) or on every progress tick.
 const SYNC_BATCH_TRACKS: usize = 512;
@@ -1190,18 +1195,34 @@ struct SyncTarget {
     client: Arc<SubsonicClient>,
 }
 
-/// Full-library sync: `getAlbumList2` count pass + `getArtists` → albums →
-/// `getAlbum` per album, per server. With no `server_id` every saved profile
-/// is walked sequentially; with one, just that profile. Runs on a dedicated
-/// thread; one sync at a time (a second invoke fails with an error string).
-/// Progress in `navidrome-progress` events (track units, tagged with the
-/// server), final `navidrome-synced`.
+/// Borrowed inputs shared by the album-index and artist-fallback walks.
+#[derive(Clone, Copy)]
+struct SyncJob<'a> {
+    app: &'a AppHandle,
+    client: &'a SubsonicClient,
+    library: &'a Library,
+    library_id: Option<&'a str>,
+    server_id: &'a str,
+    label: &'a str,
+    force_full: bool,
+}
+
+/// Library sync for one or all saved servers. A quick sync (default) pages
+/// the cheap album index and only calls `getAlbum` for new/changed albums;
+/// `full = true` re-fetches every album. Albums are fetched concurrently.
+/// With no `server_id` every saved profile is walked sequentially; with one,
+/// just that profile. Runs on a dedicated thread; one sync at a time (a
+/// second invoke fails with an error string). Progress in
+/// `navidrome-progress` events (track units, tagged with the server), final
+/// `navidrome-synced`.
 #[tauri::command]
 pub async fn navidrome_sync(
     app: AppHandle,
     state: State<'_, NavidromeState>,
     server_id: Option<String>,
+    full: Option<bool>,
 ) -> Result<SyncReport, String> {
+    let force_full = full.unwrap_or(false);
     if state.syncing.swap(true, Ordering::SeqCst) {
         return Err("a navidrome sync is already running".into());
     }
@@ -1252,6 +1273,7 @@ pub async fn navidrome_sync(
                     target.library_id.as_deref(),
                     &target.server_id,
                     &target.label,
+                    force_full,
                 ) {
                     Ok(report) => {
                         successes += 1;
@@ -1380,9 +1402,10 @@ fn mark_synced(app: &AppHandle, inner: &Arc<Mutex<Inner>>, server_id: &str) {
 // the walk
 // ---------------------------------------------------------------------------
 
-/// The sync walk for one server (runs on its own thread): fetch artists →
-/// their albums → each album's songs, then hand the batches to
-/// `upsert_remote` and prune only this server.
+/// The sync walk for one server (runs on its own thread). A quick rescan
+/// compares the cheap album index against stored fingerprints and only
+/// fetches changed albums; a full rescan fetches every album. Either way the
+/// album walk is concurrent and prunes only this server after a clean pass.
 fn run_sync(
     app: &AppHandle,
     client: &SubsonicClient,
@@ -1390,168 +1413,72 @@ fn run_sync(
     library_id: Option<&str>,
     server_id: &str,
     label: &str,
+    force_full: bool,
 ) -> Result<SyncReport, String> {
     let started = Instant::now();
     tauri::async_runtime::block_on(async {
         let mut report = SyncReport::default();
-
-        let artists = client
-            .get_artists(library_id)
-            .await
-            .map_err(|e| scrub_urls(&e.to_string()))?;
-        report.artists = artists.len() as u64;
-        // Give the UI immediate feedback while the count pass runs; this
-        // pass is serial and can take several seconds on a slow link.
+        // Immediate feedback while the album index is paged.
         emit_progress(app, 0, 0, server_id, label);
-        // The walk is album-based, but progress is shown in tracks. Sum the
-        // album `songCount`s once so the denominator is known up front. A
-        // failure here is non-fatal: total stays 0 and the UI shows the
-        // scanned count without a bar.
-        let (total_tracks, total_albums) = count_library_tracks(client, library_id)
-            .await
-            .unwrap_or((0, 0));
-        emit_progress(app, 0, total_tracks, server_id, label);
+        let job = SyncJob {
+            app,
+            client,
+            library,
+            library_id,
+            server_id,
+            label,
+            force_full,
+        };
 
-        let mut tracks: Vec<RemoteTrack> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut visited_albums: HashSet<String> = HashSet::new();
-        let mut scanned_albums: u64 = 0;
-        let mut scanned_tracks: u64 = 0;
-        // An artist-level failure means we never learn that artist's album
-        // ids, so the pre-pass total can no longer be reached. Drop the
-        // denominator from that point on instead of pinning a bar below 100%.
-        let mut progress_reliable = true;
-        for artist in &artists {
-            // Per-artist failure ( vanished artist, network hiccup) is
-            // reported and skipped: a sync never dies from one bad node.
-            let albums = match client.get_artist(&artist.id).await {
-                Ok(albums) => albums,
-                Err(e) => {
-                    report.errors.push(format!(
-                        "artist `{}`: {}",
-                        artist.name,
-                        scrub_urls(&e.to_string())
-                    ));
-                    progress_reliable = false;
-                    emit_progress(app, scanned_tracks, 0, server_id, label);
-                    scanned_albums += u64::from(artist.album_count);
-                    continue;
-                }
-            };
-            for album in albums {
-                // `getArtist` returns an album for every artist it appears
-                // on, so shared/compilation albums can be visited more than
-                // once. Dedup exactly like the count pass: one visit, one
-                // request, one contribution to the numerator.
-                if !visited_albums.insert(album.id.clone()) {
-                    continue;
-                }
-                report.albums += 1;
-                match client.get_album(&album.id).await {
-                    Ok(detail) => {
-                        for song in &detail.songs {
-                            if !song.id.is_empty() {
-                                seen.insert(song.id.clone());
-                            }
-                            tracks.push(map_song(&detail, song, server_id));
-                        }
-                        // Match the count pass: when a denominator exists,
-                        // use the server's `songCount` on both sides so a
-                        // stale/odd per-album count cannot hit 100% early.
-                        scanned_tracks += if total_tracks > 0 {
-                            u64::from(album.song_count)
-                        } else {
-                            detail.songs.len() as u64
-                        };
-                    }
-                    Err(e) => {
-                        report.errors.push(format!(
-                            "album `{}`: {}",
-                            album.name,
-                            scrub_urls(&e.to_string())
-                        ));
-                        scanned_tracks += u64::from(album.song_count);
-                    }
-                }
-                scanned_albums += 1;
-                if scanned_albums.is_multiple_of(PROGRESS_EVERY)
-                    || (total_albums > 0 && scanned_albums >= total_albums)
-                {
-                    // Persist the rows decoded so far *before* announcing
-                    // progress: the library pane refreshes on these events.
-                    flush_remote_batch(library, &mut tracks, &mut report)?;
-                    let total = if progress_reliable { total_tracks } else { 0 };
-                    let shown = if total == 0 {
-                        scanned_tracks
-                    } else {
-                        scanned_tracks.min(total)
-                    };
-                    emit_progress(app, shown, total, server_id, label);
-                } else if tracks.len() >= SYNC_BATCH_TRACKS {
-                    flush_remote_batch(library, &mut tracks, &mut report)?;
-                }
+        match fetch_album_index(client, library_id).await {
+            Some(albums) => {
+                sync_album_index(job, albums, &mut report).await?;
+            }
+            // Servers without a usable getAlbumList2 fall back to the old
+            // artist walk (full sync, no fingerprints).
+            None => {
+                sync_by_artist(job, &mut report).await?;
             }
         }
 
-        flush_remote_batch(library, &mut tracks, &mut report)?;
-        // Ensure the last tick lands even when the pre-pass album count and
-        // the walk's unique-album count disagree slightly.
-        let total = if progress_reliable { total_tracks } else { 0 };
-        let shown = if total == 0 {
-            scanned_tracks
-        } else {
-            scanned_tracks.min(total)
-        };
-        emit_progress(app, shown, total, server_id, label);
-        // Prune only after a complete walk: a failed sync must never delete
-        // rows it simply did not reach.
-        report.tracks_removed = library
-            .prune_remote(server_id, &seen)
-            .map_err(|e| format!("library sync prune failed: {e}"))?;
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
     })
 }
 
-/// Sum the album-list `songCount`s for the selected library. This is a
-/// one-time pre-pass, so the sync progress can be expressed in tracks
-/// without changing the album-based walk (which keeps per-album failure
-/// isolation and the exact artist count).
-///
-/// Returns `(tracks, albums)` for a complete walk. `None` means the count is
-/// not trustworthy (network error, or a server that ignored `offset`); the
-/// UI then shows scanned tracks without a denominator.
-async fn count_library_tracks(
+/// Page the whole album index for one library, deduped by album id. `None`
+/// means the endpoint failed or ignored `offset`; the caller falls back to
+/// the artist walk.
+async fn fetch_album_index(
     client: &SubsonicClient,
     library_id: Option<&str>,
-) -> Option<(u64, u64)> {
-    let mut total_tracks = 0u64;
-    let mut total_albums = 0u64;
+) -> Option<Vec<AlbumSummary>> {
+    let mut albums = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut offset = 0u32;
-    let mut seen_albums: HashSet<String> = HashSet::new();
     loop {
-        let albums = match client
+        let page = match client
             .get_album_list2(offset, TRACK_COUNT_PAGE, library_id)
             .await
         {
-            Ok(albums) => albums,
+            Ok(page) => page,
             Err(e) => {
                 eprintln!(
-                    "navinamp navidrome: track-count pass failed: {}",
+                    "navinamp navidrome: album index failed: {}",
                     scrub_urls(&e.to_string())
                 );
                 return None;
             }
         };
-        if albums.is_empty() {
-            return Some((total_tracks, total_albums));
+        if page.is_empty() {
+            return Some(albums);
         }
+        let fetched = page.len() as u32;
         let mut fresh = 0usize;
-        for album in &albums {
-            if seen_albums.insert(album.id.clone()) {
+        for album in page {
+            if seen.insert(album.id.clone()) {
+                albums.push(album);
                 fresh += 1;
-                total_albums += 1;
-                total_tracks += u64::from(album.song_count);
             }
         }
         // A conforming server may return fewer than `size` albums on any
@@ -1560,7 +1487,269 @@ async fn count_library_tracks(
         if fresh == 0 {
             return None;
         }
-        offset = offset.saturating_add(albums.len() as u32);
+        offset = offset.saturating_add(fetched);
+    }
+}
+
+/// Sync from the album index. Quick rescans compare each album's cheap
+/// fingerprint against the stored one and only fetch changed albums; a full
+/// rescan fetches everything. Fetches run concurrently (bounded).
+async fn sync_album_index(
+    job: SyncJob<'_>,
+    albums: Vec<AlbumSummary>,
+    report: &mut SyncReport,
+) -> Result<(), String> {
+    let SyncJob {
+        app,
+        client,
+        library,
+        library_id,
+        server_id,
+        label,
+        force_full,
+    } = job;
+    let total_albums = albums.len() as u64;
+    let total_tracks: u64 = albums.iter().map(|a| u64::from(a.song_count)).sum();
+    report.artists = client
+        .get_artists(library_id)
+        .await
+        .map(|artists| artists.len() as u64)
+        .unwrap_or(0);
+    emit_progress(app, 0, total_tracks, server_id, label);
+
+    // Fingerprints + existing track ids are only useful for quick rescans.
+    let mut stored_albums = if force_full {
+        HashMap::new()
+    } else {
+        library
+            .remote_albums(server_id)
+            .map_err(|e| format!("cannot read album fingerprints: {e}"))?
+    };
+    let mut known_tracks = if force_full {
+        HashMap::new()
+    } else {
+        library
+            .remote_track_ids_by_album(server_id)
+            .map_err(|e| format!("cannot read remote track ids: {e}"))?
+    };
+    // A track without an album id (legacy/partial sync) cannot be attributed
+    // to a skipped album and would be pruned. Force a full walk to repair it.
+    if !force_full {
+        let known_total: usize = known_tracks.values().map(Vec::len).sum();
+        let all_total = library
+            .track_count_for_server(server_id)
+            .map_err(|e| format!("cannot count remote tracks: {e}"))?;
+        if known_total as u64 != all_total {
+            stored_albums.clear();
+            known_tracks.clear();
+        }
+    }
+
+    let mut tracks: Vec<RemoteTrack> = Vec::new();
+    let mut album_updates: Vec<RemoteAlbum> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen_albums: HashSet<String> = HashSet::new();
+    let mut scanned_albums: u64 = 0;
+    let mut scanned_tracks: u64 = 0;
+
+    let mut stream = futures::stream::iter(albums.into_iter().map(|album| {
+        let known = known_tracks.get(&album.id).cloned().unwrap_or_default();
+        let skip = !force_full && album_matches(stored_albums.get(&album.id), &album, &known);
+        async move {
+            if skip {
+                return (album, known, None);
+            }
+            let result = client.get_album(&album.id).await;
+            (album, known, Some(result))
+        }
+    }))
+    .buffer_unordered(SYNC_CONCURRENCY);
+
+    while let Some((album, known, fetched)) = stream.next().await {
+        seen_albums.insert(album.id.clone());
+        scanned_albums += 1;
+        match fetched {
+            // Fingerprint matched: retain the album's existing rows without
+            // spending a getAlbum request.
+            None => {
+                seen.extend(known);
+                scanned_tracks += u64::from(album.song_count);
+            }
+            Some(Ok(detail)) => {
+                for song in &detail.songs {
+                    if !song.id.is_empty() {
+                        seen.insert(song.id.clone());
+                    }
+                    tracks.push(map_song(&detail, song, server_id));
+                }
+                scanned_tracks += if total_tracks > 0 {
+                    u64::from(album.song_count)
+                } else {
+                    detail.songs.len() as u64
+                };
+                album_updates.push(remote_album_from_summary(server_id, &album));
+            }
+            Some(Err(e)) => {
+                report.errors.push(format!(
+                    "album `{}`: {}",
+                    album.name,
+                    scrub_urls(&e.to_string())
+                ));
+                scanned_tracks += u64::from(album.song_count);
+            }
+        }
+
+        if scanned_albums.is_multiple_of(PROGRESS_EVERY)
+            || (total_albums > 0 && scanned_albums >= total_albums)
+        {
+            // Persist decoded rows before announcing progress: the library
+            // pane refreshes on these events.
+            flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+            let shown = if total_tracks == 0 {
+                scanned_tracks
+            } else {
+                scanned_tracks.min(total_tracks)
+            };
+            emit_progress(app, shown, total_tracks, server_id, label);
+        } else if tracks.len() >= SYNC_BATCH_TRACKS {
+            flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+        }
+    }
+
+    flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+    let shown = if total_tracks == 0 {
+        scanned_tracks
+    } else {
+        scanned_tracks.min(total_tracks)
+    };
+    emit_progress(app, shown, total_tracks, server_id, label);
+    report.albums = total_albums;
+
+    // A partial walk (any failed album) must not prune: the failed albums'
+    // rows and fingerprints are still valid.
+    if report.errors.is_empty() {
+        report.tracks_removed = library
+            .prune_remote(server_id, &seen)
+            .map_err(|e| format!("library sync prune failed: {e}"))?;
+        library
+            .prune_remote_albums(server_id, &seen_albums)
+            .map_err(|e| format!("album fingerprint prune failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Fallback walk for servers without `getAlbumList2`: artists → albums →
+/// songs, sequential as before. Progress is in tracks with no denominator
+/// (the index that would provide one failed).
+async fn sync_by_artist(job: SyncJob<'_>, report: &mut SyncReport) -> Result<(), String> {
+    let SyncJob {
+        app,
+        client,
+        library,
+        library_id,
+        server_id,
+        label,
+        force_full: _,
+    } = job;
+    let artists = client
+        .get_artists(library_id)
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))?;
+    report.artists = artists.len() as u64;
+    let total_albums: u64 = artists.iter().map(|a| u64::from(a.album_count)).sum();
+
+    let mut tracks: Vec<RemoteTrack> = Vec::new();
+    let mut album_updates: Vec<RemoteAlbum> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut visited_albums: HashSet<String> = HashSet::new();
+    let mut scanned_albums: u64 = 0;
+    let mut scanned_tracks: u64 = 0;
+
+    for artist in &artists {
+        let albums = match client.get_artist(&artist.id).await {
+            Ok(albums) => albums,
+            Err(e) => {
+                report.errors.push(format!(
+                    "artist `{}`: {}",
+                    artist.name,
+                    scrub_urls(&e.to_string())
+                ));
+                scanned_albums += u64::from(artist.album_count);
+                continue;
+            }
+        };
+        for album in albums {
+            if !visited_albums.insert(album.id.clone()) {
+                continue;
+            }
+            report.albums += 1;
+            match client.get_album(&album.id).await {
+                Ok(detail) => {
+                    for song in &detail.songs {
+                        if !song.id.is_empty() {
+                            seen.insert(song.id.clone());
+                        }
+                        tracks.push(map_song(&detail, song, server_id));
+                    }
+                    scanned_tracks += detail.songs.len() as u64;
+                }
+                Err(e) => report.errors.push(format!(
+                    "album `{}`: {}",
+                    album.name,
+                    scrub_urls(&e.to_string())
+                )),
+            }
+            scanned_albums += 1;
+            if scanned_albums.is_multiple_of(PROGRESS_EVERY)
+                || (total_albums > 0 && scanned_albums >= total_albums)
+            {
+                flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+                emit_progress(app, scanned_tracks, 0, server_id, label);
+            } else if tracks.len() >= SYNC_BATCH_TRACKS {
+                flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+            }
+        }
+    }
+
+    flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+    emit_progress(app, scanned_tracks, 0, server_id, label);
+    if report.errors.is_empty() {
+        report.tracks_removed = library
+            .prune_remote(server_id, &seen)
+            .map_err(|e| format!("library sync prune failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Whether a quick rescan can keep an album without a `getAlbum` request.
+/// The fingerprint uses only the cheap album-index fields; the track-count
+/// check also catches a previous partial/legacy sync.
+fn album_matches(stored: Option<&RemoteAlbum>, album: &AlbumSummary, known: &[String]) -> bool {
+    let Some(stored) = stored else {
+        return false;
+    };
+    let year = (album.year > 0).then_some(i64::from(album.year));
+    stored.song_count == album.song_count
+        && stored.duration_secs == album.duration_secs
+        && stored.name == album.name
+        && stored.artist == album.artist
+        && stored.year == year
+        && stored.cover_art_id == album.cover_art_id
+        && stored.created == album.created
+        && known.len() as u32 == album.song_count
+}
+
+fn remote_album_from_summary(server_id: &str, album: &AlbumSummary) -> RemoteAlbum {
+    RemoteAlbum {
+        server_id: server_id.to_owned(),
+        album_id: album.id.clone(),
+        song_count: album.song_count,
+        duration_secs: album.duration_secs,
+        name: album.name.clone(),
+        artist: album.artist.clone(),
+        year: (album.year > 0).then_some(i64::from(album.year)),
+        cover_art_id: album.cover_art_id.clone(),
+        created: album.created.clone(),
     }
 }
 
@@ -1569,17 +1758,23 @@ async fn count_library_tracks(
 fn flush_remote_batch(
     library: &Library,
     tracks: &mut Vec<RemoteTrack>,
+    albums: &mut Vec<RemoteAlbum>,
     report: &mut SyncReport,
 ) -> Result<(), String> {
-    if tracks.is_empty() {
-        return Ok(());
+    if !tracks.is_empty() {
+        let batch = std::mem::take(tracks);
+        let db = library
+            .upsert_remote(&batch)
+            .map_err(|e| format!("library sync failed: {e}"))?;
+        report.tracks_added += db.added;
+        report.tracks_updated += db.updated;
     }
-    let batch = std::mem::take(tracks);
-    let db = library
-        .upsert_remote(&batch)
-        .map_err(|e| format!("library sync failed: {e}"))?;
-    report.tracks_added += db.added;
-    report.tracks_updated += db.updated;
+    if !albums.is_empty() {
+        let batch = std::mem::take(albums);
+        library
+            .upsert_remote_albums(&batch)
+            .map_err(|e| format!("album fingerprint save failed: {e}"))?;
+    }
     Ok(())
 }
 
@@ -1610,6 +1805,7 @@ fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteT
     RemoteTrack {
         remote_id: song.id.clone(),
         server_id: server_id.to_owned(),
+        remote_album_id: album.id.clone(),
         remote_path: (!song.path.is_empty()).then(|| song.path.clone()),
         title: repair_tag_text(&song.title).into_owned(),
         artist: repair_tag_text(&song.artist).into_owned(),
@@ -1871,5 +2067,39 @@ mod tests {
         let rows = playlist_rows(&[s], "p1");
         assert_eq!(rows[0].title, "Песня");
         assert_eq!(rows[0].album, "Альбом");
+    }
+
+    fn album_summary() -> AlbumSummary {
+        AlbumSummary {
+            id: "al-1".into(),
+            name: "Debut".into(),
+            artist: "Björk".into(),
+            artist_id: "ar-1".into(),
+            song_count: 11,
+            duration_secs: 2900,
+            cover_art_id: Some("al-1".into()),
+            year: 1993,
+            created: Some("2024-01-01T00:00:00Z".into()),
+        }
+    }
+
+    #[test]
+    fn album_fingerprint_requires_every_field_and_all_tracks() {
+        let summary = album_summary();
+        let stored = remote_album_from_summary("p1", &summary);
+        let known = vec!["t1".to_string(); 11];
+        assert!(album_matches(Some(&stored), &summary, &known));
+
+        // A changed cheap field invalidates the fingerprint.
+        let mut changed = summary.clone();
+        changed.name = "Debut (Deluxe)".into();
+        assert!(!album_matches(Some(&stored), &changed, &known));
+
+        // A partial/legacy track set must be re-fetched even if metadata
+        // matches: pruning needs every remote id for the album.
+        assert!(!album_matches(Some(&stored), &summary, &known[..10]));
+
+        // No stored fingerprint = new album.
+        assert!(!album_matches(None, &summary, &known));
     }
 }
