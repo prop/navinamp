@@ -24,9 +24,7 @@ const NOTIFY_SHORTCUT: &str = "Control+Alt+O";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init());
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let app = builder
@@ -156,7 +154,8 @@ pub fn run() {
             windows::window_set_always_on_top,
             windows::window_drag_region_ready,
             media::media_metadata,
-            media::media_playback
+            media::media_playback,
+            media::notify_track_started
         ])
         .build(tauri::generate_context!())
         .expect("error while building NaVinaMP");

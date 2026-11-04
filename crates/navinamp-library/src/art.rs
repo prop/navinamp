@@ -76,7 +76,7 @@ pub(crate) fn content_id(bytes: &[u8]) -> String {
 /// Sniffs the image format from magic bytes → canonical extension. Only
 /// formats a webview can render are recognized; anything else (TIFF, …)
 /// is skipped rather than cached undecodable.
-pub(crate) fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
+pub fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         Some("png")
     } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {

@@ -38,7 +38,10 @@
 
 use std::ffi::c_void;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use navinamp_library::sniff_ext;
 
 use serde::Serialize;
 use souvlaki::{
@@ -276,6 +279,52 @@ struct MediaCommandPayload {
     command: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     secs: Option<f64>,
+}
+
+/// Show a desktop "now playing" notification (issue #34), optionally with
+/// the track's album art. Sent from the Rust side (notify-rust →
+/// UNUserNotificationCenter on macOS via the `preview-macos-un` backend;
+/// the default NSUserNotificationCenter backend is deprecated and has no
+/// authorization concept) because the webview's Web Notification API
+/// ignores images and cannot be granted permission in WKWebView. macOS
+/// handles authorization itself: the OS prompts on the first notification
+/// and remembers it in System Settings.
+///
+/// Art is best-effort: undecodable/absent bytes notify WITHOUT art rather
+/// than failing the notification. The temp file is intentionally left in
+/// place — Linux's D-Bus daemon reads it lazily after `show()` returns, so
+/// deleting it immediately would race the toast; `/tmp` is OS-cleaned.
+#[tauri::command]
+pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result<(), String> {
+    use base64::Engine as _;
+
+    static NOTIFY_ART_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let mut note = notify_rust::Notification::new();
+    note.summary(&title);
+    if let Some(encoded) = art_base64.as_deref().filter(|s| !s.trim().is_empty()) {
+        // Any art failure (undecodable, unknown format, unwritable) degrades
+        // to a text-only toast instead of losing the notification.
+        let art = base64::engine::general_purpose::STANDARD
+            .decode(encoded.trim())
+            .ok()
+            .and_then(|bytes| sniff_ext(&bytes).map(|ext| (ext, bytes)));
+        match art {
+            Some((ext, bytes)) => {
+                let seq = NOTIFY_ART_SEQ.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir().join(format!(
+                    "navinamp-notify-art-{}-{seq}.{ext}",
+                    std::process::id()
+                ));
+                if std::fs::write(&path, &bytes).is_ok() {
+                    note.image_path(path.to_string_lossy().as_ref());
+                }
+            }
+            None => eprintln!("navinamp notify: art skipped (undecodable or unknown format)"),
+        }
+    }
+    note.show().map_err(|e| format!("notify: {e}"))?;
+    Ok(())
 }
 
 /// Push track metadata + position from the player window. Position updates
