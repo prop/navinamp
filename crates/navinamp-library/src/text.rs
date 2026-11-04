@@ -11,9 +11,10 @@
 //! (`ÐœÐ¾ÑÐºÐ²Ð°` → `Москва`).
 //!
 //! Detection is deliberately conservative:
-//! - only Latin-1-mapped text is considered (every char ≤ U+00FF); proper
-//!   Unicode and pure ASCII pass through untouched, so the repair is
-//!   idempotent;
+//! - Latin-1/CP1252-mapped text (chars ≤ U+00FF) and Windows-1250-mapped
+//!   text (Central-European readers surface Latin Extended-A letters such as
+//!   `ă`) are reconstructed; proper Unicode and pure ASCII pass through
+//!   untouched, so the repair is idempotent;
 //! - high bytes must make up a meaningful share of the text's LETTERS
 //!   (~25%), which keeps `Motörhead`, `Björk` or `Été à Zürich` safe while
 //!   still repairing the common mixed shape `DJ … feat. <Russian title>`
@@ -21,7 +22,10 @@
 //! - a candidate must decode into plausible Cyrillic (letter-frequency
 //!   scored). CP1251 and KOI8-R are both decoded; a near-tie or a degenerate
 //!   (near-zero-frequency) result is treated as ambiguous and left alone,
-//!   which keeps majority-accented Latin text out of the repair path.
+//!   which keeps majority-accented Latin text out of the repair path;
+//! - a short Latin run glued to one edge of a Cyrillic word is tolerated
+//!   (`Nуггнойй`, `xто`), while Latin letters mixed *through* a word
+//!   (`Йtй` from `Été`) still reject the candidate.
 //!
 //! Unfixable by nature: UTF-16 bytes decoded as another wide encoding (the
 //! result is CJK-looking text with no reliable inverse) — left alone.
@@ -32,7 +36,7 @@
 
 use std::borrow::Cow;
 
-use encoding_rs::{KOI8_R, WINDOWS_1251};
+use encoding_rs::{KOI8_R, WINDOWS_1250, WINDOWS_1251};
 
 /// Approximate Russian letter frequencies (percent). Used to pick between
 /// CP1251 and KOI8-R when both decodings produce Cyrillic: only the correct
@@ -85,18 +89,33 @@ fn is_cyrillic(c: char) -> bool {
 
 /// Tag text may legitimately contain letters, digits, whitespace and the
 /// usual punctuation; anything else after a candidate decode is a red flag
-/// (wrong codepage or garbage bytes).
+/// (wrong codepage or garbage bytes). ASCII punctuation is all accepted;
+/// common typographic marks (middle dot, ellipsis, dashes, quotes) are the
+/// shapes real tags use.
 fn useful(c: char) -> bool {
-    c.is_alphanumeric() || c.is_whitespace() || " -_.,!?&'\"()[]{}:/\\+*=#@%…–—’‘“”«»".contains(c)
+    c.is_alphanumeric()
+        || c.is_whitespace()
+        || c.is_ascii_punctuation()
+        || matches!(
+            c,
+            '…' | '–' | '—' | '’' | '‘' | '“' | '”' | '«' | '»' | '·' | '•' | '№' | '°'
+        )
 }
 
 /// A candidate decoding is plausible when it is printable and its LETTERS
-/// do not mix scripts inside a word:
+/// do not mix scripts *through* a word:
 ///
-/// - every alphanumeric token must be pure Latin/ASCII or pure Cyrillic
-///   (mangled Latin-1 text such as `Йtй` alternates scripts mid-word);
-/// - at least one pure-Cyrillic word of two or more letters, or — for tags
-///   that are a single Cyrillic letter (`Я`) — no Latin letters at all.
+/// - a word may be pure Latin/ASCII or pure Cyrillic;
+/// - a short (≤2 letters) contiguous Latin *prefix* glued to an otherwise
+///   Cyrillic word is tolerated — pirate tags often have shapes like
+///   `Nуггнойй` or `xто` (a Latin letter typed before switching keyboard
+///   layout), and rejecting them left whole rows garbled. Suffix runs are
+///   not tolerated: they also match accented-Latin false positives such as
+///   `Þór` → `Юуr` in CP1251, and no real tag shape needed them;
+/// - accented-Latin false positives still fail: `Йtй` (from `Été`) puts the
+///   Latin letter in the middle, and `Ьber`/`Niсo` have a Latin majority;
+/// - at least one Cyrillic word of two or more letters, or — for tags that
+///   are a single Cyrillic letter (`Я`) — no Latin letters at all.
 ///
 /// Mixed-language titles stay valid because the mixing is per WORD
 /// (`DJ Slon feat. Песня`), which is exactly the common real-world shape.
@@ -108,23 +127,44 @@ fn plausible(s: &str) -> bool {
     let mut latin_letters = 0usize;
     let mut cyrillic_words = 0usize;
     for word in s.split(|c: char| !c.is_alphanumeric()) {
-        if word.is_empty() {
+        let letters: Vec<char> = word.chars().filter(|c| c.is_alphabetic()).collect();
+        if letters.is_empty() {
             continue;
         }
         let mut word_cyrillic = 0usize;
         let mut word_latin = 0usize;
-        for c in word.chars() {
-            if !c.is_alphabetic() {
-                continue; // digits inside a token are fine
-            }
-            if is_cyrillic(c) {
+        let mut latin_positions = Vec::new();
+        for (index, c) in letters.iter().enumerate() {
+            if is_cyrillic(*c) {
                 word_cyrillic += 1;
             } else {
                 word_latin += 1;
+                latin_positions.push(index);
             }
         }
+        // Wrong-codepage decodes commonly produce a lowercase first letter
+        // followed by all-caps Cyrillic (`оПНДХДФЕИ` for Продиджей, `чСr` for
+        // Þór). Real Cyrillic words in this mixed case are vanishingly rare,
+        // while the motivating Latin-prefixed shapes (`Nуггнойй`, `xто`)
+        // start uppercase or stay lowercase.
+        if word_cyrillic > 0
+            && letters
+                .windows(2)
+                .any(|pair| pair[0].is_lowercase() && pair[1].is_uppercase())
+        {
+            return false;
+        }
         if word_cyrillic > 0 && word_latin > 0 {
-            return false; // scripts alternate inside one word: corruption
+            let latin_prefix = word_latin <= 2
+                && latin_positions
+                    .iter()
+                    .enumerate()
+                    .all(|(k, position)| *position == k);
+            // Only a prefix is tolerated; a suffix-edge run also matches the
+            // CP1251 reading of genuine accented Latin (`Þór` -> `Юуr`).
+            if !latin_prefix || word_cyrillic <= word_latin {
+                return false;
+            }
         }
         cyrillic_letters += word_cyrillic;
         latin_letters += word_latin;
@@ -135,21 +175,52 @@ fn plausible(s: &str) -> bool {
     cyrillic_words > 0 || (cyrillic_letters > 0 && latin_letters == 0)
 }
 
+/// Best legacy-Cyrillic reading of one byte string: UTF-8 (a reader that
+/// double-decoded UTF-8) wins outright; otherwise CP1251/KOI8-R are scored by
+/// Russian letter frequency. Returns `None` when no reading is credible.
+fn best_decoding(bytes: &[u8]) -> Option<(String, f32)> {
+    if let Ok(decoded) = std::str::from_utf8(bytes)
+        && plausible(decoded)
+    {
+        return Some((decoded.to_owned(), f32::MAX));
+    }
+    // Single-byte encodings are total, so both decodes always succeed;
+    // unigram frequency picks the real one. CP1251 and KOI8-R mirror each
+    // other and short tags can score close (a real KOI8-R title measured
+    // 54.9 vs 53.3 for its CP1251 misdecode), so no margin rule is applied —
+    // the corpus is overwhelmingly CP1251, and a margin would reject genuine
+    // KOI8-R and mixed-prefix titles. Ties keep CP1251 (checked first).
+    let (cp1251, _, _) = WINDOWS_1251.decode(bytes);
+    let (koi8r, _, _) = KOI8_R.decode(bytes);
+    let mut best: Option<(String, f32)> = None;
+    for candidate in [cp1251.as_ref(), koi8r.as_ref()] {
+        if !plausible(candidate) {
+            continue;
+        }
+        let candidate_score = score(candidate);
+        if candidate_score < 0.5 {
+            continue; // degenerate decode (near-zero Russian frequency)
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(_, score)| candidate_score > *score)
+        {
+            best = Some((candidate.to_owned(), candidate_score));
+        }
+    }
+    best
+}
+
 /// Repair one tag string (title / artist / album / …). Returns the input
 /// unchanged unless a credible legacy-Cyrillic decoding exists.
 pub fn repair_tag_text(text: &str) -> Cow<'_, str> {
     let mut high = 0usize;
     let mut letters = 0usize;
     for c in text.chars() {
-        let cp = c as u32;
-        if cp > 0xFF {
-            // Already proper Unicode (or an unrecoverable wide-encoding mix).
-            return Cow::Borrowed(text);
-        }
         if c.is_alphabetic() {
             letters += 1;
         }
-        if cp >= 0x80 {
+        if (c as u32) >= 0x80 {
             high += 1;
         }
     }
@@ -161,46 +232,36 @@ pub fn repair_tag_text(text: &str) -> Cow<'_, str> {
         return Cow::Borrowed(text);
     }
 
-    // Reconstruct the bytes the reader mapped through Latin-1.
-    let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
-
-    // 1) UTF-8 bytes decoded as Latin-1 (`ÐœÐ¾ÑÐºÐ²Ð°`). Strict decode only:
-    //    genuine legacy-Cyrillic bytes almost never form valid UTF-8, and an
-    //    accidental match would fail the plausibility gate.
-    if let Ok(decoded) = std::str::from_utf8(&bytes)
-        && plausible(decoded)
-    {
-        return Cow::Owned(decoded.to_owned());
+    // The reader may have mapped the bytes through Latin-1/CP1252 (the usual
+    // case, every char ≤ U+00FF) or through a Central-European codepage
+    // (CP1250/ISO-8859-2), which surfaces as Latin Extended-A letters such
+    // as `ă` (0xE3). Reconstruct both candidate byte strings; a string that
+    // cannot be encoded (proper Unicode) yields no CP1250 candidate.
+    let mut candidates: Vec<Vec<u8>> = Vec::new();
+    if text.chars().all(|c| (c as u32) <= 0xFF) {
+        candidates.push(text.chars().map(|c| c as u8).collect());
+    }
+    let (cp1250, _, cp1250_errors) = WINDOWS_1250.encode(text);
+    if !cp1250_errors {
+        let bytes = cp1250.into_owned();
+        if !candidates.contains(&bytes) {
+            candidates.push(bytes);
+        }
     }
 
-    // 2) Legacy Cyrillic codepages. Single-byte encodings are total, so both
-    //    decodes always succeed; unigram frequency picks the real one. CP1251
-    //    and KOI8-R mirror each other and short tags can score close (a real
-    //    KOI8-R title measured 54.9 vs 53.3 for its CP1251 misdecode), so no
-    //    margin rule is applied — the corpus is overwhelmingly CP1251, and a
-    //    margin would reject genuine KOI8-R and mixed-prefix titles.
-    let (cp1251, _, _) = WINDOWS_1251.decode(&bytes);
-    let (koi8r, _, _) = KOI8_R.decode(&bytes);
-    let cp_score = if plausible(&cp1251) {
-        score(&cp1251)
-    } else {
-        -1.0
-    };
-    let koi_score = if plausible(&koi8r) {
-        score(&koi8r)
-    } else {
-        -1.0
-    };
-    let (best, best_score) = if cp_score >= koi_score {
-        (&cp1251, cp_score)
-    } else {
-        (&koi8r, koi_score)
-    };
-    // The floor rejects degenerate decodes (near-zero Russian frequency).
-    if best_score >= 0.5 {
-        Cow::Owned(best.as_ref().to_owned())
-    } else {
-        Cow::Borrowed(text)
+    let mut best: Option<(String, f32)> = None;
+    for bytes in &candidates {
+        if let Some((decoded, candidate_score)) = best_decoding(bytes)
+            && best
+                .as_ref()
+                .is_none_or(|(_, score)| candidate_score > *score)
+        {
+            best = Some((decoded, candidate_score));
+        }
+    }
+    match best {
+        Some((decoded, _)) => Cow::Owned(decoded),
+        None => Cow::Borrowed(text),
     }
 }
 
@@ -223,6 +284,12 @@ mod tests {
         as_latin1(&bytes)
     }
 
+    /// A Central-European (CP1250) reader mapping the same legacy bytes.
+    fn cp1250_mapped(bytes: &[u8]) -> String {
+        let (text, _, _) = encoding_rs::WINDOWS_1250.decode(bytes);
+        text.into_owned()
+    }
+
     #[test]
     fn repairs_cp1251_title() {
         let good = "Сергей Жуков - Районы-кварталы";
@@ -240,11 +307,71 @@ mod tests {
     }
 
     #[test]
+    fn repairs_cp1250_mapped_title() {
+        // A Central-European reader maps the same CP1251 bytes through
+        // CP1250; the result contains Latin Extended-A letters (`ă`), not
+        // just U+00xx.
+        let good = "Песня о любви";
+        let (bytes, _, _) = WINDOWS_1251.encode(good);
+        let garbled = cp1250_mapped(&bytes);
+        assert_ne!(garbled, good, "fixture really is mojibake");
+        assert_eq!(repair_tag_text(&garbled), good);
+    }
+
+    #[test]
+    fn repairs_latin_prefixed_cyrillic_words() {
+        // Pirate tags often glue a short Latin run to a Cyrillic word; a
+        // whole-word script-purity rule left these rows garbled.
+        for good in ["NПесня", "Dассиадэ", "xто"] {
+            let garbled = cp1251(good);
+            assert_ne!(garbled, good, "{good}: fixture really is mojibake");
+            assert_eq!(repair_tag_text(&garbled), good);
+        }
+    }
+
+    #[test]
+    fn rejects_lowercase_to_uppercase_wrong_decodes() {
+        // The KOI8-R reading of a CP1251 title is all-Cyrillic but has a
+        // lowercase -> uppercase artifact; it must not win over the real
+        // CP1251 reading.
+        let good = "Продиджей";
+        let garbled = cp1251(good);
+        assert_eq!(repair_tag_text(&garbled), good);
+
+        // Accented Latin must not be "repaired" into a lowercase-Cyrillic +
+        // uppercase shape either.
+        assert_eq!(repair_tag_text("Þór"), "Þór");
+    }
+
+    #[test]
+    fn keeps_cp1250_accented_latin() {
+        for name in ["Kőszönöm", "Ťažký", "Žluťoučký kůň", "Ábel"] {
+            assert_eq!(repair_tag_text(name), name, "{name} must stay untouched");
+        }
+    }
+
+    #[test]
     fn repairs_utf8_decoded_as_latin1() {
         let good = "Москва";
         let garbled = as_latin1(good.as_bytes());
         assert_ne!(garbled, good, "fixture really is mojibake");
         assert_eq!(repair_tag_text(&garbled), good);
+    }
+
+    #[test]
+    fn repairs_reported_remote_tag_shapes() {
+        // Shapes from a real Navidrome library: CP1251 bytes read through
+        // CP1252, including short Latin runs glued to Cyrillic words (which
+        // the pre-v2 whole-word purity rule rejected).
+        for (garbled, expected) in [
+            ("Nóããíîéé àä·ä", "Nуггнойй ад·д"),
+            ("1,5 ëà îóèéé·ïðàâà", "1,5 ла оуийй·права"),
+            ("xòî lîäý /Eàäò", "xто lодэ /Eадт"),
+            ("Dàññèàäý", "Dассиадэ"),
+            ("Ìàðàäîíè", "Марадони"),
+        ] {
+            assert_eq!(repair_tag_text(garbled), expected, "{garbled}");
+        }
     }
 
     #[test]

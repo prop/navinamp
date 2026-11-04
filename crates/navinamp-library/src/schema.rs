@@ -78,16 +78,19 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 
 /// One-shot repair of tag text stored before charset recovery existed:
 /// legacy ID3v1 / ISO-8859-1 ID3v2 tags often carry CP1251 or KOI8-R bytes,
-/// which arrive Latin-1-mapped (`Ïåñíÿ î ëþáâè`). The scanner repairs new
-/// reads (`text.rs`); this heals rows already in the database, which an
-/// incremental rescan would skip (unchanged mtime/size).
+/// which arrive Latin-1-mapped (`Ïåñíÿ î ëþáâè`). The scanner and the
+/// Navidrome mapper repair new reads (`text.rs`); this heals rows already in
+/// the database, which an incremental rescan would skip (unchanged
+/// mtime/size).
 ///
-/// Marker-guarded via `meta` so it runs exactly once per database. Local
-/// rows only: remote/Navidrome text comes from the server as UTF-8 and has a
-/// different trust boundary. The FTS update trigger keeps the search index
-/// in step with the rewrites.
+/// Marker-guarded via `meta` so it runs exactly once per database. v1 only
+/// repaired local rows; v2 also repairs remote/Navidrome rows — servers
+/// commonly expose legacy ID3 text through Subsonic, so the old "remote text
+/// is always UTF-8" assumption left those rows garbled — and picks up the
+/// CP1250-mapped / Latin-prefixed shapes the v1 heuristic missed. The FTS
+/// update trigger keeps the search index in step with the rewrites.
 fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
-    const MARK: &str = "text_charset_repair_v1";
+    const MARK: &str = "text_charset_repair_v2";
     let done = conn
         .query_row("SELECT 1 FROM meta WHERE key = ?1", [MARK], |_| Ok(()))
         .optional()?
@@ -106,12 +109,13 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         genre: String,
     }
 
+    // One transaction for the whole pass: a large library would otherwise
+    // issue thousands of autocommit UPDATEs and look like a hang at startup.
+    let tx = conn.unchecked_transaction()?;
     let mut fixed: Vec<Fixed> = Vec::new();
     {
-        let mut select = conn.prepare(
-            "SELECT id, title, artist, album_artist, album, genre
-               FROM tracks WHERE source = 'local'",
-        )?;
+        let mut select =
+            tx.prepare("SELECT id, title, artist, album_artist, album, genre FROM tracks")?;
         let mut rows = select.query([])?;
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
@@ -145,10 +149,10 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 
     if !fixed.is_empty() {
         eprintln!(
-            "navinamp library: repaired legacy tag text in {} row(s)",
+            "navinamp library: repairing legacy tag text in {} row(s)…",
             fixed.len()
         );
-        let mut update = conn.prepare(
+        let mut update = tx.prepare(
             "UPDATE tracks
                 SET title = ?2, artist = ?3, album_artist = ?4, album = ?5,
                     album_key = ?6, genre = ?7
@@ -165,13 +169,18 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
                 f.genre
             ])?;
         }
+        eprintln!(
+            "navinamp library: repaired legacy tag text in {} row(s)",
+            fixed.len()
+        );
     }
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO meta(key, value) VALUES(?1, 'done')
          ON CONFLICT(key) DO UPDATE SET value = 'done'",
         [MARK],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -311,7 +320,18 @@ mod tests {
             rusqlite::params![garbled_title, garbled_artist, garbled_album],
         )
         .unwrap();
-        conn.execute("DELETE FROM meta WHERE key = 'text_charset_repair_v1'", [])
+        // Remote/Navidrome rows get the same repair in v2: servers commonly
+        // expose legacy ID3 text through Subsonic.
+        let (bytes, _, _) = encoding_rs::WINDOWS_1251.encode("Удалённая песня");
+        let garbled_remote: String = bytes.iter().map(|b| char::from(*b)).collect();
+        conn.execute(
+            "INSERT INTO tracks
+                (path, mtime, size, title, artist, album, album_key, genre, date_added, source)
+             VALUES ('navidrome://p1/x', 0, 0, ?1, ?2, '', '', '', 0, 'navidrome')",
+            rusqlite::params![garbled_remote, garbled_artist],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM meta WHERE key = 'text_charset_repair_v2'", [])
             .unwrap();
 
         repair_legacy_tag_text(&conn).unwrap();
@@ -331,6 +351,16 @@ mod tests {
             crate::scanner::album_key("", "Исполнитель", "Альбом"),
             "healed album_key must match what a fresh scan derives"
         );
+
+        let (remote_title, remote_artist): (String, String) = conn
+            .query_row(
+                "SELECT title, artist FROM tracks WHERE source = 'navidrome'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(remote_title, "Удалённая песня");
+        assert_eq!(remote_artist, "Исполнитель");
 
         // Marker set: a later damaged row is not touched by a second run.
         conn.execute("UPDATE tracks SET title = 'oops'", [])

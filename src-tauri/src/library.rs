@@ -138,6 +138,19 @@ pub(crate) fn with_library<T>(
     f(guard.as_ref().expect("just opened"))
 }
 
+/// Repair legacy tag encodings in a batch of display strings.
+///
+/// Used when the player restores its persisted queue: the queue stores
+/// metadata snapshots, so rows captured before charset recovery would keep
+/// their garbled titles even after the library database is healed.
+#[tauri::command]
+pub fn repair_tag_texts(texts: Vec<String>) -> Vec<String> {
+    texts
+        .into_iter()
+        .map(|text| navinamp_library::repair_tag_text(&text).into_owned())
+        .collect()
+}
+
 /// Scans `roots` incrementally in the background and returns the report.
 ///
 /// Progress streams as `library-progress` events; the final report arrives

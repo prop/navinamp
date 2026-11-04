@@ -121,6 +121,7 @@ pub fn run() {
             library::library_set_rating,
             library::library_track,
             library::art_for_track,
+            library::repair_tag_texts,
             smart::smart_views_list,
             smart::smart_view_save,
             smart::smart_view_delete,
