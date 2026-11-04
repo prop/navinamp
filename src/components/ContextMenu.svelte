@@ -10,6 +10,12 @@
     /** When set (0–5), render the star picker row at this value. */
     rating?: number;
   }
+
+  /** A non-interactive `label: value` detail row shown above the actions. */
+  export interface ContextMenuInfoRow {
+    label: string;
+    value: string;
+  }
 </script>
 
 <script lang="ts">
@@ -25,11 +31,13 @@
     x: number;
     y: number;
     items: ContextMenuItem[];
+    /** Optional track details (artist, album, quality, …) above the actions. */
+    info?: ContextMenuInfoRow[];
     onselect: (id: string) => void;
     onclose: () => void;
   }
 
-  let { x, y, items, onselect, onclose }: Props = $props();
+  let { x, y, items, info = [], onselect, onclose }: Props = $props();
 
   let el = $state<HTMLDivElement | null>(null);
   // Initial placement; the effect below clamps it after measuring. The
@@ -39,8 +47,10 @@
   // svelte-ignore state_referenced_locally
   let top = $state(y);
 
-  // Clamp after measuring (the menu width depends on its longest label).
+  // Clamp after measuring (the menu width/height depend on content; the
+  // details block can arrive asynchronously after the metadata lookup).
   $effect(() => {
+    void info;
     const node = el;
     if (!node) return;
     const w = node.offsetWidth;
@@ -76,6 +86,17 @@
 </script>
 
 <div class="menu" bind:this={el} style="left:{left}px; top:{top}px;" role="menu">
+  {#if info.length > 0}
+    <div class="info" role="group" aria-label="track details">
+      {#each info as row (row.label)}
+        <div class="irow">
+          <span class="ilabel">{row.label}</span>
+          <span class="ivalue" title={row.value}>{row.value}</span>
+        </div>
+      {/each}
+    </div>
+    <div class="sep" role="separator"></div>
+  {/if}
   {#each items as item, i (i)}
     {#if item.separator}
       <div class="sep" role="separator"></div>
@@ -118,6 +139,37 @@
     font-size: 11px;
     color: #c8c8c8;
     user-select: none;
+    /* The playlist window is only ~230px tall; a details block + actions can
+       exceed it, so the menu scrolls instead of clipping. */
+    max-height: calc(100vh - 8px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #161616;
+  }
+
+  .info {
+    max-width: 320px;
+    padding: 3px 10px 5px;
+  }
+
+  .irow {
+    display: flex;
+    gap: 8px;
+    line-height: 1.5;
+  }
+
+  .ilabel {
+    flex: none;
+    width: 52px;
+    color: #707070;
+  }
+
+  .ivalue {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #a8a8b0;
   }
 
   .item {
