@@ -1400,18 +1400,27 @@ fn run_sync(
             .await
             .map_err(|e| scrub_urls(&e.to_string()))?;
         report.artists = artists.len() as u64;
-        let total_albums: u64 = artists.iter().map(|a| u64::from(a.album_count)).sum();
+        // Give the UI immediate feedback while the count pass runs; this
+        // pass is serial and can take several seconds on a slow link.
+        emit_progress(app, 0, 0, server_id, label);
         // The walk is album-based, but progress is shown in tracks. Sum the
         // album `songCount`s once so the denominator is known up front. A
         // failure here is non-fatal: total stays 0 and the UI shows the
         // scanned count without a bar.
-        let total_tracks = count_library_tracks(client, library_id).await;
+        let (total_tracks, total_albums) = count_library_tracks(client, library_id)
+            .await
+            .unwrap_or((0, 0));
         emit_progress(app, 0, total_tracks, server_id, label);
 
         let mut tracks: Vec<RemoteTrack> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
+        let mut visited_albums: HashSet<String> = HashSet::new();
         let mut scanned_albums: u64 = 0;
         let mut scanned_tracks: u64 = 0;
+        // An artist-level failure means we never learn that artist's album
+        // ids, so the pre-pass total can no longer be reached. Drop the
+        // denominator from that point on instead of pinning a bar below 100%.
+        let mut progress_reliable = true;
         for artist in &artists {
             // Per-artist failure ( vanished artist, network hiccup) is
             // reported and skipped: a sync never dies from one bad node.
@@ -1423,12 +1432,21 @@ fn run_sync(
                         artist.name,
                         scrub_urls(&e.to_string())
                     ));
+                    progress_reliable = false;
+                    emit_progress(app, scanned_tracks, 0, server_id, label);
                     scanned_albums += u64::from(artist.album_count);
                     continue;
                 }
             };
-            report.albums += albums.len() as u64;
             for album in albums {
+                // `getArtist` returns an album for every artist it appears
+                // on, so shared/compilation albums can be visited more than
+                // once. Dedup exactly like the count pass: one visit, one
+                // request, one contribution to the numerator.
+                if !visited_albums.insert(album.id.clone()) {
+                    continue;
+                }
+                report.albums += 1;
                 match client.get_album(&album.id).await {
                     Ok(detail) => {
                         for song in &detail.songs {
@@ -1437,11 +1455,14 @@ fn run_sync(
                             }
                             tracks.push(map_song(&detail, song, server_id));
                         }
-                        // Prefer the server's album total for timeline
-                        // consistency; fall back to the actual rows for
-                        // servers that leave `songCount` at 0.
-                        scanned_tracks +=
-                            u64::from(album.song_count).max(detail.songs.len() as u64);
+                        // Match the count pass: when a denominator exists,
+                        // use the server's `songCount` on both sides so a
+                        // stale/odd per-album count cannot hit 100% early.
+                        scanned_tracks += if total_tracks > 0 {
+                            u64::from(album.song_count)
+                        } else {
+                            detail.songs.len() as u64
+                        };
                     }
                     Err(e) => {
                         report.errors.push(format!(
@@ -1453,16 +1474,19 @@ fn run_sync(
                     }
                 }
                 scanned_albums += 1;
-                if scanned_albums.is_multiple_of(PROGRESS_EVERY) || scanned_albums == total_albums {
+                if scanned_albums.is_multiple_of(PROGRESS_EVERY)
+                    || (total_albums > 0 && scanned_albums >= total_albums)
+                {
                     // Persist the rows decoded so far *before* announcing
                     // progress: the library pane refreshes on these events.
                     flush_remote_batch(library, &mut tracks, &mut report)?;
-                    let shown = if total_tracks == 0 {
+                    let total = if progress_reliable { total_tracks } else { 0 };
+                    let shown = if total == 0 {
                         scanned_tracks
                     } else {
-                        scanned_tracks.min(total_tracks)
+                        scanned_tracks.min(total)
                     };
-                    emit_progress(app, shown, total_tracks, server_id, label);
+                    emit_progress(app, shown, total, server_id, label);
                 } else if tracks.len() >= SYNC_BATCH_TRACKS {
                     flush_remote_batch(library, &mut tracks, &mut report)?;
                 }
@@ -1470,6 +1494,15 @@ fn run_sync(
         }
 
         flush_remote_batch(library, &mut tracks, &mut report)?;
+        // Ensure the last tick lands even when the pre-pass album count and
+        // the walk's unique-album count disagree slightly.
+        let total = if progress_reliable { total_tracks } else { 0 };
+        let shown = if total == 0 {
+            scanned_tracks
+        } else {
+            scanned_tracks.min(total)
+        };
+        emit_progress(app, shown, total, server_id, label);
         // Prune only after a complete walk: a failed sync must never delete
         // rows it simply did not reach.
         report.tracks_removed = library
@@ -1483,10 +1516,17 @@ fn run_sync(
 /// Sum the album-list `songCount`s for the selected library. This is a
 /// one-time pre-pass, so the sync progress can be expressed in tracks
 /// without changing the album-based walk (which keeps per-album failure
-/// isolation and the exact artist count). Best-effort: on error the count is
-/// 0 and the UI shows scanned tracks without a denominator.
-async fn count_library_tracks(client: &SubsonicClient, library_id: Option<&str>) -> u64 {
-    let mut total = 0u64;
+/// isolation and the exact artist count).
+///
+/// Returns `(tracks, albums)` for a complete walk. `None` means the count is
+/// not trustworthy (network error, or a server that ignored `offset`); the
+/// UI then shows scanned tracks without a denominator.
+async fn count_library_tracks(
+    client: &SubsonicClient,
+    library_id: Option<&str>,
+) -> Option<(u64, u64)> {
+    let mut total_tracks = 0u64;
+    let mut total_albums = 0u64;
     let mut offset = 0u32;
     let mut seen_albums: HashSet<String> = HashSet::new();
     loop {
@@ -1500,29 +1540,28 @@ async fn count_library_tracks(client: &SubsonicClient, library_id: Option<&str>)
                     "navinamp navidrome: track-count pass failed: {}",
                     scrub_urls(&e.to_string())
                 );
-                break;
+                return None;
             }
         };
         if albums.is_empty() {
-            break;
+            return Some((total_tracks, total_albums));
         }
         let mut fresh = 0usize;
         for album in &albums {
             if seen_albums.insert(album.id.clone()) {
                 fresh += 1;
-                total += u64::from(album.song_count);
+                total_albums += 1;
+                total_tracks += u64::from(album.song_count);
             }
         }
-        let fetched = albums.len() as u32;
-        offset = offset.saturating_add(fetched);
-        // Stop on a short page, or if the server ignored `offset` and
-        // returned only albums already seen (defensive against an infinite
-        // loop). A full last page costs one extra empty request.
-        if fresh == 0 || fetched < TRACK_COUNT_PAGE {
-            break;
+        // A conforming server may return fewer than `size` albums on any
+        // page, so only an empty page ends the list. `fresh == 0` is the
+        // defensive stop for a server that ignored `offset` entirely.
+        if fresh == 0 {
+            return None;
         }
+        offset = offset.saturating_add(albums.len() as u32);
     }
-    total
 }
 
 /// Upsert one decoded batch so the library pane can render partial results
