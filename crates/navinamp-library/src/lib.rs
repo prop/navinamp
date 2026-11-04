@@ -73,6 +73,7 @@ pub use scanner::{AUDIO_EXTENSIONS, album_key};
 pub use smart::{
     Field, MatchMode, Op, RuleGroup, RuleRow, RuleValue, SavedSmartView, SmartViewDef, SortField,
 };
+pub use text::repair_tag_text;
 
 /// Name of the album-art cache directory (a sibling of the database file),
 /// as derived by [`Library::open`]. The Tauri shell reuses this constant

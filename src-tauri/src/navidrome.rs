@@ -31,7 +31,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navinamp_library::{Library, RemoteTrack, Track, remote_path};
+use navinamp_library::{Library, RemoteTrack, Track, remote_path, repair_tag_text};
 use navinamp_subsonic::{
     AlbumDetail, MusicFolder, PlaylistSummary, SongSummary, StreamFormat, SubsonicClient,
 };
@@ -947,37 +947,47 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
     songs
         .iter()
         .enumerate()
-        .map(|(i, song)| Track {
-            id: -((i as i64) + 1),
-            path: remote_path(server_id, &song.id),
-            mtime: 0,
-            size: song
-                .size
-                .map(|s| i64::try_from(s).unwrap_or(i64::MAX))
-                .unwrap_or(0),
-            title: song.title.clone(),
-            artist: song.artist.clone(),
-            album_artist: song.artist.clone(),
-            album: song.album.clone(),
-            album_key: String::new(),
-            genre: song.genre.clone().unwrap_or_default(),
-            year: (song.year > 0).then_some(i64::from(song.year)),
-            track_no: (song.track_no > 0).then_some(i64::from(song.track_no)),
-            disc_no: (song.disc_no > 0).then_some(i64::from(song.disc_no)),
-            duration_secs: song.duration_secs as f64,
-            bitrate_kbps: (song.bitrate_kbps > 0).then_some(i64::from(song.bitrate_kbps)),
-            samplerate: song.sampling_rate.map(i64::from),
-            channels: song.channel_count.map(i64::from),
-            codec: song.suffix.clone(),
-            rating: i64::from(song.user_rating.min(5)),
-            starred: song.starred,
-            play_count: i64::try_from(song.play_count).unwrap_or(i64::MAX),
-            last_played_at: None,
-            date_added: 0,
-            source: SOURCE.into(),
-            remote_id: Some(song.id.clone()),
-            server_id: Some(server_id.to_owned()),
-            art_id: song.cover_art_id.clone(),
+        .map(|(i, song)| {
+            let title = repair_tag_text(&song.title).into_owned();
+            let artist = repair_tag_text(&song.artist).into_owned();
+            let album = repair_tag_text(&song.album).into_owned();
+            let genre = song
+                .genre
+                .as_deref()
+                .map(|genre| repair_tag_text(genre).into_owned())
+                .unwrap_or_default();
+            Track {
+                id: -((i as i64) + 1),
+                path: remote_path(server_id, &song.id),
+                mtime: 0,
+                size: song
+                    .size
+                    .map(|s| i64::try_from(s).unwrap_or(i64::MAX))
+                    .unwrap_or(0),
+                title,
+                artist: artist.clone(),
+                album_artist: artist,
+                album,
+                album_key: String::new(),
+                genre,
+                year: (song.year > 0).then_some(i64::from(song.year)),
+                track_no: (song.track_no > 0).then_some(i64::from(song.track_no)),
+                disc_no: (song.disc_no > 0).then_some(i64::from(song.disc_no)),
+                duration_secs: song.duration_secs as f64,
+                bitrate_kbps: (song.bitrate_kbps > 0).then_some(i64::from(song.bitrate_kbps)),
+                samplerate: song.sampling_rate.map(i64::from),
+                channels: song.channel_count.map(i64::from),
+                codec: song.suffix.clone(),
+                rating: i64::from(song.user_rating.min(5)),
+                starred: song.starred,
+                play_count: i64::try_from(song.play_count).unwrap_or(i64::MAX),
+                last_played_at: None,
+                date_added: 0,
+                source: SOURCE.into(),
+                remote_id: Some(song.id.clone()),
+                server_id: Some(server_id.to_owned()),
+                art_id: song.cover_art_id.clone(),
+            }
         })
         .collect()
 }
@@ -1474,22 +1484,26 @@ fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteT
     let year = (song.year > 0)
         .then_some(i64::from(song.year))
         .or_else(|| (album.year > 0).then_some(i64::from(album.year)));
+    // Subsonic servers commonly expose legacy ID3 text without re-encoding
+    // it, so the same charset repair as local tags applies here.
+    let album_title = if song.album.is_empty() {
+        album.name.clone()
+    } else {
+        song.album.clone()
+    };
+    let genre = song
+        .genre
+        .clone()
+        .or_else(|| album.genre.clone())
+        .unwrap_or_default();
     RemoteTrack {
         remote_id: song.id.clone(),
         server_id: server_id.to_owned(),
-        title: song.title.clone(),
-        artist: song.artist.clone(),
-        album_artist,
-        album: if song.album.is_empty() {
-            album.name.clone()
-        } else {
-            song.album.clone()
-        },
-        genre: song
-            .genre
-            .clone()
-            .or_else(|| album.genre.clone())
-            .unwrap_or_default(),
+        title: repair_tag_text(&song.title).into_owned(),
+        artist: repair_tag_text(&song.artist).into_owned(),
+        album_artist: repair_tag_text(&album_artist).into_owned(),
+        album: repair_tag_text(&album_title).into_owned(),
+        genre: repair_tag_text(&genre).into_owned(),
         year,
         track_no: (song.track_no > 0).then_some(i64::from(song.track_no)),
         disc_no: (song.disc_no > 0).then_some(i64::from(song.disc_no)),
@@ -1710,5 +1724,35 @@ mod tests {
         assert_eq!(rows[0].duration_secs, 293.0);
         assert_eq!(rows[0].art_id.as_deref(), Some("al-1"));
         assert_eq!(rows[0].codec, "flac");
+    }
+
+    #[test]
+    fn remote_text_is_charset_repaired() {
+        // "Песня" / "Альбом" encoded as CP1251 and read through Latin-1.
+        let mut s = song("a");
+        s.title = "Ïåñíÿ".into();
+        s.album = "Àëüáîì".into();
+        let album = AlbumDetail {
+            id: "al-1".into(),
+            name: String::new(),
+            artist: "Èñïîëíèòåëü".into(),
+            artist_id: "ar-1".into(),
+            year: 0,
+            genre: None,
+            song_count: 1,
+            duration_secs: 293,
+            cover_art_id: Some("al-1".into()),
+            songs: vec![],
+        };
+
+        let row = map_song(&album, &s, "p1");
+        assert_eq!(row.title, "Песня");
+        assert_eq!(row.album, "Альбом");
+        assert_eq!(row.album_artist, "Исполнитель");
+        assert_eq!(row.artist, "Aphex Twin", "ASCII tags stay untouched");
+
+        let rows = playlist_rows(&[s], "p1");
+        assert_eq!(rows[0].title, "Песня");
+        assert_eq!(rows[0].album, "Альбом");
     }
 }

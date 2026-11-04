@@ -490,6 +490,50 @@ if (IS_PLAYER) {
   } catch {
     // corrupt saved state — start fresh
   }
+  void repairRestoredText();
+}
+
+/**
+ * Repair legacy encodings in the persisted queue's metadata (best effort).
+ * The queue stores snapshots, so items saved before charset recovery would
+ * keep garbled titles after the library rows were healed. Deduplicated and
+ * chunked: a huge queue usually has far fewer unique title/artist strings.
+ */
+async function repairRestoredText(): Promise<void> {
+  if (items.length === 0) return;
+  const titles = Array.from(new Set(items.map((item) => item.title)));
+  const artists = Array.from(new Set(items.map((item) => item.artist)));
+
+  const repair = async (texts: string[]): Promise<string[]> => {
+    const fixed: string[] = [];
+    for (let i = 0; i < texts.length; i += 4000) {
+      const batch = texts.slice(i, i + 4000);
+      fixed.push(...(await invoke<string[]>("repair_tag_texts", { texts: batch })));
+    }
+    return fixed;
+  };
+
+  try {
+    const [fixedTitles, fixedArtists] = await Promise.all([
+      repair(titles),
+      repair(artists),
+    ]);
+    const titleMap = new Map<string, string>();
+    titles.forEach((title, i) => titleMap.set(title, fixedTitles[i] ?? title));
+    const artistMap = new Map<string, string>();
+    artists.forEach((artist, i) => artistMap.set(artist, fixedArtists[i] ?? artist));
+    let changed = false;
+    const next = items.map((item) => {
+      const title = titleMap.get(item.title) ?? item.title;
+      const artist = artistMap.get(item.artist) ?? item.artist;
+      if (title === item.title && artist === item.artist) return item;
+      changed = true;
+      return { ...item, title, artist };
+    });
+    if (changed) items = next;
+  } catch {
+    // backend unavailable (browser preview / older build) — keep raw text
+  }
 }
 
 export const queue = {
