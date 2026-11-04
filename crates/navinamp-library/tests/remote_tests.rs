@@ -3,7 +3,9 @@
 
 mod common;
 
-use navinamp_library::{Library, RemoteTrack, TrackFilter};
+use std::collections::HashSet;
+
+use navinamp_library::{Library, RemoteAlbum, RemoteTrack, TrackFilter};
 
 const S: &str = "s1";
 
@@ -11,6 +13,7 @@ fn rt(remote_id: &str, title: &str) -> RemoteTrack {
     RemoteTrack {
         remote_id: remote_id.into(),
         server_id: S.into(),
+        remote_album_id: "al-1".into(),
         remote_path: Some("Björk/Debut/01 Human Behaviour.mp3".into()),
         title: title.into(),
         artist: "Björk".into(),
@@ -427,6 +430,7 @@ fn open_migrates_a_tracks_table_created_before_server_id() {
         let raw = rusqlite::Connection::open(scratch.db()).unwrap();
         raw.execute_batch(
             "DROP INDEX idx_tracks_server;
+             DROP INDEX idx_tracks_remote_album;
              ALTER TABLE tracks DROP COLUMN server_id;",
         )
         .unwrap();
@@ -437,4 +441,59 @@ fn open_migrates_a_tracks_table_created_before_server_id() {
     library.sync_remote(S, vec![rt("t1", "A")]).unwrap();
     let track = &library.tracks_filtered(&TrackFilter::default()).unwrap()[0];
     assert_eq!(track.server_id.as_deref(), Some("s1"));
+}
+
+#[test]
+fn remote_album_ids_group_tracks_for_quick_rescans() {
+    let (_scratch, library) = db("remote-album-groups");
+    let mut other = rt("t3", "C");
+    other.remote_album_id = "al-2".into();
+    library
+        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B"), other])
+        .unwrap();
+
+    let by_album = library.remote_track_ids_by_album(S).unwrap();
+    assert_eq!(by_album.get("al-1").map(Vec::len), Some(2));
+    assert_eq!(by_album.get("al-2"), Some(&vec!["t3".to_string()]));
+}
+
+#[test]
+fn album_fingerprints_round_trip_and_prune() {
+    let (_scratch, library) = db("remote-album-fingerprints");
+    let first = RemoteAlbum {
+        server_id: S.into(),
+        album_id: "al-1".into(),
+        song_count: 11,
+        duration_secs: 2900,
+        name: "Debut".into(),
+        artist: "Björk".into(),
+        year: Some(1993),
+        cover_art_id: Some("al-1".into()),
+        created: Some("2024-01-01T00:00:00Z".into()),
+    };
+    let second = RemoteAlbum {
+        server_id: S.into(),
+        album_id: "al-2".into(),
+        song_count: 12,
+        duration_secs: 3100,
+        name: "Post".into(),
+        artist: "Björk".into(),
+        year: Some(1995),
+        cover_art_id: None,
+        created: None,
+    };
+    library
+        .upsert_remote_albums(&[first.clone(), second])
+        .unwrap();
+
+    let albums = library.remote_albums(S).unwrap();
+    assert_eq!(albums.len(), 2);
+    assert_eq!(albums.get("al-1"), Some(&first));
+
+    let seen: HashSet<String> = ["al-1".to_string()].into_iter().collect();
+    assert_eq!(library.prune_remote_albums(S, &seen).unwrap(), 1);
+    assert_eq!(library.remote_albums(S).unwrap().len(), 1);
+
+    library.delete_remote_server(S).unwrap();
+    assert!(library.remote_albums(S).unwrap().is_empty());
 }

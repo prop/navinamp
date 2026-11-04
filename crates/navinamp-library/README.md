@@ -49,7 +49,10 @@ CREATE TABLE tracks (
     last_played_at  INTEGER,                -- unix seconds (user data)
     date_added      INTEGER NOT NULL,       -- unix seconds, set on FIRST insert
     source          TEXT NOT NULL DEFAULT 'local',
-    remote_id       TEXT,                   -- Navidrome id when source='navidrome'
+    remote_id       TEXT,                   -- Navidrome song id when source='navidrome'
+    server_id       TEXT,                   -- Navidrome profile id
+    remote_path     TEXT,                   -- server-relative file path
+    remote_album_id TEXT,                   -- Navidrome album id (quick-rescan grouping)
     art_id          TEXT                    -- local: art-cache content hash; remote: coverArt id
 );
 -- indexes: album_key, artist, genre, (artist, album)
@@ -174,9 +177,9 @@ fed by the Subsonic `getArtists`/`getAlbum` walk in the Tauri bridge:
 
 - one **transaction** for the whole batch (a sync lands wholesale or not at
   all);
-- rows are keyed by `path = "navidrome://<remote_id>"` — a namespace that
-  can never collide with a filesystem path, so the local upsert-by-path
-  and the remote upsert-by-path stay independent;
+- rows are keyed by `path = "navidrome://<server_id>/<remote_id>"` — a
+  namespace that can never collide with a filesystem path, so the local
+  upsert-by-path and the remote upsert-by-path stay independent;
 - `mtime` is pinned to `0` (no filesystem stamp) and `size` comes from the
   server's song data;
 - upserts refresh only sync-owned columns (tags, properties, `art_id`);
@@ -186,7 +189,11 @@ fed by the Subsonic `getArtists`/`getAlbum` walk in the Tauri bridge:
 - removal deletes **only** `source = 'navidrome'` rows whose `remote_id`
   is absent from the batch — local rows are never candidates;
 - `RemoteSyncReport { added, updated, removed }`; the bridge folds in
-  artist/album counts, per-item errors and wall-clock time.
+  artist/album counts, per-item errors and wall-clock time;
+- `remote_albums` stores a fingerprint per album (song count, duration and
+  the cheap album-index metadata). The Tauri bridge's quick rescan walks
+  `getAlbumList2`, fetches only changed albums, and uses
+  `remote_track_ids_by_album` to keep the untouched albums' rows.
 
 `TrackFilter` gained a `source` discriminator so the UI can list
 `local | navidrome | both` through one query path.

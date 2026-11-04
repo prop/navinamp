@@ -650,6 +650,7 @@ fn mark_played_never_touches_remote_rows() {
             vec![RemoteTrack {
                 remote_id: "t9".into(),
                 server_id: "s1".into(),
+                remote_album_id: "al-9".into(),
                 remote_path: None,
                 title: "Remote Song".into(),
                 artist: "Björk".into(),

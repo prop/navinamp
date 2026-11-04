@@ -44,6 +44,13 @@ pub struct AlbumSummary {
     pub duration_secs: u64,
     #[serde(default, rename = "coverArt")]
     pub cover_art_id: Option<String>,
+    /// Album year, `0` when the server doesn't know it. Part of the
+    /// quick-rescan fingerprint.
+    #[serde(default)]
+    pub year: u32,
+    /// Creation timestamp (ISO string) for quick-rescan fingerprinting.
+    #[serde(default)]
+    pub created: Option<String>,
 }
 
 /// Full album from `getAlbum`, songs inline. This is the leaf of the
