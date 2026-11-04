@@ -7,25 +7,27 @@
  * correlates by FEED ORDER:
  *
  *  · `expectations` lists every track we fed to the engine (via audio_play /
- *    audio_enqueue) that has not started yet, oldest first — the front entry
- *    is the queue item the next TrackStarted is expected to belong to.
+ *    audio_set_upcoming) that has not started yet, oldest first — the front
+ *    entry is the queue item the next TrackStarted is expected to belong to.
  *  · TrackStarted shifts the front entry; the shifted item becomes
  *    currentIndex. This is the ONLY event that moves the position — it is
  *    how a gapless engine-side advance updates the UI.
  *  · TrackFinished never moves the position: audio_play REPLACES the engine
  *    queue and emits TrackFinished for the replaced track, so "finished"
  *    does not imply "advance on our side".
- *  · audio_enqueue pre-buffers exactly ONE next track (replacing any pending
- *    one, and starting playback if the engine is idle), so we keep at most
- *    one ahead: after every TrackStarted advance we feed the successor of
- *    the new current index (reconcileAhead), guarded by the expectation
- *    list so the same position is never fed twice.
+ *  · audio_set_upcoming declares the ordered window of the next
+ *    PREFETCH_AHEAD tracks. The engine pre-opens the first few (bounded), so
+ *    an automatic advance is gapless and a skip forward does not wait for a
+ *    network open. Updates are reconciled by item id: re-declaring the same
+ *    tail after every advance is a no-op, and a reorder/removal keeps
+ *    entries that are already open. reconcileAhead recomputes the window
+ *    after every mutation, toggle and TrackStarted.
  *
  * Edge cases:
  *  · Play-replace during gapless — play(i) resets the engine queue and our
- *    expectations to [i (, next)]. A straggler TrackStarted from the replaced
- *    pipeline then just consumes the front entry; since exactly one entry is
- *    consumed per TrackStarted and expectations always mirrors
+ *    expectations to [i, ...window]. A straggler TrackStarted from the
+ *    replaced pipeline then just consumes the front entry; since exactly one
+ *    entry is consumed per TrackStarted and expectations always mirrors
  *    fed-but-unstarted tracks, the position converges (worst case one
  *    transient mis-highlight).
  *  · Enqueue at queue end — no successor exists, nothing is fed; the engine
@@ -33,6 +35,8 @@
  *    else is a stop state (currentIndex stays, engineLive=false).
  *  · repeat=one feeds the current track as its own successor, making repeats
  *    gapless; the EndOfQueue wrap is then only a fallback.
+ *  · The window walk stops when it revisits a position, so a short queue
+ *    under repeat=all cannot enqueue the same items forever.
  *
  * Remote (M5): items synced from Navidrome carry
  * `path: "navidrome://<serverId>/<remoteId>"`
@@ -47,8 +51,9 @@
  * Entries carry the item id next to the fed index so list edits (remove /
  * move / insert) repair indexes by identity — a bare index would go stale
  * after a splice. If a fed item is removed from the list the engine still
- * plays its file out once (audio_enqueue can replace a pending next, but
- * nothing can cancel it); the UI simply does not move for it.
+ * plays its file out once (audio_set_upcoming can cancel entries that are
+ * still opening, but not one that already started); the UI simply does not
+ * move for it.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -103,6 +108,9 @@ interface Expectation {
   index: number;
   id: string;
 }
+
+/** Upcoming tracks declared to the engine (immediate next + 3 more). */
+const PREFETCH_AHEAD = 4;
 
 // Extensions the plan's decoder surface claims (§4): MP3, FLAC, OGG
 // Vorbis/Opus, AAC/ALAC (M4A), WAV — plus the usual container spellings.
@@ -321,51 +329,79 @@ function stepIndex(i: number, delta: 1 | -1): number {
 }
 
 /**
- * The pending "next" slot: the last entry while a play's TrackStarted is
- * still outstanding, the single front entry afterwards.
+ * Queue indexes the engine should hold after `from`, in play order, up to
+ * PREFETCH_AHEAD. Walks the same successor function as playback, so shuffle
+ * and repeat behave identically; stops when the walk revisits a position
+ * (a short queue under repeat=all would otherwise repeat forever).
  */
-function pendingExpectation(): Expectation | null {
-  if (startPending) return expectations.length > 1 ? expectations[expectations.length - 1] : null;
-  return expectations.length > 0 ? expectations[0] : null;
+function upcomingIndexes(from: number): number[] {
+  if (items.length === 0) return [];
+  // repeat=one is its own successor; feed one self-copy so the repeat stays
+  // gapless instead of relying on the EndOfQueue wrap.
+  if (repeat === "one") return [from];
+  // A one-item queue only has a successor under repeat=all.
+  if (items.length === 1) return repeat === "all" ? [from] : [];
+  const result: number[] = [];
+  const seen = new Set<number>([from]);
+  let at = from;
+  while (result.length < PREFETCH_AHEAD) {
+    const next = successorIndex(at);
+    if (next == null || next >= items.length || seen.has(next)) break;
+    seen.add(next);
+    result.push(next);
+    at = next;
+  }
+  return result;
 }
 
 /**
- * Make the engine's pre-buffered next match the queue's desired successor.
- * Called after every mutation, toggle, and advance. No-ops when the engine
- * is not live, when the desired track was already fed (compared by id, so
- * list edits cannot desync it), or when there is nothing to feed (a fed
- * pending cannot be cancelled — it plays out once).
+ * Make the engine's prefetch window match the queue's desired upcoming
+ * tracks. Called after every mutation, toggle, and advance. No-ops when the
+ * engine is not live or when the fed window already matches (compared by
+ * item id, so list edits cannot desync it). The engine reconciles by key,
+ * so re-declaring the surviving tail never re-opens it.
  */
 function reconcileAhead(): void {
   if (!engineLive) return;
-  const curIdx =
-    playingItemId != null ? items.findIndex((it) => it.id === playingItemId) : -1;
-  const pending = pendingExpectation();
-  let desired: number | null;
-  if (curIdx >= 0) {
-    desired = successorIndex(curIdx);
-  } else if (pending != null) {
-    // Audible track orphaned (removed mid-play) or play still starting:
-    // keep whatever was already fed as the pending next.
-    desired = items.findIndex((it) => it.id === pending.id);
-    if (desired < 0) desired = null;
-  } else {
-    // Orphaned with nothing pending: keep the chain alive from the
-    // displayed position so the queue does not dead-end.
-    desired = currentIndex != null ? successorIndex(currentIndex) : null;
-  }
-  if (desired == null || desired >= items.length) return;
-  if (pending != null && pending.id === items[desired].id) return;
-  const target = items[desired];
-  feed(async () => {
-    await invoke("audio_enqueue", { path: await feedPath(target) });
-  });
+  let base: number | null = null;
   if (startPending && expectations.length > 0) {
-    // Preserve the play-start front entry; the fed next follows it.
-    expectations = [expectations[0], { index: desired, id: target.id }];
-  } else {
-    expectations = [{ index: desired, id: target.id }];
+    const front = items.findIndex((it) => it.id === expectations[0].id);
+    if (front >= 0) base = front;
+  } else if (playingItemId != null) {
+    const idx = items.findIndex((it) => it.id === playingItemId);
+    if (idx >= 0) base = idx;
   }
+  if (base == null) {
+    // Audible track orphaned (removed mid-play) or play still starting with
+    // nothing known: keep whatever was already fed. Only a fully empty
+    // engine chain falls back to the displayed position.
+    if (expectations.length > 0) return;
+    if (!startPending && currentIndex != null) base = currentIndex;
+    else return;
+  }
+
+  const desired = upcomingIndexes(base);
+  const targets = desired.map((i) => items[i]);
+  const fedTail = startPending ? expectations.slice(1) : expectations;
+  if (
+    fedTail.length === targets.length &&
+    fedTail.every((e, i) => e.id === targets[i].id)
+  ) {
+    return;
+  }
+
+  feed(async () => {
+    const tracks = await Promise.all(
+      targets.map(async (item) => ({
+        key: item.id,
+        path: await feedPath(item),
+      })),
+    );
+    await invoke("audio_set_upcoming", { tracks });
+  });
+  const exps = desired.map((index) => ({ index, id: items[index].id }));
+  expectations =
+    startPending && expectations.length > 0 ? [expectations[0], ...exps] : exps;
 }
 
 function insertItems(metas: QueueItemMeta[], at: number): number {
@@ -383,8 +419,6 @@ function insertItems(metas: QueueItemMeta[], at: number): number {
 function play(index: number): void {
   if (index < 0 || index >= items.length) return;
   const item = items[index];
-  const next = successorIndex(index);
-  const nextId = next != null && next < items.length ? items[next].id : null;
   const session = ++playSession;
   currentIndex = index;
   playingItemId = item.id;
@@ -392,16 +426,17 @@ function play(index: number): void {
   startPending = true;
   expectations = [{ index, id: item.id }];
   feed(async () => {
-    await invoke("audio_play", { path: await feedPath(item) });
-    // Superseded by a newer play, or the TrackStarted already arrived and
-    // reconcileAhead owns ahead-feeding from here.
-    if (session !== playSession || nextId == null) return;
-    if (!startPending || expectations.length !== 1) return;
-    const target = items.find((it) => it.id === nextId);
-    if (!target) return;
-    expectations = [expectations[0], { index: items.indexOf(target), id: target.id }];
-    await invoke("audio_enqueue", { path: await feedPath(target) });
+    await invoke("audio_play", {
+      key: item.id,
+      path: await feedPath(item),
+    });
+    // A newer play supersedes this one; its own feed is queued after this.
+    if (session !== playSession) return;
   });
+  // Queue the window behind the play command in the same serialized feed
+  // chain. The engine opens it while the Play target starts; re-declaring
+  // the surviving keys after every advance is intentionally cheap.
+  reconcileAhead();
 }
 
 function next(): void {
@@ -646,7 +681,10 @@ export const queue = {
     reconcileAhead();
   },
 
-  /** Empty the list. The engine finishes whatever it already holds. */
+  /**
+   * Empty the list. The engine keeps playing the current track, but the
+   * lookahead window is cancelled so removed items are not played ahead.
+   */
   clear(): void {
     items = [];
     currentIndex = null;
@@ -654,6 +692,9 @@ export const queue = {
     startPending = false;
     playingItemId = null;
     shuffleOrder = [];
+    if (engineLive) {
+      feed(() => invoke("audio_set_upcoming", { tracks: [] }));
+    }
   },
 
   /** Double-click / PLAY-on-stopped: feed `index` as a fresh play. */

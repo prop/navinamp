@@ -81,6 +81,7 @@ pub fn run() {
             commands::app_version,
             audio::audio_play,
             audio::audio_enqueue,
+            audio::audio_set_upcoming,
             audio::audio_pause,
             audio::audio_resume,
             audio::audio_stop,

@@ -8,7 +8,9 @@
 //!
 //! `audio_play`/`audio_enqueue` take a path **or** an `http(s)://` URL (a
 //! Navidrome stream URL); URLs play through the engine's remote-stream
-//! transport with gapless/seek parity.
+//! transport with gapless/seek parity. `audio_set_upcoming` declares the
+//! ordered lookahead window, and `audio_play` passes the queue item key so a
+//! ready window entry is reused without re-opening it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -20,7 +22,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use navinamp_audio::{
     Command, EQ_BAND_COUNT, EQ_RANGE_DB, EngineHandle, EqState, Event, PlaybackStatus, Spectrum,
-    TrackSource, eq_presets as eq_preset_table,
+    TrackSource, UpcomingTrack, eq_presets as eq_preset_table,
 };
 
 /// Name of the Tauri event engine events are forwarded to.
@@ -368,15 +370,55 @@ fn track_source(path: String) -> TrackSource {
     }
 }
 
+/// One upcoming entry from the UI's prefetch window.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct UpcomingInput {
+    /// Stable UI queue-item id.
+    key: String,
+    /// Local path or stream URL.
+    path: String,
+}
+
 #[tauri::command]
-pub fn audio_play(app: AppHandle, state: State<'_, Audio>, path: String) -> Result<(), String> {
+pub fn audio_play(
+    app: AppHandle,
+    state: State<'_, Audio>,
+    path: String,
+    key: Option<String>,
+) -> Result<(), String> {
     ensure_engine(&app, &state)?;
-    send_if_running(&state, || Command::Play(track_source(path)))
+    match key {
+        Some(key) => send_if_running(&state, || Command::PlayKeyed {
+            key,
+            source: track_source(path),
+        }),
+        None => send_if_running(&state, || Command::Play(track_source(path))),
+    }
 }
 
 #[tauri::command]
 pub fn audio_enqueue(state: State<'_, Audio>, path: String) -> Result<(), String> {
     send_if_running(&state, || Command::EnqueueNext(track_source(path)))
+}
+
+/// Declare the ordered upcoming tracks after the current one. The engine
+/// pre-opens the first few so skips forward are instant.
+#[tauri::command]
+pub fn audio_set_upcoming(
+    state: State<'_, Audio>,
+    tracks: Vec<UpcomingInput>,
+) -> Result<(), String> {
+    send_if_running(&state, || {
+        Command::SetUpcoming(
+            tracks
+                .into_iter()
+                .map(|track| UpcomingTrack {
+                    key: track.key,
+                    source: track_source(track.path),
+                })
+                .collect(),
+        )
+    })
 }
 
 #[tauri::command]

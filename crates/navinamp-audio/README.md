@@ -23,11 +23,14 @@ EngineHandle                    Producer                                     Cal
  └─ Receiver(Event) ◀──────     ├─ RingProducer (lock-free SPSC)               ├─ SpectrumTap    (post-DSP)
                                 └─ Events broadcast ────────────────────────▶  └─ atomics: status/volume/played
 
-prefetch thread ("navinamp-audio-prefetch")
- └─ opens/probes the next source and hands the ready PcmSource to the producer
+prefetch pool ("navinamp-audio-prefetch-N")
+ └─ opens/probes lookahead sources and hands ready PcmSources to the producer
+
+play opener ("navinamp-audio-play-opener")
+ └─ opens explicit Play targets, ahead of any lookahead work
 ```
 
-* **One** decoder/producer thread owns the active symphonia reader and the pre-opened next track once it is ready. A separate **prefetch thread** opens both the next source and explicit `Play` targets off the decode path, so network probe latency cannot stall the track that is currently playing. An explicit `Play` keeps the old track audible until the new source is ready; if the target is already the pre-opened next source, it switches immediately without a network open.
+* **One** decoder/producer thread owns the active symphonia reader and the prefetch window. A dedicated **play opener** thread opens explicit `Play` targets, while a small **prefetch pool** opens the ordered lookahead window, so network probe latency cannot stall the track that is currently playing. An explicit `Play` keeps the old track audible until the new source is ready; if the target is already open in the window, it switches immediately without any I/O.
 * The **cpal callback** only touches the ring buffer, atomics and fixed per-block DSP state — it never allocates, locks, or blocks. The only `unsafe` in the crate is the SPSC ring's sample storage, with the disjoint-access invariant documented in `src/ring.rs`.
 * **Position** is a samples-played `AtomicU64` on the consumer side; the producer keeps a FIFO-aligned pushed-frames counter and marks track boundaries ("sessions") on that shared timeline, so `position_secs()` is exact without the UI ever racing the audio path. Status is an `AtomicU8`, volume an f32 bit-cast into an `AtomicU32`.
 
@@ -42,14 +45,14 @@ prefetch thread ("navinamp-audio-prefetch")
   (deleted on drop). Redirects are followed up to 5 hops. Subsonic stream
   URLs embed auth tokens, so every error surfaced scrubs the URL to `<url>`;
   nothing in the engine logs URLs. Gapless local↔remote transitions and
-  `EnqueueNext` pre-opening behave exactly like files. The current track's
-  transport lives on the producer thread; opening the next source or an
-  explicit `Play` target (initial GET, ReplayGain scan, container probe) runs
-  on the prefetch thread so it cannot stall decoding. A slow network read on
-  the active stream can still underrun the ring (audible gap) but never blocks
-  the audio callback.
+  window pre-opening behave exactly like files. The current track's transport
+  lives on the producer thread; opening a lookahead source or an explicit
+  `Play` target (initial GET, ReplayGain scan, container probe) runs on an
+  opener thread so it cannot stall decoding. A slow network read on the active
+  stream can still underrun the ring (audible gap) but never blocks the audio
+  callback.
 * **Sample rates**: on `Play` the engine tries to open the device at the *source* rate (stereo) so most playback is bit-exact; if the device refuses, it keeps the running stream and resamples on the **decode thread** (rubato FFT, fixed chunks). Gapless transitions never re-open the device — a rate-mismatched next track is resampled instead.
-* **Gapless**: `EnqueueNext` starts opening the next source immediately on the prefetch thread; decoded output continues in the same ring buffer — zero inserted silence. `TrackFinished`/`TrackStarted` fire producer-side when the swap is *scheduled* (leads the audible transition by ≤ ring latency, typically ≪100 ms). `EndOfQueue` fires when the last frame was actually consumed.
+* **Gapless + lookahead**: `SetUpcoming` declares the ordered next tracks; the front is opened first and the rest follow in a bounded window (currently four entries, two opener workers), so automatic advances and forward skips both avoid a network wait. `PlayKeyed` reuses a ready window entry instantly. Decoded output continues in the same ring buffer — zero inserted silence. `TrackFinished`/`TrackStarted` fire producer-side when the swap is *scheduled* (leads the audible transition by ≤ ring latency, typically ≪100 ms). `EndOfQueue` fires when the last frame was actually consumed.
 * **Pause/Resume**: the device stream keeps running and emits silence; the position freezes and buffered audio survives. **Stop** clears queue + buffers. **Seek** is sample-accurate where the container allows (WAV/FLAC), resets the ring via a lock-free generation handshake, refills to the prefill target (so a briefly starved decode thread cannot underrun the first post-seek pull), and works mid-track *and* while paused (the decoder stays resident until the queue finishes).
 * **Volume**: applied in the callback with a 30 ms linear ramp (no clicks/zipper). **DSP** (`src/dsp.rs`) runs between ring and volume as *replaygain → preamp → 10-band EQ*:
   * **EQ** (`src/eq.rs`): 10 peaking biquads (RBJ, Q ≈ 1) at 60, 170, 310, 600, 1k, 2k, 4k, 8k, 12k, 16 kHz — params travel lock-free (f32 bits in atomics + generation counter); the chain re-reads and recomputes coefficients only when the generation moved. Flat (all 0 dB) bypasses the stage entirely — bit-transparent.

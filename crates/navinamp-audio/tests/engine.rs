@@ -9,7 +9,9 @@ mod common;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, TryRecvError};
-use navinamp_audio::{Command, EngineHandle, Event, PlaybackStatus, TestSink, TrackSource};
+use navinamp_audio::{
+    Command, EngineHandle, Event, PlaybackStatus, TestSink, TrackSource, UpcomingTrack,
+};
 
 use common::{as_expected_f32, sine_i16, stereo_sine_fixture, temp_path, write_wav};
 
@@ -99,6 +101,20 @@ fn pull_frames(sink: &TestSink, out: &mut Vec<f32>, frames: usize) {
         let n = remaining.min(512);
         out.extend(sink.pull(n));
         remaining -= n;
+    }
+}
+
+/// Pull at roughly real time (slightly faster), so the producer thread can
+/// keep the ring fed like a device interrupt would. Multi-track windows need
+/// this: an unpaced loop drains the whole ring before the producer can swap
+/// in the next pre-opened track.
+fn pull_frames_paced(sink: &TestSink, out: &mut Vec<f32>, frames: usize) {
+    let mut remaining = frames;
+    while remaining > 0 {
+        let n = remaining.min(128);
+        out.extend(sink.pull(n));
+        remaining -= n;
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -212,6 +228,114 @@ fn gapless_concatenation_is_sample_exact() {
     // After the queue ends the sink must be silent.
     let tail = sink.pull(256);
     assert!(tail.iter().all(|&s| s == 0.0), "silence after EndOfQueue");
+}
+
+// ---------------------------------------------------------------------------
+// (b2) prefetch window: several upcoming tracks stay gapless and in order
+// ---------------------------------------------------------------------------
+
+fn upcoming(key: &str, path: &std::path::Path) -> UpcomingTrack {
+    UpcomingTrack {
+        key: key.to_string(),
+        source: TrackSource::File(path.to_path_buf()),
+    }
+}
+
+#[test]
+fn prefetch_window_plays_four_tracks_gaplessly() {
+    let (wav_a, exp_a) = stereo_sine_fixture("window-a", RATE, 1.0, 440.0);
+    let (wav_b, exp_b) = stereo_sine_fixture("window-b", RATE, 0.25, 550.0);
+    let (wav_c, exp_c) = stereo_sine_fixture("window-c", RATE, 0.25, 660.0);
+    let (wav_d, exp_d) = stereo_sine_fixture("window-d", RATE, 0.25, 880.0);
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::Play(TrackSource::File(wav_a)))
+        .expect("play a");
+    engine
+        .send(Command::SetUpcoming(vec![
+            upcoming("b", &wav_b),
+            upcoming("c", &wav_c),
+            upcoming("d", &wav_d),
+        ]))
+        .expect("set window");
+
+    start_and_get_playing(&engine, &sink, &rx);
+
+    let frames = |secs: f64| (f64::from(RATE) * secs).round() as usize;
+    let total = frames(1.0) + 3 * frames(0.25);
+    let mut out = Vec::new();
+    pull_frames_paced(&sink, &mut out, total);
+
+    let mut expected = exp_a;
+    expected.extend_from_slice(&exp_b);
+    expected.extend_from_slice(&exp_c);
+    expected.extend_from_slice(&exp_d);
+    assert_close(&out, &expected, 1e-9, "prefetch-window concatenation");
+
+    // One TrackFinished/TrackStarted pair per transition, in feed order.
+    for id in 1..=4u64 {
+        let finished = wait_event(&sink, &rx, |e| matches!(e, Event::TrackFinished { .. }));
+        assert_eq!(finished, Event::TrackFinished { id });
+        if id < 4 {
+            let started = wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+            assert!(
+                matches!(started, Event::TrackStarted { id: started_id, .. } if started_id == id + 1)
+            );
+        }
+    }
+    wait_event(&sink, &rx, |e| matches!(e, Event::EndOfQueue));
+    drive(&sink, || engine.status() == PlaybackStatus::Stopped);
+    assert_eq!(
+        engine.underrun_frames(),
+        0,
+        "prefetch-window playback must not underrun"
+    );
+}
+
+#[test]
+fn prefetch_window_reorders_by_key() {
+    // Re-declaring the window with different keys must reorder playback
+    // without re-opening the entries that moved.
+    let (wav_a, exp_a) = stereo_sine_fixture("window-reorder-a", RATE, 0.5, 440.0);
+    let (wav_b, exp_b) = stereo_sine_fixture("window-reorder-b", RATE, 0.25, 550.0);
+    let (wav_c, exp_c) = stereo_sine_fixture("window-reorder-c", RATE, 0.25, 660.0);
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::Play(TrackSource::File(wav_a)))
+        .expect("play a");
+    engine
+        .send(Command::SetUpcoming(vec![
+            upcoming("b", &wav_b),
+            upcoming("c", &wav_c),
+        ]))
+        .expect("window b,c");
+    engine
+        .send(Command::SetUpcoming(vec![
+            upcoming("c", &wav_c),
+            upcoming("b", &wav_b),
+        ]))
+        .expect("window c,b");
+
+    start_and_get_playing(&engine, &sink, &rx);
+
+    let frames = |secs: f64| (f64::from(RATE) * secs).round() as usize;
+    let mut out = Vec::new();
+    pull_frames_paced(&sink, &mut out, frames(0.5) + frames(0.25) + frames(0.25));
+
+    let mut expected = exp_a;
+    expected.extend_from_slice(&exp_c);
+    expected.extend_from_slice(&exp_b);
+    assert_close(&out, &expected, 1e-9, "reordered window concatenation");
+
+    wait_event(&sink, &rx, |e| matches!(e, Event::EndOfQueue));
+    drive(&sink, || engine.status() == PlaybackStatus::Stopped);
+    assert_eq!(engine.underrun_frames(), 0);
 }
 
 // ---------------------------------------------------------------------------

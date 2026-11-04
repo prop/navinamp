@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, TryRecvError};
-use navinamp_audio::{Command, EngineHandle, Event, PlaybackStatus, TestSink, TrackSource};
+use navinamp_audio::{
+    Command, EngineHandle, Event, PlaybackStatus, TestSink, TrackSource, UpcomingTrack,
+};
 
 const RATE: u32 = 44100;
 // Generous: the workspace test run is parallel and can starve the producer.
@@ -653,6 +655,102 @@ fn slow_play_open_does_not_stall_current_playback() {
     // tail, but it must not leave the engine starved or stopped.
     let started = wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
     assert!(matches!(started, Event::TrackStarted { .. }));
+    drain_queue(&engine, &sink, &rx);
+    assert_no_starved_underrun(&engine);
+}
+
+// ---------------------------------------------------------------------------
+// (f2) Play reuses a deep prefetch-window entry without re-opening it
+// ---------------------------------------------------------------------------
+
+#[test]
+fn play_uses_deep_prefetch_window_entry() {
+    let (wav_a, _exp_a) = common::stereo_sine_fixture("deep-window-a", RATE, 2.0, 440.0);
+    let (wav_b, _exp_b) = common::stereo_sine_fixture("deep-window-b", RATE, 0.5, 550.0);
+    let (wav_c, exp_c) = common::stereo_sine_fixture("deep-window-c", RATE, 0.5, 880.0);
+    let body_b = std::fs::read(&wav_b).expect("read b");
+    let body_c = std::fs::read(&wav_c).expect("read c");
+    let server_b = Server::start(Mode::Ranges, body_b);
+    let server_c = Server::start(Mode::Ranges, body_c);
+
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::Play(TrackSource::File(wav_a)))
+        .expect("play local a");
+    engine
+        .send(Command::SetUpcoming(vec![
+            UpcomingTrack {
+                key: "b".into(),
+                source: TrackSource::Remote {
+                    url: server_b.url(),
+                },
+            },
+            UpcomingTrack {
+                key: "c".into(),
+                source: TrackSource::Remote {
+                    url: server_c.url(),
+                },
+            },
+        ]))
+        .expect("prefetch b and c");
+    start_and_get_playing(&engine, &sink, &rx);
+
+    // Wait until C's open (initial GET + ReplayGain/probe rewinds) completed
+    // while A is still playing. There is no "ready" event, so wait for the
+    // request count to go quiet; the opener's result then lands promptly.
+    let deadline = Instant::now() + TIMEOUT;
+    while server_c.request_count() < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "C was never opened by the prefetch window"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut last = server_c.request_count();
+    let mut quiet_since = Instant::now();
+    while quiet_since.elapsed() < Duration::from_millis(500) {
+        assert!(Instant::now() < deadline, "C's prefetch never settled");
+        std::thread::sleep(Duration::from_millis(10));
+        let now = server_c.request_count();
+        if now != last {
+            last = now;
+            quiet_since = Instant::now();
+        }
+    }
+    let requests_before = server_c.request_count();
+
+    // A skip two tracks ahead must reuse the ready entry: no new HTTP open,
+    // and C's first frame follows immediately. The source URL deliberately
+    // differs (a refreshed token) — only the key may match.
+    engine
+        .send(Command::PlayKeyed {
+            key: "c".into(),
+            source: TrackSource::Remote {
+                url: format!("{}&fresh=1", server_c.url()),
+            },
+        })
+        .expect("play prefetched c");
+    let started = wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+    assert!(matches!(started, Event::TrackStarted { .. }));
+    drive(&sink, || engine.status() == PlaybackStatus::Playing);
+
+    assert_eq!(
+        server_c.request_count(),
+        requests_before,
+        "Play re-opened a source the window had already prepared"
+    );
+    let mut out = Vec::new();
+    pull_frames(&sink, &mut out, RATE as usize / 5);
+    assert_close(
+        &out,
+        &exp_c[..RATE as usize / 5 * 2],
+        1e-9,
+        "deep prefetch-window Play audio",
+    );
+
     drain_queue(&engine, &sink, &rx);
     assert_no_starved_underrun(&engine);
 }
