@@ -400,8 +400,9 @@ impl Producer {
         let request = PrefetchRequest { id, source };
         self.prefetch = Some(PrefetchJob { id });
         if let Err(err) = self.prefetch_tx.send(request) {
-            // Opener thread is gone (only possible during shutdown). Fall
-            // back to the old inline behavior so playback still works.
+            // Opener thread panicked (spawn failure would have aborted engine
+            // start). Fall back to the old inline behavior so playback still
+            // works.
             self.prefetch = None;
             let request = err.0;
             match open_source(&request.source) {
