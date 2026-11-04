@@ -7,3 +7,6 @@
   Never push feature or fix commits directly to `master`.
 - **Do not merge a pull request without the user's explicit approval.** Open
   the PR, wait for CI, and report back; merging requires the user's go-ahead.
+- **Delete the branch after merging its PR.** Merge with
+  `gh pr merge <n> --merge --delete-branch` (or delete the remote branch
+  afterwards); never leave a merged topic branch behind.
