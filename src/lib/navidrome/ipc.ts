@@ -134,12 +134,17 @@ export function navidromeRenameProfile(
 
 /**
  * Sync one server (`serverId`) or every saved server (`null`/omitted) into
- * the unified `tracks` table. Resolves with the aggregate report; a second
- * concurrent call throws ("one sync at a time" — the running sync's
- * `navidrome-progress` events keep the UI live).
+ * the unified `tracks` table. A quick sync (`full = false`) fetches only
+ * albums whose cheap index fingerprint changed; a full sync re-fetches every
+ * album. Resolves with the aggregate report; a second concurrent call throws
+ * ("one sync at a time" — the running sync's `navidrome-progress` events
+ * keep the UI live).
  */
-export function navidromeSync(serverId: string | null = null): Promise<NavidromeSyncReport> {
-  return invoke<NavidromeSyncReport>("navidrome_sync", { serverId });
+export function navidromeSync(
+  serverId: string | null = null,
+  full = false,
+): Promise<NavidromeSyncReport> {
+  return invoke<NavidromeSyncReport>("navidrome_sync", { serverId, full });
 }
 
 /** Translate a remote track id into a streamable http(s) URL. */
