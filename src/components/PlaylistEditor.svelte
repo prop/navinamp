@@ -523,7 +523,7 @@
     <button
       onclick={goToCurrent}
       disabled={currentIndex == null}
-      title="scroll to the playing track">NOW</button>
+      title="scroll to the current queue item">NOW</button>
     <button disabled title="TODO(M4): sort and misc ops">MISC</button>
     <span class="totals">{totalText}</span>
   </footer>

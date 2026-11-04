@@ -88,7 +88,7 @@
 <div class="menu" bind:this={el} style="left:{left}px; top:{top}px;" role="menu">
   {#if info.length > 0}
     <div class="info" role="group" aria-label="track details">
-      {#each info as row (row.label)}
+      {#each info as row, i (i)}
         <div class="irow">
           <span class="ilabel">{row.label}</span>
           <span class="ivalue" title={row.value}>{row.value}</span>
@@ -145,6 +145,15 @@
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: #2f4f33 #161616;
+  }
+
+  /* Match the playlist's thin scrollbar on WebKit too. */
+  .menu::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .menu::-webkit-scrollbar-thumb {
+    background: #2f4f33;
   }
 
   .info {
