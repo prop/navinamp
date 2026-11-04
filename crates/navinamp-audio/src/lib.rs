@@ -13,10 +13,16 @@
 //!  ├─ atomics  ◀─……Relaxed……▶    ├─ channel convert → rubato resample           ├─ DspChain       (RG→preamp→EQ)
 //!  └─ Receiver(Event) ◀───────    ├─ RingProducer (lock-free SPSC)               ├─ SpectrumTap    (post-DSP)
 //!                                 └─ Events broadcast ────────────────────────▶  └─ atomics: status/volume/played
+//!
+//! prefetch thread ("navinamp-audio-prefetch")
+//!  └─ opens/probes the next source (HTTP GETs, ReplayGain, container probe)
+//!     and hands the ready PcmSource to the producer
 //! ```
 //!
-//! * **One** decoder/producer thread owns all symphonia readers (current + one
-//!   pre-opened next track).
+//! * **One** decoder/producer thread owns the active symphonia reader and the
+//!   pre-opened next track once it is ready. A separate **prefetch thread**
+//!   opens the next source off the decode path, so network probe latency can
+//!   never stall the track that is currently playing.
 //! * The **cpal callback** only touches the ring buffer, atomics and fixed
 //!   per-block DSP state — it never allocates, locks, or blocks.
 //! * Position tracking is a samples-played counter (`AtomicU64`); status is an
@@ -35,14 +41,15 @@
 //!
 //! ## Gapless
 //!
-//! `EnqueueNext` opens and validates the next file immediately; its decoded
-//! audio simply continues in the same ring buffer after the current track's last
-//! frame — zero inserted silence. `TrackFinished`/`TrackStarted` fire from the
-//! producer at the moment the swap is *scheduled* (i.e. when the last frame of a
-//! track enters the ring), which leads the audible transition by at most the
-//! ring-buffer latency (2 s worst case, typically ≪100 ms since the callback is
-//! draining it continuously). `EndOfQueue` fires after the last audible frame
-//! has been consumed.
+//! `EnqueueNext` starts opening and validating the next source immediately on
+//! the prefetch thread; when it is ready its decoded audio simply continues in
+//! the same ring buffer after the current track's last frame — zero inserted
+//! silence. `TrackFinished`/`TrackStarted` fire from the producer at the moment
+//! the swap is *scheduled* (i.e. when the last frame of a track enters the
+//! ring), which leads the audible transition by at most the ring-buffer latency
+//! (2 s worst case, typically ≪100 ms since the callback is draining it
+//! continuously). `EndOfQueue` fires after the last audible frame has been
+//! consumed.
 //!
 //! ## DSP insertion points
 //!
@@ -69,8 +76,10 @@
 //! ignore ranges (Navidrome transcodes) are fully downloaded to a temp-file
 //! spill on the first seek and served locally thereafter (the spill is
 //! deleted on drop). Gapless local↔remote transitions and `EnqueueNext`
-//! pre-opening work identically to files. The transport never touches the
-//! audio callback; URL credentials are scrubbed from surfaced errors.
+//! pre-opening work identically to files; the next track's initial GET,
+//! ReplayGain scan and container probe run on the prefetch thread. The
+//! transport never touches the audio callback; URL credentials are scrubbed
+//! from surfaced errors.
 //!
 //! ## Example
 //!
