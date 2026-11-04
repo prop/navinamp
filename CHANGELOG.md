@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.11.0](https://github.com/prop/navinamp/compare/v0.10.0...v0.11.0) (2026-11-04)
+
+
+### Features
+
+* **ai:** pair Discogs catalog answers with local keyword rules ([73f3f60](https://github.com/prop/navinamp/commit/73f3f60ea9471bcfaadb65284c3f70e23ff1b82b))
+* **ai:** pair Discogs catalog answers with local keyword rules ([7e1cc56](https://github.com/prop/navinamp/commit/7e1cc563500119c876797369a4d679a06bb9257f))
+* **playlist:** jump to the current track + detailed row info in the context menu ([bd35010](https://github.com/prop/navinamp/commit/bd350108a99437eab47983378fce3544e678bb21))
+* **playlist:** jump to the current track and show details in the row menu ([6db7cec](https://github.com/prop/navinamp/commit/6db7cecaca68260f409c0769d3cbdaaa635794c0))
+* **windows:** accept the first mouse click while unfocused ([c80a58a](https://github.com/prop/navinamp/commit/c80a58a376d60c1cfd814e1d61ffba94d5bb0880))
+* **windows:** accept the first mouse click while unfocused ([8721f41](https://github.com/prop/navinamp/commit/8721f41562d347c0f549d19d1700908af72fbc00))
+
+
+### Bug Fixes
+
+* **ai:** carry the Discogs keyword into trimmed-context injections ([c8e05c6](https://github.com/prop/navinamp/commit/c8e05c6f1a05ac74aaad533d2fb7ee3d75744306))
+* **audio:** open the next track off the decode thread ([4176509](https://github.com/prop/navinamp/commit/4176509a8118da6c828b8ac1fb5a7b1b539bded2))
+* **audio:** open the next track off the decode thread ([18b137c](https://github.com/prop/navinamp/commit/18b137c33361a1448b78423689cd5565044ab264))
+* **library:** repair legacy tag text on remote rows and queue restore ([2cf288a](https://github.com/prop/navinamp/commit/2cf288a10077d0a1cb63857c9f2525bf6f56bcf1))
+* **library:** repair legacy tag text on remote rows and queue restore ([932f572](https://github.com/prop/navinamp/commit/932f57270c8adbb95bec7aeac258a4e45a0774f0))
+* **library:** tighten charset repair and bound the migration ([dd365f3](https://github.com/prop/navinamp/commit/dd365f3fafbdb237b29811871656a84e05e5528f))
+* **playlist:** stable info keys, styled menu scrollbar, clearer NOW tooltip ([ce9f646](https://github.com/prop/navinamp/commit/ce9f64665cefcab6d41965bfe18fefe870f73f56))
+* **ui:** disable autocorrect in search and rule inputs ([4c10080](https://github.com/prop/navinamp/commit/4c1008053e82b09004bd32d93166d6714d0e77c0))
+* **ui:** disable autocorrect in search and rule inputs ([d61dc0a](https://github.com/prop/navinamp/commit/d61dc0a17558e42bba5512c860c2472ba8f24be5))
+
 ## [0.10.0](https://github.com/prop/navinamp/compare/v0.9.0...v0.10.0) (2026-11-03)
 
 
