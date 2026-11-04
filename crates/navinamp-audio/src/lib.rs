@@ -145,7 +145,7 @@ use producer::Producer;
 use shared::Shared;
 
 /// What to play.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackSource {
     /// A local file, probed by content.
     File(PathBuf),
