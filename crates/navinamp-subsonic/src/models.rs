@@ -116,6 +116,16 @@ pub struct SongSummary {
     /// Channel count, when the server reports it.
     #[serde(default, rename = "channelCount")]
     pub channel_count: Option<u32>,
+    /// Server-relative file path (e.g. `Artist/Album/01 song.flac`), as
+    /// reported by the server's indexer. Empty when the server omits it.
+    ///
+    /// Deliberately *not* run through `repair_tag_text` downstream (unlike
+    /// the display fields in the Tauri mapper): a clipboard/stream path must
+    /// match the server's real bytes, so a mangled legacy-charset path is
+    /// copied as-is rather than "repaired" into a path that no longer
+    /// resolves.
+    #[serde(default)]
+    pub path: String,
     /// File size in bytes, when the server reports it.
     #[serde(default)]
     pub size: Option<u64>,
@@ -373,5 +383,15 @@ mod tests {
         assert!(!song(r#"{"id":"a","title":"A","starred":""}"#).starred);
         assert!(!song(r#"{"id":"a","title":"A","starred":null}"#).starred);
         assert!(!song(r#"{"id":"a","title":"A"}"#).starred);
+    }
+
+    #[test]
+    fn path_defaults_to_empty_and_parses_server_paths() {
+        // Missing attribute (lenient servers) → empty, never a parse error.
+        assert_eq!(song(r#"{"id":"a","title":"A"}"#).path, "");
+        assert_eq!(
+            song(r#"{"id":"a","title":"A","path":"Artist/Album/01 song.flac"}"#).path,
+            "Artist/Album/01 song.flac"
+        );
     }
 }

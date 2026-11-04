@@ -157,7 +157,7 @@
   }
 
   .info {
-    max-width: 320px;
+    max-width: 360px;
     padding: 3px 10px 5px;
   }
 
@@ -175,9 +175,9 @@
 
   .ivalue {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Wrap instead of clipping: album titles and quality strings run long,
+       and the block can afford a second line. */
+    overflow-wrap: anywhere;
     color: #a8a8b0;
   }
 

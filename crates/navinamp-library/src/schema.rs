@@ -35,6 +35,11 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // Multi-server aggregation: remote rows now carry their profile id.
         conn.execute("ALTER TABLE tracks ADD COLUMN server_id TEXT", [])?;
     }
+    if !has_column(conn, "tracks", "remote_path")? {
+        // Server-relative file path for navidrome rows (Copy path UX);
+        // filled in by the next sync for databases created before it.
+        conn.execute("ALTER TABLE tracks ADD COLUMN remote_path TEXT", [])?;
+    }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id)",
         [],
@@ -226,6 +231,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     source          TEXT NOT NULL DEFAULT 'local',
     remote_id       TEXT,
     server_id       TEXT,                      -- navidrome profile id (remote rows)
+    remote_path     TEXT,                      -- server-relative file path (navidrome rows)
     art_id          TEXT                       -- local: content hash into art-cache; remote: coverArt id
 );
 

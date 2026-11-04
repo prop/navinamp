@@ -1635,7 +1635,9 @@
         onenqueue([toMeta(t)]);
       }
     } else if (id === "copy") {
-      void navigator.clipboard.writeText(t.path).catch((e) => {
+      // Remote rows: prefer the server's real file path over the
+      // navidrome:// row identity (falls back until the next sync).
+      void navigator.clipboard.writeText(t.remotePath ?? t.path).catch((e) => {
         onlog(`copy path failed: ${e}`);
       });
     } else if (id === "star") {
@@ -1832,8 +1834,13 @@
       durationSecs: t.durationSecs,
       // Remote rows keep their navidrome:// path for display, but playback
       // resolves the stream URL through serverId + remoteId (queue.feedPath).
+      // remotePath rides along for Copy path (never the row identity).
       ...(t.source === REMOTE_SOURCE && t.remoteId != null
-        ? { remoteId: t.remoteId, ...(t.serverId != null ? { serverId: t.serverId } : {}) }
+        ? {
+            remoteId: t.remoteId,
+            ...(t.serverId != null ? { serverId: t.serverId } : {}),
+            ...(t.remotePath != null ? { remotePath: t.remotePath } : {}),
+          }
         : {}),
     };
   }

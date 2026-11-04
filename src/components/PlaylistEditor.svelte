@@ -402,7 +402,12 @@
     } else if (id === "remove") {
       onremove(m.index);
     } else if (id === "copy") {
-      void navigator.clipboard.writeText(item.path).catch((e) => {
+      // Remote rows carry the server's real file path from enqueue time
+      // (toMeta); the navidrome:// identity is the fallback for items
+      // enqueued before the row had a path. Synchronous on purpose — a
+      // cache lookup here would race the menu's async library fetch.
+      const copyPath = item.remotePath ?? item.path;
+      void navigator.clipboard.writeText(copyPath).catch((e) => {
         console.warn(`[navinamp] copy path failed: ${e}`);
       });
     } else if (id === "star") {
