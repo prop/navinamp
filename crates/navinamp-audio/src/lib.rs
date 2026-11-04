@@ -14,15 +14,19 @@
 //!  └─ Receiver(Event) ◀───────    ├─ RingProducer (lock-free SPSC)               ├─ SpectrumTap    (post-DSP)
 //!                                 └─ Events broadcast ────────────────────────▶  └─ atomics: status/volume/played
 //!
-//! prefetch thread ("navinamp-audio-prefetch")
-//!  └─ opens/probes the next source (HTTP GETs, ReplayGain, container probe)
-//!     and hands the ready PcmSource to the producer
+//! prefetch pool ("navinamp-audio-prefetch-N")
+//!  └─ opens/probes lookahead sources (HTTP GETs, ReplayGain, container probe)
+//!     and hands ready PcmSources to the producer
+//!
+//! play opener ("navinamp-audio-play-opener")
+//!  └─ opens explicit Play targets ahead of any lookahead work
 //! ```
 //!
 //! * **One** decoder/producer thread owns the active symphonia reader and the
-//!   pre-opened next track once it is ready. A separate **prefetch thread**
-//!   opens the next source off the decode path, so network probe latency can
-//!   never stall the track that is currently playing.
+//!   prefetch window. A dedicated **play opener** opens explicit `Play`
+//!   targets, while a small **prefetch pool** opens the ordered lookahead
+//!   window, so network probe latency can never stall the track that is
+//!   currently playing.
 //! * The **cpal callback** only touches the ring buffer, atomics and fixed
 //!   per-block DSP state — it never allocates, locks, or blocks.
 //! * Position tracking is a samples-played counter (`AtomicU64`); status is an
@@ -39,11 +43,17 @@
 //! device — a next track at a different rate is resampled to the running stream
 //! rate instead.
 //!
-//! ## Gapless
+//! ## Gapless + lookahead
 //!
-//! `EnqueueNext` starts opening and validating the next source immediately on
-//! the prefetch thread; when it is ready its decoded audio simply continues in
-//! the same ring buffer after the current track's last frame — zero inserted
+//! `SetUpcoming` declares the ordered tracks after the current one. The front
+//! (gapless successor) opens first and the rest follow in a bounded window
+//! (currently four entries, two opener workers), so both automatic advances
+//! and forward skips avoid a network wait. Only two opens run at a time, so a
+//! deep entry is instant once its open has completed; on a slow server the
+//! far entries land progressively. `PlayKeyed` reuses a ready window entry
+//! instantly. `EnqueueNext` remains the single-entry form. When the next
+//! source is ready its decoded audio simply continues in the same ring buffer
+//! after the current track's last frame — zero inserted
 //! silence. `TrackFinished`/`TrackStarted` fire from the producer at the moment
 //! the swap is *scheduled* (i.e. when the last frame of a track enters the
 //! ring), which leads the audible transition by at most the ring-buffer latency
@@ -75,9 +85,9 @@
 //! `MediaSourceStream`. Seeks issue `Range: bytes=N-` requests; servers that
 //! ignore ranges (Navidrome transcodes) are fully downloaded to a temp-file
 //! spill on the first seek and served locally thereafter (the spill is
-//! deleted on drop). Gapless local↔remote transitions and `EnqueueNext`
-//! pre-opening work identically to files; the next track's initial GET,
-//! ReplayGain scan and container probe run on the prefetch thread. The
+//! deleted on drop). Gapless local↔remote transitions and lookahead
+//! pre-opening work identically to files; the next tracks' initial GETs,
+//! ReplayGain scans and container probes run on opener threads. The
 //! transport never touches the audio callback; URL credentials are scrubbed
 //! from surfaced errors.
 //!
@@ -145,7 +155,7 @@ use producer::Producer;
 use shared::Shared;
 
 /// What to play.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TrackSource {
     /// A local file, probed by content.
     File(PathBuf),
@@ -161,14 +171,54 @@ pub enum TrackSource {
     },
 }
 
+/// One entry in the engine's prefetch window (see [`Command::SetUpcoming`]).
+///
+/// The key is a stable caller-side identity (the UI's queue-item id). Window
+/// updates are reconciled by key: an entry that keeps its key keeps its
+/// already-opened source, even when the queue around it was edited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpcomingTrack {
+    /// Stable caller-chosen identity for this entry.
+    pub key: String,
+    /// The source to open and play when this entry reaches the front.
+    pub source: TrackSource,
+}
+
 /// Commands sent from the UI side to the engine.
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Replace the queue and play this source now (also the "Play" button).
+    ///
+    /// A window entry whose source matches is reused if it is already open;
+    /// otherwise the source is opened off the decode thread.
     Play(TrackSource),
-    /// Pre-open the next source for a gapless hand-off (replaces any pending
-    /// next; starts playback immediately when the engine is idle).
+    /// Play this source now, preferring the pre-opened window entry `key`.
+    ///
+    /// This is the keyed form of [`Command::Play`] for callers that also use
+    /// [`Command::SetUpcoming`]: when the entry is ready the switch is instant
+    /// and performs no I/O. When `key` is not in the window it behaves exactly
+    /// like [`Command::Play`].
+    PlayKeyed {
+        /// Key of the prefetched [`UpcomingTrack`] to reuse, if present.
+        key: String,
+        /// Source to open when the key is not already prefetched.
+        source: TrackSource,
+    },
+    /// Pre-open the next source for a gapless hand-off (replaces the whole
+    /// prefetch window with this single entry; starts playback immediately
+    /// when the engine is idle).
     EnqueueNext(TrackSource),
+    /// Replace the prefetch window with these tracks, in play order.
+    ///
+    /// The front entry is the gapless successor. The engine keeps the first
+    /// few entries opened ahead (bounded); entries beyond the active window
+    /// stay queued and are opened as the front advances. Entries whose keys
+    /// match the previous window are carried over, including their already
+    /// opened sources, so a queue edit or a normal advance does not re-open
+    /// them. An empty list cancels all lookahead without touching the track
+    /// that is currently playing. On a fully idle engine this only pre-opens
+    /// sources; it never starts playback by itself.
+    SetUpcoming(Vec<UpcomingTrack>),
     /// Suspend output; the device stream keeps running and emits silence while
     /// the position freezes.
     Pause,
