@@ -48,8 +48,10 @@
 //! `SetUpcoming` declares the ordered tracks after the current one. The front
 //! (gapless successor) opens first and the rest follow in a bounded window
 //! (currently four entries, two opener workers), so both automatic advances
-//! and forward skips avoid a network wait. `PlayKeyed` reuses a ready window
-//! entry instantly. `EnqueueNext` remains the single-entry form. When the next
+//! and forward skips avoid a network wait. Only two opens run at a time, so a
+//! deep entry is instant once its open has completed; on a slow server the
+//! far entries land progressively. `PlayKeyed` reuses a ready window entry
+//! instantly. `EnqueueNext` remains the single-entry form. When the next
 //! source is ready its decoded audio simply continues in the same ring buffer
 //! after the current track's last frame — zero inserted
 //! silence. `TrackFinished`/`TrackStarted` fire from the producer at the moment
@@ -214,7 +216,8 @@ pub enum Command {
     /// match the previous window are carried over, including their already
     /// opened sources, so a queue edit or a normal advance does not re-open
     /// them. An empty list cancels all lookahead without touching the track
-    /// that is currently playing.
+    /// that is currently playing. On a fully idle engine this only pre-opens
+    /// sources; it never starts playback by itself.
     SetUpcoming(Vec<UpcomingTrack>),
     /// Suspend output; the device stream keeps running and emits silence while
     /// the position freezes.

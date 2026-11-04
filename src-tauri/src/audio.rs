@@ -372,6 +372,7 @@ fn track_source(path: String) -> TrackSource {
 
 /// One upcoming entry from the UI's prefetch window.
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpcomingInput {
     /// Stable UI queue-item id.
     key: String,

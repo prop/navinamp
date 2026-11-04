@@ -296,6 +296,38 @@ fn prefetch_window_plays_four_tracks_gaplessly() {
 }
 
 #[test]
+fn set_upcoming_while_idle_does_not_start_playback() {
+    // SetUpcoming declares what follows a current track. On a fully idle
+    // engine it may pre-open sources, but must not start playback by itself.
+    let (wav, _expected) = stereo_sine_fixture("idle-window", RATE, 0.25, 440.0);
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::SetUpcoming(vec![upcoming("idle", &wav)]))
+        .expect("set window");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(engine.status(), PlaybackStatus::Stopped);
+    assert!(
+        rx.try_recv().is_err(),
+        "SetUpcoming must not start playback on its own"
+    );
+
+    // The declared entry still serves as a keyed Play target.
+    engine
+        .send(Command::PlayKeyed {
+            key: "idle".into(),
+            source: TrackSource::File(wav),
+        })
+        .expect("play prefetched");
+    let started = start_and_get_playing(&engine, &sink, &rx);
+    assert!(matches!(started, Event::TrackStarted { .. }));
+    wait_event(&sink, &rx, |e| matches!(e, Event::EndOfQueue));
+    drive(&sink, || engine.status() == PlaybackStatus::Stopped);
+}
+
+#[test]
 fn prefetch_window_reorders_by_key() {
     // Re-declaring the window with different keys must reorder playback
     // without re-opening the entries that moved.

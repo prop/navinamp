@@ -147,6 +147,10 @@ pub(crate) struct Producer {
     /// A Play whose source is still opening; the current track keeps playing
     /// until the opener hands it over.
     pending_play: Option<PendingPlay>,
+    /// The window was created by `EnqueueNext` on an idle engine, which is
+    /// the one case where a ready window entry may start playback by itself.
+    /// `SetUpcoming` only declares what would follow a current track.
+    autoplay: bool,
     prefetcher: Prefetcher,
     /// Monotonic request generation, shared by all lookahead slots.
     prefetch_generation: u64,
@@ -182,6 +186,7 @@ impl Producer {
             current: None,
             window: Vec::new(),
             pending_play: None,
+            autoplay: false,
             prefetcher,
             prefetch_generation: 0,
             pushed: 0,
@@ -230,13 +235,11 @@ impl Producer {
     }
 
     fn idle_timeout(&self) -> Duration {
-        if self.current.is_some()
-            || !self.window.is_empty()
-            || self.pending_play.is_some()
-            || self.draining
-        {
+        if self.current.is_some() || self.autoplay || self.pending_play.is_some() || self.draining {
             Duration::from_millis(5)
         } else {
+            // An idle window (declared by `SetUpcoming`) may still be opening;
+            // a 100 ms poll is plenty and avoids busy-looping while it waits.
             Duration::from_millis(100)
         }
     }
@@ -270,15 +273,18 @@ impl Producer {
         }
 
         // Swap: the current track is done and the window front is pre-opened
-        // (gapless), or nothing is current at all (EnqueueNext while idle).
-        // A pending explicit Play always wins: never auto-advance past the
-        // track the user asked for while its open is still in flight.
+        // (gapless), or EnqueueNext asked an idle engine to start. A bare
+        // SetUpcoming may pre-open sources but must never start playback by
+        // itself. A pending explicit Play always wins: never auto-advance
+        // past the track the user asked for while its open is still in flight.
         let current_done =
             self.current.as_ref().is_some_and(|t| t.announced) && self.pending_out.is_empty();
-        if (self.current.is_none() || current_done)
+        let idle_start = self.current.is_none() && self.autoplay;
+        if (current_done || idle_start)
             && self.pending_play.is_none()
             && let Some(q) = self.take_ready_front()
         {
+            self.autoplay = false;
             self.current = None;
             self.draining = false;
             self.drain_started = None;
@@ -507,6 +513,7 @@ impl Producer {
     /// Play `source`, reusing the prefetched window entry whose key (or, for
     /// the legacy unkeyed command, source) matches.
     fn cmd_play(&mut self, source: TrackSource, key: Option<String>) {
+        self.autoplay = false;
         let matched = self.window.iter().position(|slot| match key.as_deref() {
             Some(k) => slot.key == k,
             None => slot.source == source,
@@ -617,6 +624,7 @@ impl Producer {
             }
         }
         self.pending_play = None;
+        self.autoplay = false;
         self.draining = false;
         self.drain_started = None;
         self.hard_reset();
@@ -657,6 +665,9 @@ impl Producer {
                         source,
                         state: SlotState::Ready(src),
                     });
+                    // EnqueueNext-on-idle is the one command that starts
+                    // playback without a current track.
+                    self.autoplay = true;
                     self.draining = false;
                     self.drain_started = None;
                 }
@@ -743,6 +754,7 @@ impl Producer {
         self.current = None;
         self.window.clear();
         self.pending_play = None;
+        self.autoplay = false;
         self.draining = false;
         self.drain_started = None;
         self.shared.set_metadata(None);
@@ -1015,6 +1027,7 @@ impl Producer {
         self.current = None;
         self.window.clear();
         self.pending_play = None;
+        self.autoplay = false;
         self.shared.set_metadata(None);
         self.shared.set_status(PlaybackStatus::Stopped);
         self.events.emit(Event::EndOfQueue);
