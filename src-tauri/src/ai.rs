@@ -409,7 +409,9 @@ pub async fn ai_search(
                     messages.push(ChatMessage::assistant(text));
                     messages.push(ChatMessage::user(
                         "The context budget is reached. Finish now with the final JSON; \
-                         use \"def\": null if this is a catalog-only answer.",
+                         build \"def\" from the catalog keywords gathered so far \
+                         (album/artist/title \"contains\", match \"any\"), or \
+                         \"def\": null if none.",
                     ));
                     continue;
                 }
@@ -436,8 +438,10 @@ pub async fn ai_search(
                              <discogs_data>\n{}\n</discogs_data>\n\n\
                              The UI already shows these releases to the user. Continue: \
                              request another page if the user asked for all and \
-                             pagination.pages > pagination.page; otherwise finish. \
-                             For a catalog-only answer set \"def\": null.",
+                             pagination.pages > pagination.page; otherwise finish with \
+                             a def matching the catalog's artist / release-title keywords \
+                             against album, artist and title (\"contains\", match \"any\"); \
+                             set \"def\": null only if no keyword exists.",
                             lookup.model_payload
                         )));
                         trim_tool_messages(&mut messages, REQUEST_CHARS_BUDGET);
@@ -457,7 +461,8 @@ pub async fn ai_search(
                 messages.push(ChatMessage::assistant(text));
                 messages.push(ChatMessage::user(
                     "Discogs lookups are exhausted. Finish now with the final JSON; \
-                     use \"def\": null if this is a catalog-only answer.",
+                     build \"def\" from the keywords gathered so far (album/artist/title \
+                     \"contains\", match \"any\"), or \"def\": null if none.",
                 ));
             }
             Ok(Reply::Final { def, explanation }) => match def {
@@ -766,8 +771,11 @@ while pagination.pages > pagination.page (up to 4 calls).
 
 Example: "all Nordcore vinyl records according to Discogs"
 {"action":"discogs_search","label":"Nordcore","format":"Vinyl","kind":"release","per_page":100}
-Then finish with "def": null and an explanation, since the library has no
-label tag. Do not collapse a catalog request into a broad keyword rule.
+Then finish with BOTH: the catalog panel (already shown to the user) and a
+def whose rules match the label keyword against album, artist and title with
+"contains" (match "any") — the library has no label tag, so keyword rules are
+how local tracks from that label are found. Say that in the explanation.
+Use "def": null only when no keyword can be extracted at all.
 
 2. Finish:
 {"action":"final","explanation":"one or two sentences","def": null}
@@ -780,10 +788,12 @@ or, when local tracks should also be returned:
   "sortDesc":false
 }}
 
-Use "def": null for catalog-only answers. When the user also wants local tracks,
-build def from the catalog's artist/release titles (album/artist contains), not
-just the label keyword. If the library cannot express a filter (e.g. it has no
-label tag), say so in the explanation.
+Catalog answers and local tracks are not exclusive: after a Discogs lookup,
+finish with a def built from the catalog's artist / release-title keywords as
+album/artist/title "contains" rules (match "any"), so the user gets their
+local tracks from that label alongside the catalog panel. Use "def": null
+only when no keyword can be extracted or the request is purely catalog
+information (e.g. "when was this label founded"); say so in the explanation.
 
 Rule schema:
 - Text fields: title, artist, albumArtist, album, genre, codec, path, source, server.
@@ -1396,6 +1406,18 @@ mod tests {
     fn prompt_reports_discogs_availability() {
         assert!(system_prompt(true).contains("Discogs catalog lookup is configured"));
         assert!(system_prompt(false).contains("NOT configured"));
+    }
+
+    #[test]
+    fn prompt_pairs_catalog_lookups_with_local_keyword_rules() {
+        let prompt = system_prompt(true);
+        // A label/discogs lookup must ALSO produce local keyword rules, not a
+        // catalog-only answer (regression: the prompt used to teach the model
+        // to finish with "def": null for label questions).
+        assert!(prompt.contains("match the label keyword against album, artist and title"));
+        assert!(prompt.contains("Catalog answers and local tracks are not exclusive"));
+        assert!(!prompt.contains("Do not collapse a catalog request"));
+        assert!(!prompt.contains("For a catalog-only answer set"));
     }
 
     #[test]
