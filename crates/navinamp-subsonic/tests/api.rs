@@ -274,7 +274,8 @@ async fn get_album_list2_pages_and_parses_song_counts() {
         ok_response(json!({
             "albumList2": { "album": [
                 { "id": "al-1", "name": "Debut", "artist": "Björk",
-                  "songCount": 11, "duration": 2900, "coverArt": "al-1" },
+                  "songCount": 11, "duration": 2900, "coverArt": "al-1",
+                  "year": 1993, "created": "2024-01-01T00:00:00Z" },
                 { "id": "al-2", "name": "Post", "artist": "Björk",
                   "songCount": 12, "duration": 3100 }
             ]}
@@ -288,7 +289,11 @@ async fn get_album_list2_pages_and_parses_song_counts() {
         .expect("album page parses");
     assert_eq!(albums.len(), 2);
     assert_eq!(albums[0].song_count, 11);
+    assert_eq!(albums[0].year, 1993);
+    assert_eq!(albums[0].created.as_deref(), Some("2024-01-01T00:00:00Z"));
     assert_eq!(albums[1].song_count, 12);
+    assert_eq!(albums[1].year, 0);
+    assert_eq!(albums[1].created, None);
 
     let requests = requests_to(&server, "getAlbumList2").await;
     let params = query(&requests[0]);
@@ -642,6 +647,8 @@ async fn search3_maps_hits() {
             song_count: 4,
             duration_secs: 1420,
             cover_art_id: Some("al-7".into()),
+            year: 0,
+            created: None,
         }]
     );
 }

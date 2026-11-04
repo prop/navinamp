@@ -40,8 +40,18 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // filled in by the next sync for databases created before it.
         conn.execute("ALTER TABLE tracks ADD COLUMN remote_path TEXT", [])?;
     }
+    if !has_column(conn, "tracks", "remote_album_id")? {
+        // Album id for navidrome rows; lets a quick rescan keep the tracks of
+        // albums whose fingerprint is unchanged without re-fetching them.
+        conn.execute("ALTER TABLE tracks ADD COLUMN remote_album_id TEXT", [])?;
+    }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_remote_album
+            ON tracks(server_id, remote_album_id)",
         [],
     )?;
     // FTS over title/artist/album/genre originally; simple search now also
@@ -232,6 +242,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     remote_id       TEXT,
     server_id       TEXT,                      -- navidrome profile id (remote rows)
     remote_path     TEXT,                      -- server-relative file path (navidrome rows)
+    remote_album_id TEXT,                      -- navidrome album id (quick-rescan grouping)
     art_id          TEXT                       -- local: content hash into art-cache; remote: coverArt id
 );
 
@@ -239,6 +250,25 @@ CREATE INDEX IF NOT EXISTS idx_tracks_album_key ON tracks(album_key);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist    ON tracks(artist);
 CREATE INDEX IF NOT EXISTS idx_tracks_genre     ON tracks(genre);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist_album ON tracks(artist, album);
+
+-- Album-index fingerprints for navidrome quick rescans. The album list is
+-- cheap (500 albums/request); a matching fingerprint means the album's
+-- tracks can be kept without a getAlbum request. `created` is an ISO string
+-- straight from the server (used as part of the fingerprint, not parsed).
+CREATE TABLE IF NOT EXISTS remote_albums (
+    server_id     TEXT NOT NULL,
+    album_id      TEXT NOT NULL,
+    song_count    INTEGER NOT NULL DEFAULT 0,
+    duration_secs INTEGER NOT NULL DEFAULT 0,
+    name          TEXT NOT NULL DEFAULT '',
+    artist        TEXT NOT NULL DEFAULT '',
+    year          INTEGER,
+    cover_art_id  TEXT,
+    created       TEXT,
+    PRIMARY KEY (server_id, album_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_albums_server ON remote_albums(server_id);
 
 -- Full-text index: see FTS_SCHEMA below (widened with album_artist/path by
 -- the init migration, so its definition lives outside this batch).

@@ -207,6 +207,8 @@ pub struct RemoteTrack {
     pub remote_id: String,
     /// Navidrome profile id; remote ids are only unique per server.
     pub server_id: String,
+    /// Subsonic album id; groups tracks for quick-rescan pruning/retention.
+    pub remote_album_id: String,
     /// Server-relative file path when the server reports one
     /// (e.g. `Artist/Album/01 song.flac`); the app's row identity stays
     /// `navidrome://<server_id>/<remote_id>`.
@@ -236,6 +238,25 @@ pub struct RemoteTrack {
     pub art_id: Option<String>,
     /// File size in bytes when the server reports it.
     pub size: Option<i64>,
+}
+
+/// One album-index fingerprint used by Navidrome quick rescans. It is built
+/// from the cheap `getAlbumList2` entries, so a quick rescan can compare it
+/// without fetching every album's songs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAlbum {
+    pub server_id: String,
+    pub album_id: String,
+    pub song_count: u32,
+    pub duration_secs: u64,
+    pub name: String,
+    pub artist: String,
+    pub year: Option<i64>,
+    pub cover_art_id: Option<String>,
+    /// The server's `created` timestamp (ISO string), used verbatim as part
+    /// of the fingerprint.
+    pub created: Option<String>,
 }
 
 /// Counters from one [`crate::Library::sync_remote`] transaction. The

@@ -51,6 +51,7 @@ fn remote(remote_id: &str, album: &str, art_id: Option<&str>) -> RemoteTrack {
     RemoteTrack {
         remote_id: remote_id.into(),
         server_id: "s1".into(),
+        remote_album_id: "al-1".into(),
         remote_path: None,
         title: remote_id.into(),
         artist: "Björk".into(),

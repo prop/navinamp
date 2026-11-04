@@ -1429,13 +1429,13 @@
     navPlaylists.reduce((n, server) => n + (server.playlists?.length ?? 0), 0),
   );
 
-  async function syncNow(serverId: string | null = null): Promise<void> {
+  async function syncNow(serverId: string | null = null, full = false): Promise<void> {
     if (navSyncing) return;
     navSyncError = null;
     navSyncing = true;
     navProgress = null;
     try {
-      await navidromeSync(serverId);
+      await navidromeSync(serverId, full);
       // Refresh arrives via the `navidrome-synced` event (which also covers
       // externally started syncs); the resolved report is summarized there.
     } catch (e) {
@@ -1459,7 +1459,7 @@
     await refreshNavProfiles();
     if (navStatus?.configured === true && navStatus.trackCount === 0 && !navSyncing) {
       onlog("navidrome: no remote tracks for the active server — starting a sync");
-      void syncNow(navStatus.profileId);
+      void syncNow(navStatus.profileId, false);
     }
   }
 
@@ -2504,9 +2504,13 @@
 
           <div class="card-actions">
             <button
-              onclick={() => void syncNow()}
+              onclick={() => void syncNow(null, false)}
               disabled={navSyncing || navStatus?.configured !== true}
-              title="sync every saved server">{navSyncing ? "SYNCING…" : "SYNC NOW"}</button>
+              title="quick rescan all saved servers: only fetch new or changed albums">QUICK RESCAN</button>
+            <button
+              onclick={() => void syncNow(null, true)}
+              disabled={navSyncing || navStatus?.configured !== true}
+              title="full rescan all saved servers: re-fetch every album">FULL RESCAN</button>
             <button onclick={() => (showSettings = true)} title="connection & streaming settings">
               SETTINGS…
             </button>
@@ -2553,9 +2557,24 @@
                   <button
                     class="cta"
                     disabled={navStatus?.configured !== true || navSyncing}
+                    title="quick rescan: only fetch new or changed albums"
                     onclick={() =>
-                      void syncNow(selection.kind === "remoteServer" ? selection.value : null)}>
-                    {navSyncError ? "RETRY SYNC" : "SYNC LIBRARY NOW"}
+                      void syncNow(
+                        selection.kind === "remoteServer" ? selection.value : null,
+                        false,
+                      )}>
+                    {navSyncError ? "RETRY QUICK" : "QUICK RESCAN"}
+                  </button>
+                  <button
+                    class="cta"
+                    disabled={navStatus?.configured !== true || navSyncing}
+                    title="full rescan: re-fetch every album"
+                    onclick={() =>
+                      void syncNow(
+                        selection.kind === "remoteServer" ? selection.value : null,
+                        true,
+                      )}>
+                    FULL RESCAN
                   </button>
                 {/if}
               </div>

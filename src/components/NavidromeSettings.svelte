@@ -349,7 +349,7 @@
           : (libraries.find((l) => l.id === libraryId)?.name ?? libraryId);
       onlog?.(`navidrome: library — ${name}`);
       // Re-sync just the active server after changing its library scope.
-      void navidromeSync(status.profileId).catch((e) => {
+      void navidromeSync(status.profileId, false).catch((e) => {
         const msg = e instanceof Error ? e.message : String(e);
         if (!/already|running/i.test(msg)) onlog?.(`navidrome: sync error: ${msg}`);
       });

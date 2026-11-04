@@ -8,13 +8,18 @@
 //! - removal is scoped to `source = 'navidrome'` **and one server** —
 //!   local rows and other servers are never touched;
 //! - the whole batch lands in one transaction: a sync is atomic.
+//!
+//! `remote_albums` stores per-album fingerprints (song count, duration and
+//! the cheap album-index metadata). A quick rescan compares the album index
+//! against them and fetches only changed albums; [`remote_track_ids_by_album`]
+//! supplies the untouched albums' ids for pruning.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::model::{RemoteSyncReport, RemoteTrack};
+use crate::model::{RemoteAlbum, RemoteSyncReport, RemoteTrack};
 use crate::scanner::album_key;
 
 /// `path` for a navidrome row: the server profile id plus the remote id.
@@ -87,6 +92,7 @@ pub(super) fn upsert_remote(
                 t.remote_id,
                 t.server_id,
                 t.remote_path,
+                t.remote_album_id,
                 t.art_id,
             ])?;
 
@@ -135,12 +141,141 @@ pub(super) fn prune_remote(
     Ok(removed)
 }
 
+/// Load one server's album fingerprints, keyed by album id.
+pub(super) fn remote_albums(
+    conn: &Connection,
+    server_id: &str,
+) -> rusqlite::Result<HashMap<String, RemoteAlbum>> {
+    let mut stmt = conn.prepare(
+        "SELECT album_id, song_count, duration_secs, name, artist, year,
+                cover_art_id, created
+           FROM remote_albums WHERE server_id = ?1",
+    )?;
+    let rows = stmt.query_map([server_id], |row| {
+        Ok(RemoteAlbum {
+            server_id: server_id.to_owned(),
+            album_id: row.get(0)?,
+            song_count: row.get::<_, i64>(1)?.max(0) as u32,
+            duration_secs: row.get::<_, i64>(2)?.max(0) as u64,
+            name: row.get(3)?,
+            artist: row.get(4)?,
+            year: row.get(5)?,
+            cover_art_id: row.get(6)?,
+            created: row.get(7)?,
+        })
+    })?;
+    let mut albums = HashMap::new();
+    for album in rows {
+        let album = album?;
+        albums.insert(album.album_id.clone(), album);
+    }
+    Ok(albums)
+}
+
+/// Remote track ids grouped by album id for one server. Quick rescans use
+/// this to mark an unchanged album's tracks as seen without fetching it.
+pub(super) fn remote_track_ids_by_album(
+    conn: &Connection,
+    server_id: &str,
+) -> rusqlite::Result<HashMap<String, Vec<String>>> {
+    let mut stmt = conn.prepare(
+        "SELECT remote_album_id, remote_id FROM tracks
+          WHERE source = 'navidrome' AND server_id = ?1
+            AND remote_album_id IS NOT NULL AND remote_id IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([server_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut by_album: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let (album_id, remote_id) = row?;
+        by_album.entry(album_id).or_default().push(remote_id);
+    }
+    Ok(by_album)
+}
+
+/// Insert or refresh album fingerprints in one transaction.
+pub(super) fn upsert_remote_albums(
+    conn: &Connection,
+    albums: &[RemoteAlbum],
+) -> rusqlite::Result<()> {
+    if albums.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut upsert = tx.prepare(
+            "INSERT INTO remote_albums (
+                server_id, album_id, song_count, duration_secs, name, artist,
+                year, cover_art_id, created
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(server_id, album_id) DO UPDATE SET
+                song_count    = excluded.song_count,
+                duration_secs = excluded.duration_secs,
+                name          = excluded.name,
+                artist        = excluded.artist,
+                year          = excluded.year,
+                cover_art_id  = excluded.cover_art_id,
+                created       = excluded.created",
+        )?;
+        for album in albums {
+            upsert.execute(rusqlite::params![
+                album.server_id,
+                album.album_id,
+                i64::from(album.song_count),
+                i64::try_from(album.duration_secs).unwrap_or(i64::MAX),
+                album.name,
+                album.artist,
+                album.year,
+                album.cover_art_id,
+                album.created,
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Delete one server's album fingerprints whose album id is absent from
+/// `seen`. Only called after a complete, error-free album-index walk.
+pub(super) fn prune_remote_albums(
+    conn: &Connection,
+    server_id: &str,
+    seen: &HashSet<String>,
+) -> rusqlite::Result<u64> {
+    let tx = conn.unchecked_transaction()?;
+    let mut removed = 0u64;
+    {
+        let mut stmt = tx.prepare("SELECT album_id FROM remote_albums WHERE server_id = ?1")?;
+        let candidates: Vec<String> = stmt
+            .query_map([server_id], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        let mut delete =
+            tx.prepare("DELETE FROM remote_albums WHERE server_id = ?1 AND album_id = ?2")?;
+        for album_id in candidates {
+            if !seen.contains(&album_id) {
+                delete.execute(rusqlite::params![server_id, album_id])?;
+                removed += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
 /// Deletes every remote row belonging to one server (profile removal).
 pub(super) fn delete_server(conn: &Connection, server_id: &str) -> rusqlite::Result<u64> {
-    let n = conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM remote_albums WHERE server_id = ?1",
+        [server_id],
+    )?;
+    let n = tx.execute(
         "DELETE FROM tracks WHERE source = 'navidrome' AND server_id = ?1",
         [server_id],
     )?;
+    tx.commit()?;
     Ok(n as u64)
 }
 
@@ -193,9 +328,10 @@ const REMOTE_UPSERT_SQL: &str = "\
 INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
-    channels, codec, rating, starred, date_added, source, remote_id, server_id, remote_path, art_id
+    channels, codec, rating, starred, date_added, source, remote_id, server_id, remote_path,
+    remote_album_id, art_id
 ) VALUES (
-    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22, ?23
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22, ?23, ?24
 )
 ON CONFLICT(path) DO UPDATE SET
     size         = excluded.size,
@@ -218,4 +354,5 @@ ON CONFLICT(path) DO UPDATE SET
     remote_id       = excluded.remote_id,
     server_id       = excluded.server_id,
     remote_path     = excluded.remote_path,
+    remote_album_id = excluded.remote_album_id,
     art_id          = excluded.art_id";

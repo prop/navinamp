@@ -66,8 +66,8 @@ mod text;
 
 pub use art::sniff_ext;
 pub use model::{
-    Album, LibraryStats, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress, ScanReport,
-    ServerStats, SourceStats, Track, TrackFilter,
+    Album, LibraryStats, RemoteAlbum, RemoteSyncReport, RemoteTrack, ScanFileError, ScanProgress,
+    ScanReport, ServerStats, SourceStats, Track, TrackFilter,
 };
 pub use remote::{remote_path, remote_ref_from_path};
 pub use scanner::{AUDIO_EXTENSIONS, album_key};
@@ -200,6 +200,37 @@ impl Library {
         seen: &std::collections::HashSet<String>,
     ) -> Result<u64> {
         Ok(remote::prune_remote(&self.conn, server_id, seen)?)
+    }
+
+    /// Album fingerprints stored by the last successful sync, keyed by album
+    /// id. A quick rescan compares these against the cheap album list.
+    pub fn remote_albums(
+        &self,
+        server_id: &str,
+    ) -> Result<std::collections::HashMap<String, RemoteAlbum>> {
+        Ok(remote::remote_albums(&self.conn, server_id)?)
+    }
+
+    /// Remote track ids grouped by album id for one server.
+    pub fn remote_track_ids_by_album(
+        &self,
+        server_id: &str,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        Ok(remote::remote_track_ids_by_album(&self.conn, server_id)?)
+    }
+
+    /// Insert or refresh album fingerprints (used after fetching an album).
+    pub fn upsert_remote_albums(&self, albums: &[RemoteAlbum]) -> Result<()> {
+        Ok(remote::upsert_remote_albums(&self.conn, albums)?)
+    }
+
+    /// Remove album fingerprints not present in the completed album index.
+    pub fn prune_remote_albums(
+        &self,
+        server_id: &str,
+        seen: &std::collections::HashSet<String>,
+    ) -> Result<u64> {
+        Ok(remote::prune_remote_albums(&self.conn, server_id, seen)?)
     }
 
     /// Delete every remote row synced from one server (profile removal).
