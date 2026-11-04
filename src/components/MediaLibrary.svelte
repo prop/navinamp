@@ -1834,8 +1834,13 @@
       durationSecs: t.durationSecs,
       // Remote rows keep their navidrome:// path for display, but playback
       // resolves the stream URL through serverId + remoteId (queue.feedPath).
+      // remotePath rides along for Copy path (never the row identity).
       ...(t.source === REMOTE_SOURCE && t.remoteId != null
-        ? { remoteId: t.remoteId, ...(t.serverId != null ? { serverId: t.serverId } : {}) }
+        ? {
+            remoteId: t.remoteId,
+            ...(t.serverId != null ? { serverId: t.serverId } : {}),
+            ...(t.remotePath != null ? { remotePath: t.remotePath } : {}),
+          }
         : {}),
     };
   }

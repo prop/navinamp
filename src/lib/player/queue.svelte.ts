@@ -79,6 +79,13 @@ export interface QueueItem {
   remoteId?: string;
   /** Navidrome profile id paired with `remoteId` (aggregated servers). */
   serverId?: string;
+  /**
+   * Server-relative file path when the enqueuing library row had one —
+   * carried so UI actions (Copy path) never depend on an async library
+   * lookup. Undefined for local files and remote rows synced before the
+   * column existed.
+   */
+  remotePath?: string;
 }
 
 /** Fully-tagged track info; the M4 library browser will feed this directly. */

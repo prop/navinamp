@@ -402,10 +402,11 @@
     } else if (id === "remove") {
       onremove(m.index);
     } else if (id === "copy") {
-      // Remote rows: copy the server's real file path when the library row
-      // has one; the navidrome:// identity is the fallback (rows synced
-      // before the column existed get their path on the next sync).
-      const copyPath = trackCache.get(item.path)?.remotePath ?? item.path;
+      // Remote rows carry the server's real file path from enqueue time
+      // (toMeta); the navidrome:// identity is the fallback for items
+      // enqueued before the row had a path. Synchronous on purpose — a
+      // cache lookup here would race the menu's async library fetch.
+      const copyPath = item.remotePath ?? item.path;
       void navigator.clipboard.writeText(copyPath).catch((e) => {
         console.warn(`[navinamp] copy path failed: ${e}`);
       });
