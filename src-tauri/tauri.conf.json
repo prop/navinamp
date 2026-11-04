@@ -17,6 +17,7 @@
         "height": 280,
         "decorations": false,
         "resizable": false,
+        "acceptFirstMouse": true,
         "visible": false
       }
     ],
