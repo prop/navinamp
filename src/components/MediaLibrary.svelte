@@ -2488,7 +2488,11 @@
                   </div>
                 </div>
                 <span class="plabel">
-                  {navProgress.scanned.toLocaleString()} / {navProgress.total.toLocaleString()}
+                  {navProgress.scanned.toLocaleString()} / {navProgress.total.toLocaleString()} tracks
+                </span>
+              {:else if navProgress != null}
+                <span class="plabel">
+                  {navProgress.scanned.toLocaleString()} tracks
                 </span>
               {:else}
                 <span class="plabel">syncing…</span>
@@ -2535,7 +2539,7 @@
                   <p>
                     syncing the Navidrome library…
                     {navProgress
-                      ? `${navProgress.label ? `${navProgress.label} · ` : ""}${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
+                      ? `${navProgress.label ? `${navProgress.label} · ` : ""}${navProgress.scanned.toLocaleString()}${navProgress.total > 0 ? ` / ${navProgress.total.toLocaleString()}` : ""} tracks`
                       : ""}
                   </p>
                 {:else}
@@ -2634,7 +2638,7 @@
       <span class="syncnote">
         navidrome syncing{navProgress?.label ? ` ${navProgress.label}` : ""}…
         {navProgress
-          ? `${navProgress.scanned.toLocaleString()} / ${navProgress.total.toLocaleString()}`
+          ? `${navProgress.scanned.toLocaleString()}${navProgress.total > 0 ? ` / ${navProgress.total.toLocaleString()}` : ""} tracks`
           : ""}
       </span>
     {/if}

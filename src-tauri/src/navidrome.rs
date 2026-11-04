@@ -16,8 +16,11 @@
 //!   database connection so UI queries stay responsive (WAL).
 //!
 //! Events (frozen IPC contract):
-//! - `navidrome-progress` — `{ scanned, total }` in **album** units,
-//!   throttled to every 32 albums (plus the first and last);
+//! - `navidrome-progress` — `{ scanned, total }` in **track** units,
+//!   throttled to every 32 albums (plus the first and last). `total` is the
+//!   sum of the server's album `songCount`s from a lightweight album-list
+//!   pass; it is 0 when that pass fails, and the UI then shows the scanned
+//!   track count without a denominator;
 //! - `navidrome-synced` — the final [`SyncReport`] (or `{ error }`).
 //!
 //! Credential hygiene: Subsonic stream/API URLs embed the auth token;
@@ -42,8 +45,12 @@ use crate::library::{LibraryState, db_file, with_library};
 const PROGRESS_EVENT: &str = "navidrome-progress";
 /// `navidrome-synced` event name.
 const SYNCED_EVENT: &str = "navidrome-synced";
-/// Emit progress at most every N albums (plus the very last one).
+/// Emit progress at most every N albums (plus the very last one). Values in
+/// the event are tracks, but the cadence stays album-based so a huge library
+/// does not emit an event per song.
 const PROGRESS_EVERY: u64 = 32;
+/// Page size for the pre-walk `getAlbumList2` pass that sums `songCount`.
+const TRACK_COUNT_PAGE: u32 = 500;
 /// Flush decoded rows to the library at least every N tracks (so the UI can
 /// render partial results during a long sync) or on every progress tick.
 const SYNC_BATCH_TRACKS: usize = 512;
@@ -1183,12 +1190,12 @@ struct SyncTarget {
     client: Arc<SubsonicClient>,
 }
 
-/// Full-library sync: `getArtists` → albums → `getAlbum` per album, per
-/// server. With no `server_id` every saved profile is walked sequentially;
-/// with one, just that profile. Runs on a dedicated thread; one sync at a
-/// time (a second invoke fails with an error string). Progress in
-/// `navidrome-progress` events (album units, tagged with the server), final
-/// `navidrome-synced`.
+/// Full-library sync: `getAlbumList2` count pass + `getArtists` → albums →
+/// `getAlbum` per album, per server. With no `server_id` every saved profile
+/// is walked sequentially; with one, just that profile. Runs on a dedicated
+/// thread; one sync at a time (a second invoke fails with an error string).
+/// Progress in `navidrome-progress` events (track units, tagged with the
+/// server), final `navidrome-synced`.
 #[tauri::command]
 pub async fn navidrome_sync(
     app: AppHandle,
@@ -1393,12 +1400,27 @@ fn run_sync(
             .await
             .map_err(|e| scrub_urls(&e.to_string()))?;
         report.artists = artists.len() as u64;
-        let total: u64 = artists.iter().map(|a| u64::from(a.album_count)).sum();
-        emit_progress(app, 0, total, server_id, label);
+        // Give the UI immediate feedback while the count pass runs; this
+        // pass is serial and can take several seconds on a slow link.
+        emit_progress(app, 0, 0, server_id, label);
+        // The walk is album-based, but progress is shown in tracks. Sum the
+        // album `songCount`s once so the denominator is known up front. A
+        // failure here is non-fatal: total stays 0 and the UI shows the
+        // scanned count without a bar.
+        let (total_tracks, total_albums) = count_library_tracks(client, library_id)
+            .await
+            .unwrap_or((0, 0));
+        emit_progress(app, 0, total_tracks, server_id, label);
 
         let mut tracks: Vec<RemoteTrack> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        let mut scanned: u64 = 0;
+        let mut visited_albums: HashSet<String> = HashSet::new();
+        let mut scanned_albums: u64 = 0;
+        let mut scanned_tracks: u64 = 0;
+        // An artist-level failure means we never learn that artist's album
+        // ids, so the pre-pass total can no longer be reached. Drop the
+        // denominator from that point on instead of pinning a bar below 100%.
+        let mut progress_reliable = true;
         for artist in &artists {
             // Per-artist failure ( vanished artist, network hiccup) is
             // reported and skipped: a sync never dies from one bad node.
@@ -1410,12 +1432,21 @@ fn run_sync(
                         artist.name,
                         scrub_urls(&e.to_string())
                     ));
-                    scanned += u64::from(artist.album_count);
+                    progress_reliable = false;
+                    emit_progress(app, scanned_tracks, 0, server_id, label);
+                    scanned_albums += u64::from(artist.album_count);
                     continue;
                 }
             };
-            report.albums += albums.len() as u64;
             for album in albums {
+                // `getArtist` returns an album for every artist it appears
+                // on, so shared/compilation albums can be visited more than
+                // once. Dedup exactly like the count pass: one visit, one
+                // request, one contribution to the numerator.
+                if !visited_albums.insert(album.id.clone()) {
+                    continue;
+                }
+                report.albums += 1;
                 match client.get_album(&album.id).await {
                     Ok(detail) => {
                         for song in &detail.songs {
@@ -1424,19 +1455,38 @@ fn run_sync(
                             }
                             tracks.push(map_song(&detail, song, server_id));
                         }
+                        // Match the count pass: when a denominator exists,
+                        // use the server's `songCount` on both sides so a
+                        // stale/odd per-album count cannot hit 100% early.
+                        scanned_tracks += if total_tracks > 0 {
+                            u64::from(album.song_count)
+                        } else {
+                            detail.songs.len() as u64
+                        };
                     }
-                    Err(e) => report.errors.push(format!(
-                        "album `{}`: {}",
-                        album.name,
-                        scrub_urls(&e.to_string())
-                    )),
+                    Err(e) => {
+                        report.errors.push(format!(
+                            "album `{}`: {}",
+                            album.name,
+                            scrub_urls(&e.to_string())
+                        ));
+                        scanned_tracks += u64::from(album.song_count);
+                    }
                 }
-                scanned += 1;
-                if scanned.is_multiple_of(PROGRESS_EVERY) || scanned == total {
+                scanned_albums += 1;
+                if scanned_albums.is_multiple_of(PROGRESS_EVERY)
+                    || (total_albums > 0 && scanned_albums >= total_albums)
+                {
                     // Persist the rows decoded so far *before* announcing
                     // progress: the library pane refreshes on these events.
                     flush_remote_batch(library, &mut tracks, &mut report)?;
-                    emit_progress(app, scanned.min(total), total, server_id, label);
+                    let total = if progress_reliable { total_tracks } else { 0 };
+                    let shown = if total == 0 {
+                        scanned_tracks
+                    } else {
+                        scanned_tracks.min(total)
+                    };
+                    emit_progress(app, shown, total, server_id, label);
                 } else if tracks.len() >= SYNC_BATCH_TRACKS {
                     flush_remote_batch(library, &mut tracks, &mut report)?;
                 }
@@ -1444,6 +1494,15 @@ fn run_sync(
         }
 
         flush_remote_batch(library, &mut tracks, &mut report)?;
+        // Ensure the last tick lands even when the pre-pass album count and
+        // the walk's unique-album count disagree slightly.
+        let total = if progress_reliable { total_tracks } else { 0 };
+        let shown = if total == 0 {
+            scanned_tracks
+        } else {
+            scanned_tracks.min(total)
+        };
+        emit_progress(app, shown, total, server_id, label);
         // Prune only after a complete walk: a failed sync must never delete
         // rows it simply did not reach.
         report.tracks_removed = library
@@ -1452,6 +1511,57 @@ fn run_sync(
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
     })
+}
+
+/// Sum the album-list `songCount`s for the selected library. This is a
+/// one-time pre-pass, so the sync progress can be expressed in tracks
+/// without changing the album-based walk (which keeps per-album failure
+/// isolation and the exact artist count).
+///
+/// Returns `(tracks, albums)` for a complete walk. `None` means the count is
+/// not trustworthy (network error, or a server that ignored `offset`); the
+/// UI then shows scanned tracks without a denominator.
+async fn count_library_tracks(
+    client: &SubsonicClient,
+    library_id: Option<&str>,
+) -> Option<(u64, u64)> {
+    let mut total_tracks = 0u64;
+    let mut total_albums = 0u64;
+    let mut offset = 0u32;
+    let mut seen_albums: HashSet<String> = HashSet::new();
+    loop {
+        let albums = match client
+            .get_album_list2(offset, TRACK_COUNT_PAGE, library_id)
+            .await
+        {
+            Ok(albums) => albums,
+            Err(e) => {
+                eprintln!(
+                    "navinamp navidrome: track-count pass failed: {}",
+                    scrub_urls(&e.to_string())
+                );
+                return None;
+            }
+        };
+        if albums.is_empty() {
+            return Some((total_tracks, total_albums));
+        }
+        let mut fresh = 0usize;
+        for album in &albums {
+            if seen_albums.insert(album.id.clone()) {
+                fresh += 1;
+                total_albums += 1;
+                total_tracks += u64::from(album.song_count);
+            }
+        }
+        // A conforming server may return fewer than `size` albums on any
+        // page, so only an empty page ends the list. `fresh == 0` is the
+        // defensive stop for a server that ignored `offset` entirely.
+        if fresh == 0 {
+            return None;
+        }
+        offset = offset.saturating_add(albums.len() as u32);
+    }
 }
 
 /// Upsert one decoded batch so the library pane can render partial results

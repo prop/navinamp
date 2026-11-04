@@ -308,6 +308,18 @@ pub(crate) struct GetAlbumResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct GetAlbumList2Response {
+    #[serde(default, rename = "albumList2")]
+    pub album_list2: AlbumList2,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AlbumList2 {
+    #[serde(default)]
+    pub album: Vec<AlbumSummary>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct Search3Response {
     #[serde(rename = "searchResult3", default)]
     pub result: SearchResult3,
