@@ -1136,6 +1136,9 @@ impl WindowManager {
                     .title(title)
                     .decorations(false)
                     .resizable(resizable)
+                    // One-push activation: a click on an unfocused window also
+                    // reaches the control (classic Winamp behavior on macOS).
+                    .accept_first_mouse(true)
                     .skip_taskbar(false)
                     .always_on_top(false)
                     .inner_size(rect.w as f64, rect.h as f64)
