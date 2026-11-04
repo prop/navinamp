@@ -1503,18 +1503,22 @@ async fn sync_album_index(
         app,
         client,
         library,
-        library_id,
+        library_id: _,
         server_id,
         label,
         force_full,
     } = job;
     let total_albums = albums.len() as u64;
     let total_tracks: u64 = albums.iter().map(|a| u64::from(a.song_count)).sum();
-    report.artists = client
-        .get_artists(library_id)
-        .await
-        .map(|artists| artists.len() as u64)
-        .unwrap_or(0);
+    // The album index already carries every album artist, so a separate
+    // getArtists request would cost a large payload just for a report
+    // counter. Distinct album artists is the cheap equivalent.
+    let artist_ids: HashSet<&str> = albums
+        .iter()
+        .map(|album| album.artist_id.as_str())
+        .filter(|id| !id.is_empty())
+        .collect();
+    report.artists = artist_ids.len() as u64;
     emit_progress(app, 0, total_tracks, server_id, label);
 
     // Fingerprints + existing track ids are only useful for quick rescans.
@@ -1570,7 +1574,10 @@ async fn sync_album_index(
         scanned_albums += 1;
         match fetched {
             // Fingerprint matched: retain the album's existing rows without
-            // spending a getAlbum request.
+            // spending a getAlbum request. Deliberately do not add it to
+            // `album_updates`: the stored fingerprint is first-seen, and
+            // rewriting it on every skip would turn a no-op into a write per
+            // album.
             None => {
                 seen.extend(known);
                 scanned_tracks += u64::from(album.song_count);
@@ -1729,6 +1736,10 @@ fn album_matches(stored: Option<&RemoteAlbum>, album: &AlbumSummary, known: &[St
         return false;
     };
     let year = (album.year > 0).then_some(i64::from(album.year));
+    // Most servers (Navidrome included) populate `created` in getAlbumList2;
+    // if one omits it, both sides are None and the term is a harmless no-op.
+    // A server that leaves songCount at 0 can never match this predicate, so
+    // quick rescan safely degrades to fetching every album.
     stored.song_count == album.song_count
         && stored.duration_secs == album.duration_secs
         && stored.name == album.name
