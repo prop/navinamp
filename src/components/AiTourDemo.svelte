@@ -78,6 +78,10 @@
       class="txt"
       type="text"
       bind:value={prompt}
+      spellcheck="false"
+      autocorrect="off"
+      autocapitalize="off"
+      autocomplete="off"
       onkeydown={(e) => {
         if (e.key === "Enter") void runDemo();
       }} />

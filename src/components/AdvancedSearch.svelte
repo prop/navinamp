@@ -168,6 +168,10 @@
               type="text"
               bind:value={rule.valueRaw}
               placeholder="value"
+              spellcheck="false"
+              autocorrect="off"
+              autocapitalize="off"
+              autocomplete="off"
               aria-label="value" />
           {:else if inputKindOf(rule.field, rule.op) === "number"}
             <input

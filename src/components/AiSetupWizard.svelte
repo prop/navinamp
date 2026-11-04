@@ -189,7 +189,9 @@
         bind:value={config.apiKey}
         placeholder="paste the provider key"
         autocomplete="off"
-        spellcheck="false" />
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off" />
       <div class="hint">{keyHint()}</div>
     </div>
     <div class="field">
@@ -198,7 +200,9 @@
         class="txt"
         type="text"
         bind:value={config.baseUrl}
-        spellcheck="false" />
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off" />
     </div>
     <div class="field">
       <div class="label">model</div>
@@ -213,14 +217,27 @@
             <option value="__custom">custom…</option>
           </select>
         {:else}
-          <input class="txt" type="text" bind:value={config.model} spellcheck="false" />
+          <input
+            class="txt"
+            type="text"
+            bind:value={config.model}
+            spellcheck="false"
+            autocorrect="off"
+            autocapitalize="off" />
         {/if}
         <button class="mini" onclick={() => void fetchModels()} disabled={busy}>
           {busy ? "…" : "REFRESH"}
         </button>
       </div>
       {#if modelOptions.length > 0 && useCustomModel}
-        <input class="txt" type="text" bind:value={config.model} placeholder="model id" spellcheck="false" />
+        <input
+          class="txt"
+          type="text"
+          bind:value={config.model}
+          placeholder="model id"
+          spellcheck="false"
+          autocorrect="off"
+          autocapitalize="off" />
       {/if}
       <div class="hint">REFRESH asks the provider for its model list.</div>
     </div>
@@ -233,7 +250,9 @@
         bind:value={config.discogsToken}
         placeholder="required for catalog lookups"
         autocomplete="off"
-        spellcheck="false" />
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off" />
       <div class="hint">
         Required to list labels, discographies and pressings. Create a free token at
         discogs.com/settings/developers. Leave it blank for local-only search.
