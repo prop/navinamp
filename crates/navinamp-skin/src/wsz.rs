@@ -1040,6 +1040,19 @@ fn eq_window(out: &mut Builder) {
             params,
         }));
     }
+    // The close glyph is painted into the titlebar strip at the far right;
+    // overlay a pixel-identical 9×9 crop so it is actually clickable. There
+    // is no separate pressed-state art in eqmain.bmp, so reuse the crop.
+    if let Some(close) = out.bitmap("eq.close", "eqmain.bmp", 264, 137, 9, 9) {
+        objects.push(button(
+            "eq.close",
+            "CLOSE",
+            close.clone(),
+            Some(close),
+            place(264, 3, 9, 9),
+            "Close",
+        ));
+    }
 
     // ON / AUTO / PRESETS. (The brief's "AUTO at x=48" is off by nine: the
     // 33px button starts at x=39, right after the 25px ON button at x=14.)

@@ -260,8 +260,15 @@ fn full_classic_skin_synthesizes_three_containers() {
     // preamp + 10 band sliders
     assert_eq!(of_kind(eq, "layer").len(), 3);
     assert_eq!(of_kind(eq, "togglebutton").len(), 2);
-    assert_eq!(of_kind(eq, "button").len(), 1);
+    assert_eq!(of_kind(eq, "button").len(), 2);
     assert_eq!(of_kind(eq, "slider").len(), 11);
+    match with_action(eq, "CLOSE").expect("EQ close button") {
+        GuiObject::Button(close) => {
+            assert_eq!(close.rect, rect(264, 3, 9, 9));
+            assert_eq!(close.image.as_deref(), Some("wsz.eq.close"));
+        }
+        other => panic!("expected EQ close button, got {other:?}"),
+    }
 
     // playlist: pledit.bmp tiles
     assert_eq!(of_kind(playlist, "layer").len(), 9);
