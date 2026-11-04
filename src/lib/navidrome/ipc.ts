@@ -99,8 +99,15 @@ export function navidromeConnect(
   user: string,
   password: string,
   label: string | null = null,
+  insecureTls = false,
 ): Promise<NavidromeStatus> {
-  return invoke<NavidromeStatus>("navidrome_connect", { url, user, password, label });
+  return invoke<NavidromeStatus>("navidrome_connect", {
+    url,
+    user,
+    password,
+    label,
+    insecureTls,
+  });
 }
 
 /** Forget the stored credentials; returns the (now unconfigured) status. */

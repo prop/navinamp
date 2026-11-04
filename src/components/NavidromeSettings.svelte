@@ -56,6 +56,8 @@
   let url = $state("");
   let user = $state("");
   let password = $state("");
+  /** Accept self-signed / untrusted TLS certificates for this server. */
+  let insecureTls = $state(false);
   /** Optional display name for the server being added/updated. */
   let nameInput = $state("");
   let formError = $state<string | null>(null);
@@ -120,6 +122,7 @@
     url = "";
     user = "";
     password = "";
+    insecureTls = false;
     nameInput = "";
     formError = null;
   }
@@ -174,6 +177,7 @@
         user.trim(),
         password,
         nameInput.trim() === "" ? null : nameInput.trim(),
+        insecureTls,
       );
       resetForm(); // the next add starts clean, never from the last server
       if (status.profileId !== previousProfile) hydratePrefs(status);
@@ -452,6 +456,10 @@
               placeholder={formMatch ? "(re-enter to reconnect)" : ""}
               autocomplete="new-password"
               bind:value={password} />
+          </label>
+          <label class="check">
+            <input type="checkbox" bind:checked={insecureTls} />
+            allow self-signed certificates
           </label>
           <div class="btnrow">
             <button class="primary" onclick={connect} disabled={connecting}>{formCta}</button>
@@ -762,6 +770,21 @@
     letter-spacing: 0.08em;
     color: #808080;
     text-transform: uppercase;
+  }
+
+  /* TLS opt-in row: checkbox + label inline (not uppercase — it reads as a
+     sentence, matching the dim hints). */
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: #808080;
+    cursor: pointer;
+  }
+
+  .check input {
+    accent-color: #3ccb4e;
   }
 
   .txt,

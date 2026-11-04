@@ -81,6 +81,9 @@ struct StoredProfile {
     user: String,
     /// Plaintext v1; see the module docs.
     password: String,
+    /// Accept self-signed / otherwise untrusted TLS certificates for this
+    /// server (opt-in for self-hosted setups; default verifies normally).
+    insecure_tls: bool,
     /// `original` | `mp3` | `opus`.
     format: String,
     bitrate_kbps: Option<u32>,
@@ -467,7 +470,7 @@ async fn ensure_client_for(
     state: &NavidromeState,
     server_id: &str,
 ) -> Result<Arc<SubsonicClient>, String> {
-    let (url, user, password) = {
+    let (url, user, password, insecure_tls) = {
         let guard = state.inner.lock().unwrap();
         if let Some(client) = guard.clients.get(server_id) {
             return Ok(Arc::clone(client));
@@ -480,13 +483,14 @@ async fn ensure_client_for(
             profile.url.clone(),
             profile.user.clone(),
             profile.password.clone(),
+            profile.insecure_tls,
         )
     };
 
     let client = Arc::new(
-        SubsonicClient::connect(&url, &user, &password)
+        SubsonicClient::connect(&url, &user, &password, insecure_tls)
             .await
-            .map_err(|e| scrub_urls(&e.to_string()))?,
+            .map_err(|e| scrub_connect_error(&e))?,
     );
 
     let mut guard = state.inner.lock().unwrap();
@@ -599,6 +603,7 @@ pub async fn navidrome_connect(
     user: String,
     password: String,
     label: Option<String>,
+    insecure_tls: bool,
 ) -> Result<Status, String> {
     let url = url.trim().trim_end_matches('/').to_owned();
     let user = user.trim().to_owned();
@@ -608,9 +613,9 @@ pub async fn navidrome_connect(
     ensure_not_syncing(&state)?;
 
     // Ping first: nothing is persisted for a server that rejects us.
-    let client = SubsonicClient::connect(&url, &user, &password)
+    let client = SubsonicClient::connect(&url, &user, &password, insecure_tls)
         .await
-        .map_err(|e| scrub_urls(&e.to_string()))?;
+        .map_err(|e| scrub_connect_error(&e))?;
     // A sync may have started while the ping ran; re-check before mutating.
     ensure_not_syncing(&state)?;
 
@@ -625,6 +630,7 @@ pub async fn navidrome_connect(
         {
             Some(profile) => {
                 profile.password = password;
+                profile.insecure_tls = insecure_tls;
                 if let Some(label) = label.as_deref() {
                     profile.label = normalized_label(label);
                 }
@@ -640,6 +646,7 @@ pub async fn navidrome_connect(
                     url: url.clone(),
                     user: user.clone(),
                     password,
+                    insecure_tls,
                     format: "original".into(),
                     bitrate_kbps: None,
                     synced_at: None,
@@ -1853,6 +1860,24 @@ fn emit_progress(app: &AppHandle, scanned: u64, total: u64, server: &str, label:
     );
 }
 
+/// A connect/transport error with its cause chain appended: `reqwest` 0.13
+/// redacts the URL in transport errors and flattens TLS failures into a bare
+/// "error sending request", so an untrusted certificate would otherwise be
+/// invisible. URL runs are blanked as usual.
+fn scrub_connect_error(e: &navinamp_subsonic::SubsonicError) -> String {
+    let mut msg = scrub_urls(&e.to_string());
+    let mut source = std::error::Error::source(e);
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !msg.contains(&text) {
+            msg.push_str(": ");
+            msg.push_str(&text);
+        }
+        source = cause.source();
+    }
+    msg
+}
+
 /// Blanks `http(s)://…` runs in `msg`: reqwest/Subsonic errors embed whole
 /// request URLs, and ours carry auth tokens. Cheap scanner, no regex.
 pub(crate) fn scrub_urls(msg: &str) -> String {
@@ -1937,6 +1962,7 @@ mod tests {
                     url: "https://nd.example".into(),
                     user: "me".into(),
                     password: "p".into(),
+                    insecure_tls: false,
                     format: "opus".into(),
                     bitrate_kbps: Some(128),
                     synced_at: Some(1),
