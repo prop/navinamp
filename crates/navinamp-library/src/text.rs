@@ -106,9 +106,12 @@ fn useful(c: char) -> bool {
 /// do not mix scripts *through* a word:
 ///
 /// - a word may be pure Latin/ASCII or pure Cyrillic;
-/// - a short (≤2 letters) contiguous Latin run glued to one edge of an
-///   otherwise-Cyrillic word is tolerated — pirate tags often have shapes
-///   like `Nуггнойй` or `xто`, and rejecting them left whole rows garbled;
+/// - a short (≤2 letters) contiguous Latin *prefix* glued to an otherwise
+///   Cyrillic word is tolerated — pirate tags often have shapes like
+///   `Nуггнойй` or `xто` (a Latin letter typed before switching keyboard
+///   layout), and rejecting them left whole rows garbled. Suffix runs are
+///   not tolerated: they also match accented-Latin false positives such as
+///   `Þór` → `Юуr` in CP1251, and no real tag shape needed them;
 /// - accented-Latin false positives still fail: `Йtй` (from `Été`) puts the
 ///   Latin letter in the middle, and `Ьber`/`Niсo` have a Latin majority;
 /// - at least one Cyrillic word of two or more letters, or — for tags that
@@ -139,20 +142,27 @@ fn plausible(s: &str) -> bool {
                 latin_positions.push(index);
             }
         }
+        // Wrong-codepage decodes commonly produce a lowercase first letter
+        // followed by all-caps Cyrillic (`оПНДХДФЕИ` for Продиджей, `чСr` for
+        // Þór). Real Cyrillic words in this mixed case are vanishingly rare,
+        // while the motivating Latin-prefixed shapes (`Nуггнойй`, `xто`)
+        // start uppercase or stay lowercase.
+        if word_cyrillic > 0
+            && letters
+                .windows(2)
+                .any(|pair| pair[0].is_lowercase() && pair[1].is_uppercase())
+        {
+            return false;
+        }
         if word_cyrillic > 0 && word_latin > 0 {
             let latin_prefix = word_latin <= 2
                 && latin_positions
                     .iter()
                     .enumerate()
                     .all(|(k, position)| *position == k);
-            let latin_suffix = word_latin <= 2
-                && latin_positions
-                    .iter()
-                    .enumerate()
-                    .all(|(k, position)| *position == letters.len() - word_latin + k);
-            // Require an edge run and a Cyrillic majority; anything else is
-            // alternating-script garbage (`Йtй`) or accented Latin.
-            if !(latin_prefix || latin_suffix) || word_cyrillic <= word_latin {
+            // Only a prefix is tolerated; a suffix-edge run also matches the
+            // CP1251 reading of genuine accented Latin (`Þór` -> `Юуr`).
+            if !latin_prefix || word_cyrillic <= word_latin {
                 return false;
             }
         }
@@ -317,6 +327,20 @@ mod tests {
             assert_ne!(garbled, good, "{good}: fixture really is mojibake");
             assert_eq!(repair_tag_text(&garbled), good);
         }
+    }
+
+    #[test]
+    fn rejects_lowercase_to_uppercase_wrong_decodes() {
+        // The KOI8-R reading of a CP1251 title is all-Cyrillic but has a
+        // lowercase -> uppercase artifact; it must not win over the real
+        // CP1251 reading.
+        let good = "Продиджей";
+        let garbled = cp1251(good);
+        assert_eq!(repair_tag_text(&garbled), good);
+
+        // Accented Latin must not be "repaired" into a lowercase-Cyrillic +
+        // uppercase shape either.
+        assert_eq!(repair_tag_text("Þór"), "Þór");
     }
 
     #[test]

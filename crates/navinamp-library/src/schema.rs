@@ -109,10 +109,13 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         genre: String,
     }
 
+    // One transaction for the whole pass: a large library would otherwise
+    // issue thousands of autocommit UPDATEs and look like a hang at startup.
+    let tx = conn.unchecked_transaction()?;
     let mut fixed: Vec<Fixed> = Vec::new();
     {
         let mut select =
-            conn.prepare("SELECT id, title, artist, album_artist, album, genre FROM tracks")?;
+            tx.prepare("SELECT id, title, artist, album_artist, album, genre FROM tracks")?;
         let mut rows = select.query([])?;
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
@@ -146,10 +149,10 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
 
     if !fixed.is_empty() {
         eprintln!(
-            "navinamp library: repaired legacy tag text in {} row(s)",
+            "navinamp library: repairing legacy tag text in {} row(s)…",
             fixed.len()
         );
-        let mut update = conn.prepare(
+        let mut update = tx.prepare(
             "UPDATE tracks
                 SET title = ?2, artist = ?3, album_artist = ?4, album = ?5,
                     album_key = ?6, genre = ?7
@@ -166,13 +169,18 @@ fn repair_legacy_tag_text(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
                 f.genre
             ])?;
         }
+        eprintln!(
+            "navinamp library: repaired legacy tag text in {} row(s)",
+            fixed.len()
+        );
     }
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO meta(key, value) VALUES(?1, 'done')
          ON CONFLICT(key) DO UPDATE SET value = 'done'",
         [MARK],
     )?;
+    tx.commit()?;
     Ok(())
 }
 

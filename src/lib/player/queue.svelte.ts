@@ -513,15 +513,27 @@ async function repairRestoredText(): Promise<void> {
     return fixed;
   };
 
+  // The heuristic can occasionally pick a wrong codepage for accented Latin
+  // text. Only persist a rewrite that actually produces Cyrillic; the queue
+  // snapshot is otherwise a permanent copy, unlike the re-readable DB rows.
+  const accept = (original: string, repaired: string): string =>
+    repaired !== original && /[\u0400-\u04FF]/.test(repaired)
+      ? repaired
+      : original;
+
   try {
     const [fixedTitles, fixedArtists] = await Promise.all([
       repair(titles),
       repair(artists),
     ]);
     const titleMap = new Map<string, string>();
-    titles.forEach((title, i) => titleMap.set(title, fixedTitles[i] ?? title));
+    titles.forEach((title, i) =>
+      titleMap.set(title, accept(title, fixedTitles[i] ?? title)),
+    );
     const artistMap = new Map<string, string>();
-    artists.forEach((artist, i) => artistMap.set(artist, fixedArtists[i] ?? artist));
+    artists.forEach((artist, i) =>
+      artistMap.set(artist, accept(artist, fixedArtists[i] ?? artist)),
+    );
     let changed = false;
     const next = items.map((item) => {
       const title = titleMap.get(item.title) ?? item.title;
