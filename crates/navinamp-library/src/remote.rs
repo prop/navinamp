@@ -86,6 +86,7 @@ pub(super) fn upsert_remote(
                 now_secs,
                 t.remote_id,
                 t.server_id,
+                t.remote_path,
                 t.art_id,
             ])?;
 
@@ -192,9 +193,9 @@ const REMOTE_UPSERT_SQL: &str = "\
 INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
-    channels, codec, rating, starred, date_added, source, remote_id, server_id, art_id
+    channels, codec, rating, starred, date_added, source, remote_id, server_id, remote_path, art_id
 ) VALUES (
-    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22, ?23
 )
 ON CONFLICT(path) DO UPDATE SET
     size         = excluded.size,
@@ -216,4 +217,5 @@ ON CONFLICT(path) DO UPDATE SET
     starred         = excluded.starred,
     remote_id       = excluded.remote_id,
     server_id       = excluded.server_id,
+    remote_path     = excluded.remote_path,
     art_id          = excluded.art_id";

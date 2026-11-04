@@ -1635,7 +1635,9 @@
         onenqueue([toMeta(t)]);
       }
     } else if (id === "copy") {
-      void navigator.clipboard.writeText(t.path).catch((e) => {
+      // Remote rows: prefer the server's real file path over the
+      // navidrome:// row identity (falls back until the next sync).
+      void navigator.clipboard.writeText(t.remotePath ?? t.path).catch((e) => {
         onlog(`copy path failed: ${e}`);
       });
     } else if (id === "star") {

@@ -986,6 +986,7 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
                 source: SOURCE.into(),
                 remote_id: Some(song.id.clone()),
                 server_id: Some(server_id.to_owned()),
+                remote_path: (!song.path.is_empty()).then(|| song.path.clone()),
                 art_id: song.cover_art_id.clone(),
             }
         })
@@ -1499,6 +1500,7 @@ fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteT
     RemoteTrack {
         remote_id: song.id.clone(),
         server_id: server_id.to_owned(),
+        remote_path: (!song.path.is_empty()).then(|| song.path.clone()),
         title: repair_tag_text(&song.title).into_owned(),
         artist: repair_tag_text(&song.artist).into_owned(),
         album_artist: repair_tag_text(&album_artist).into_owned(),
@@ -1704,6 +1706,7 @@ mod tests {
             sampling_rate: Some(44_100),
             channel_count: Some(2),
             size: Some(31_615_915),
+            path: "Aphex Twin/Selected Ambient Works/01 Xtal.flac".into(),
             cover_art_id: Some("al-1".into()),
             play_count: 7,
             user_rating: 4,
@@ -1719,6 +1722,10 @@ mod tests {
         assert_eq!(rows[0].path, "navidrome://p1/a");
         assert_eq!(rows[0].remote_id.as_deref(), Some("a"));
         assert_eq!(rows[0].server_id.as_deref(), Some("p1"));
+        assert_eq!(
+            rows[0].remote_path.as_deref(),
+            Some("Aphex Twin/Selected Ambient Works/01 Xtal.flac")
+        );
         assert_eq!(rows[0].source, "navidrome");
         assert_eq!(rows[0].rating, 4);
         assert_eq!(rows[0].duration_secs, 293.0);

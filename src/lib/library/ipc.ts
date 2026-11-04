@@ -53,6 +53,12 @@ export interface Track {
   /** Navidrome profile id this row belongs to (`null` for local rows). */
   serverId: string | null;
   /**
+   * Server-relative file path as reported by the Navidrome indexer
+   * (e.g. `Artist/Album/01 song.flac`); `null` for local rows and for
+   * remote rows not yet refreshed since the column existed.
+   */
+  remotePath: string | null;
+  /**
    * Album-art reference. For `local` rows: a 16-hex content hash served by
    * the `navinamp-art` scheme (see `localArtUrl`). For `navidrome` rows:
    * the server's `coverArt` id (see `navidromeArtUrl`). `null` = no art.

@@ -38,6 +38,7 @@ const TRACK_COLUMN_NAMES: &[&str] = &[
     "source",
     "remote_id",
     "server_id",
+    "remote_path",
     "art_id",
 ];
 
@@ -82,7 +83,8 @@ pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
         source: row.get(23)?,
         remote_id: row.get(24)?,
         server_id: row.get(25)?,
-        art_id: row.get(26)?,
+        remote_path: row.get(26)?,
+        art_id: row.get(27)?,
     })
 }
 

@@ -11,6 +11,7 @@ fn rt(remote_id: &str, title: &str) -> RemoteTrack {
     RemoteTrack {
         remote_id: remote_id.into(),
         server_id: S.into(),
+        remote_path: Some("Björk/Debut/01 Human Behaviour.mp3".into()),
         title: title.into(),
         artist: "Björk".into(),
         album_artist: "Björk".into(),
@@ -66,6 +67,11 @@ fn sync_inserts_remote_rows_with_derived_paths() {
     assert_eq!(first.path, "navidrome://s1/t1");
     assert_eq!(first.source, "navidrome");
     assert_eq!(first.title, "Human Behaviour");
+    assert_eq!(
+        first.remote_path.as_deref(),
+        Some("Björk/Debut/01 Human Behaviour.mp3"),
+        "server-relative path is stored alongside the row identity"
+    );
     assert_eq!(first.art_id.as_deref(), Some("al-1"));
     assert_eq!(first.codec, "mp3");
     assert_eq!(first.bitrate_kbps, Some(320));

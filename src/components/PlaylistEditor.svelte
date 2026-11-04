@@ -402,7 +402,11 @@
     } else if (id === "remove") {
       onremove(m.index);
     } else if (id === "copy") {
-      void navigator.clipboard.writeText(item.path).catch((e) => {
+      // Remote rows: copy the server's real file path when the library row
+      // has one; the navidrome:// identity is the fallback (rows synced
+      // before the column existed get their path on the next sync).
+      const copyPath = trackCache.get(item.path)?.remotePath ?? item.path;
+      void navigator.clipboard.writeText(copyPath).catch((e) => {
         console.warn(`[navinamp] copy path failed: ${e}`);
       });
     } else if (id === "star") {

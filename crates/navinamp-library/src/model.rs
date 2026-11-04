@@ -51,6 +51,10 @@ pub struct Track {
     /// Remote ids are only unique per server, so this + `remote_id` identify
     /// the row on its server.
     pub server_id: Option<String>,
+    /// Server-relative file path as reported by the Navidrome indexer
+    /// (e.g. `Artist/Album/01 song.flac`); `None` for local rows and for
+    /// remote rows not yet refreshed since the column existed.
+    pub remote_path: Option<String>,
     /// Album-art reference. For `local` rows: a 16-hex content hash into
     /// the art cache (`<db dir>/art-cache/<art_id>.<ext>`, served by the
     /// app's `navinamp-art` scheme). For `navidrome` rows: the server's
@@ -203,6 +207,10 @@ pub struct RemoteTrack {
     pub remote_id: String,
     /// Navidrome profile id; remote ids are only unique per server.
     pub server_id: String,
+    /// Server-relative file path when the server reports one
+    /// (e.g. `Artist/Album/01 song.flac`); the app's row identity stays
+    /// `navidrome://<server_id>/<remote_id>`.
+    pub remote_path: Option<String>,
     pub title: String,
     pub artist: String,
     pub album_artist: String,
