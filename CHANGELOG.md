@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.12.0](https://github.com/prop/navinamp/compare/v0.11.0...v0.12.0) (2026-11-04)
+
+
+### Features
+
+* **audio:** pre-open a lookahead window of upcoming tracks ([4dffc6c](https://github.com/prop/navinamp/commit/4dffc6c3ea2b3c9dff4152cb7a943da8b53cd645))
+* **audio:** pre-open a lookahead window of upcoming tracks ([1db3e0e](https://github.com/prop/navinamp/commit/1db3e0e0dbfdddeeeb1215f0bec74ebe4a7c7cc9))
+* **library:** fingerprint remote albums for quick rescans ([23d6b6f](https://github.com/prop/navinamp/commit/23d6b6f55d89220cddeb950c1502bff82997afe9))
+* **navidrome:** quick and full rescan modes ([524997d](https://github.com/prop/navinamp/commit/524997dd81575980ec8565c912fd8aa4b83220e3))
+* **navidrome:** quick and full rescan with concurrent album fetch ([8fdc6e5](https://github.com/prop/navinamp/commit/8fdc6e561b8dcac0a76f7c86dbc717656c7f0a54))
+* **navidrome:** show sync progress in tracks instead of albums ([c29ed63](https://github.com/prop/navinamp/commit/c29ed635ba2b15ebde00391704824a57fe98553e))
+* **navidrome:** show sync progress in tracks instead of albums ([dbb980d](https://github.com/prop/navinamp/commit/dbb980d42e8589dccb2670820857fd516473b0a1))
+* **notify:** album art in desktop notifications + Rust-side sending ([8034d0c](https://github.com/prop/navinamp/commit/8034d0c76a13267a71d82ab4d91595db6be9ba05))
+* **notify:** album art in desktop notifications + Rust-side sending ([0d9dec0](https://github.com/prop/navinamp/commit/0d9dec01c2dd1deb35c4713bfdd3b605b6b8a5d4))
+* **ui:** add quick and full rescan actions ([aa301f5](https://github.com/prop/navinamp/commit/aa301f5f196681225858f3db3c4d1b2dc5aaf3ed))
+
+
+### Bug Fixes
+
+* **audio:** keep SetUpcoming from starting idle playback ([6423d07](https://github.com/prop/navinamp/commit/6423d07f0a35152a7da1b49cd26d953a83f4eae7))
+* **audio:** open Play targets through the prefetch thread ([f23da89](https://github.com/prop/navinamp/commit/f23da8970c8c5d20c9f941ae6c963d838f357124))
+* **audio:** open Play targets through the prefetch thread ([fba8a2f](https://github.com/prop/navinamp/commit/fba8a2f9e64f2bf75479f1173bc27a75e59be6bd))
+* **menu:** keep context menu in-window and scrollable ([2773456](https://github.com/prop/navinamp/commit/277345623d1fac476e40780cff006f3d541611be))
+* **menu:** keep context menus inside the window and scrollable ([82f012d](https://github.com/prop/navinamp/commit/82f012dab7cb9705dc266a3097b0364f235c5253))
+* **menu:** wrap long info rows and copy the real Navidrome path ([1e8c5a1](https://github.com/prop/navinamp/commit/1e8c5a1dc5c31496a9d0162f3de971f4e519e500))
+* **navidrome:** align track progress with the deduped album walk ([a13d835](https://github.com/prop/navinamp/commit/a13d835d9d59ed52acf90355b2eca721120769d1))
+* **navidrome:** avoid the artist-index call on the album walk ([9fd56ee](https://github.com/prop/navinamp/commit/9fd56ee87f94fe52223e3677ec57d08e133d18fb))
+* **notify:** review follow-ups — UN backend, unique temp art, soft failures ([94b782a](https://github.com/prop/navinamp/commit/94b782a4b0efddbace0649bf1b7f286a62cc6a72))
+
 ## [0.11.0](https://github.com/prop/navinamp/compare/v0.10.0...v0.11.0) (2026-11-04)
 
 
