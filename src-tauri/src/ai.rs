@@ -321,6 +321,31 @@ fn query_key(query: &DiscogsQuery) -> String {
     format!("{}|{}", normalized_kind(&query.kind), query.describe())
 }
 
+/// First usable keyword from a Discogs query, carried into the budget /
+/// exhausted injections: `trim_tool_messages` may have already replaced the
+/// older catalog pages with omission markers, so the "build def from the
+/// keyword" instruction must not depend on those pages staying in context.
+fn first_keyword(query: &DiscogsQuery) -> Option<String> {
+    [
+        query.label.as_str(),
+        query.q.as_str(),
+        query.release_title.as_str(),
+        query.artist.as_str(),
+    ]
+    .into_iter()
+    .map(str::trim)
+    .find(|s| !s.is_empty())
+    .map(str::to_owned)
+}
+
+/// The carried keyword as a sentence fragment for an injection ("" if none).
+fn keyword_note(keyword: &Option<String>) -> String {
+    match keyword.as_deref() {
+        Some(k) => format!(" The catalog keyword is \"{k}\"."),
+        None => String::new(),
+    }
+}
+
 /// One tool-call outcome: full catalog entries for the UI and a compact
 /// payload for the model.
 struct DiscogsLookup {
@@ -397,6 +422,10 @@ pub async fn ai_search(
     let mut catalog_keys: HashSet<String> = HashSet::new();
     let mut catalog_totals: HashMap<String, u32> = HashMap::new();
     let mut discogs_error: Option<String> = None;
+    // Carried keyword from the Discogs queries: `trim_tool_messages` may
+    // replace older catalog pages with omission markers, so the injections
+    // below must not rely on the keyword staying in context.
+    let mut catalog_keyword: Option<String> = None;
 
     for _ in 0..MAX_HOPS {
         trim_tool_messages(&mut messages, REQUEST_CHARS_BUDGET);
@@ -405,14 +434,18 @@ pub async fn ai_search(
             .map_err(|e| config.scrubbed(e))?;
         match parse_reply(&text) {
             Ok(Reply::Discogs(query)) if tool_calls < MAX_TOOL_CALLS as u32 => {
+                if catalog_keyword.is_none() {
+                    catalog_keyword = first_keyword(&query);
+                }
+                let note = keyword_note(&catalog_keyword);
                 if conversation_chars(&messages) + 2_000 > REQUEST_CHARS_BUDGET {
                     messages.push(ChatMessage::assistant(text));
-                    messages.push(ChatMessage::user(
+                    messages.push(ChatMessage::user(format!(
                         "The context budget is reached. Finish now with the final JSON; \
                          build \"def\" from the catalog keywords gathered so far \
                          (album/artist/title \"contains\", match \"any\"), or \
-                         \"def\": null if none.",
-                    ));
+                         \"def\": null if none.{note}"
+                    )));
                     continue;
                 }
                 tool_calls += 1;
@@ -441,7 +474,7 @@ pub async fn ai_search(
                              pagination.pages > pagination.page; otherwise finish with \
                              a def matching the catalog's artist / release-title keywords \
                              against album, artist and title (\"contains\", match \"any\"); \
-                             set \"def\": null only if no keyword exists.",
+                             set \"def\": null only if no keyword exists.{note}",
                             lookup.model_payload
                         )));
                         trim_tool_messages(&mut messages, REQUEST_CHARS_BUDGET);
@@ -458,12 +491,13 @@ pub async fn ai_search(
                 }
             }
             Ok(Reply::Discogs(_)) => {
+                let note = keyword_note(&catalog_keyword);
                 messages.push(ChatMessage::assistant(text));
-                messages.push(ChatMessage::user(
+                messages.push(ChatMessage::user(format!(
                     "Discogs lookups are exhausted. Finish now with the final JSON; \
                      build \"def\" from the keywords gathered so far (album/artist/title \
-                     \"contains\", match \"any\"), or \"def\": null if none.",
-                ));
+                     \"contains\", match \"any\"), or \"def\": null if none.{note}"
+                )));
             }
             Ok(Reply::Final { def, explanation }) => match def {
                 Some(mut def) => {
@@ -1406,6 +1440,25 @@ mod tests {
     fn prompt_reports_discogs_availability() {
         assert!(system_prompt(true).contains("Discogs catalog lookup is configured"));
         assert!(system_prompt(false).contains("NOT configured"));
+    }
+
+    #[test]
+    fn first_keyword_prefers_label_then_query_then_names() {
+        let q = DiscogsQuery::from_value(&json!({"label": "Nordcore", "q": "vinyl"}));
+        assert_eq!(first_keyword(&q).as_deref(), Some("Nordcore"));
+        let q = DiscogsQuery::from_value(&json!({"q": "  ", "artist": "Sunna"}));
+        assert_eq!(first_keyword(&q).as_deref(), Some("Sunna"));
+        let q = DiscogsQuery::from_value(&json!({"format": "Vinyl"}));
+        assert_eq!(first_keyword(&q), None);
+    }
+
+    #[test]
+    fn keyword_note_quotes_or_omits() {
+        assert_eq!(
+            keyword_note(&Some("Nordcore".into())),
+            " The catalog keyword is \"Nordcore\"."
+        );
+        assert_eq!(keyword_note(&None), "");
     }
 
     #[test]
