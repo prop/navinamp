@@ -1985,6 +1985,10 @@
         placeholder="search title / artist / album / genre / path…"
         value={searchQ}
         oninput={onSearchInput}
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off"
+        autocomplete="off"
         aria-label="search library" />
     {:else if searchMode === "ai"}
       <input
@@ -1992,6 +1996,10 @@
         type="text"
         bind:value={aiPrompt}
         placeholder={aiReport ? "refine these results…" : "describe what you want to hear…"}
+        spellcheck="false"
+        autocorrect="off"
+        autocapitalize="off"
+        autocomplete="off"
         aria-label="AI search prompt"
         onkeydown={(e) => {
           if (e.key === "Enter") void runAiSearch();

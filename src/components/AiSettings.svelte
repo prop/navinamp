@@ -194,7 +194,9 @@
               type="text"
               bind:value={config.baseUrl}
               placeholder="https://openrouter.ai/api/v1"
-              spellcheck="false" />
+              spellcheck="false"
+              autocorrect="off"
+              autocapitalize="off" />
           </label>
 
           <div class="row">
@@ -214,7 +216,9 @@
                 type="text"
                 bind:value={config.model}
                 placeholder="model id"
-                spellcheck="false" />
+                spellcheck="false"
+                autocorrect="off"
+                autocapitalize="off" />
             {/if}
             <button
               class="fetch"
@@ -232,7 +236,9 @@
                 type="text"
                 bind:value={config.model}
                 placeholder="model id"
-                spellcheck="false" />
+                spellcheck="false"
+                autocorrect="off"
+                autocapitalize="off" />
             </div>
           {/if}
           <div class="hint">
@@ -247,7 +253,9 @@
               bind:value={config.apiKey}
               placeholder="sk-… (blank for local servers)"
               autocomplete="off"
-              spellcheck="false" />
+              spellcheck="false"
+              autocorrect="off"
+              autocapitalize="off" />
           </label>
 
           <label class="row">
@@ -267,7 +275,9 @@
               bind:value={config.discogsToken}
               placeholder="required for catalog lookups — free token"
               autocomplete="off"
-              spellcheck="false" />
+              spellcheck="false"
+              autocorrect="off"
+              autocapitalize="off" />
           </label>
           <div class="hint">
             required to list labels, discographies and pressings from Discogs.
