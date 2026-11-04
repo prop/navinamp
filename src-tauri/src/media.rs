@@ -278,6 +278,46 @@ struct MediaCommandPayload {
     secs: Option<f64>,
 }
 
+/// Show a desktop "now playing" notification (issue #34), optionally with
+/// the track's album art. Sent from the Rust side (notify-rust →
+/// UNUserNotificationCenter on macOS) because the webview's Web
+/// Notification API ignores images and cannot be granted permission in
+/// WKWebView. Art is best-effort: undecodable/absent bytes notify without
+/// art. The OS handles authorization on the first notification.
+#[tauri::command]
+pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result<(), String> {
+    use base64::Engine as _;
+
+    let mut note = notify_rust::Notification::new();
+    note.summary(&title);
+    if let Some(encoded) = art_base64.as_deref().filter(|s| !s.trim().is_empty()) {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.trim())
+            .map_err(|e| format!("art base64: {e}"))?;
+        if let Some(ext) = sniff_art_ext(&bytes) {
+            let path = std::env::temp_dir().join(format!("navinamp-notify-art.{ext}"));
+            std::fs::write(&path, &bytes).map_err(|e| format!("art temp file: {e}"))?;
+            note.image_path(path.to_string_lossy().as_ref());
+        }
+    }
+    note.show().map_err(|e| format!("notify: {e}"))?;
+    Ok(())
+}
+
+/// Image format sniffing for the notification art (PNG/JPEG/WebP only —
+/// the formats Navidrome's getCoverArt and the embedded-art cache produce).
+fn sniff_art_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && bytes[8..12] == *b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 /// Push track metadata + position from the player window. Position updates
 /// are coarsened; see module docs.
 #[tauri::command]
@@ -486,5 +526,18 @@ mod tests {
         assert_eq!(sane_secs(-1.0), None);
         assert_eq!(sane_secs(f64::NAN), None);
         assert_eq!(sane_secs(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn sniff_art_ext_detects_cover_formats() {
+        let png = vec![0x89, b'P', b'N', b'G', 1, 2, 3];
+        let jpg = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2];
+        let mut webp = b"RIFFabcd".to_vec();
+        webp.extend_from_slice(b"WEBP");
+        assert_eq!(sniff_art_ext(&png), Some("png"));
+        assert_eq!(sniff_art_ext(&jpg), Some("jpg"));
+        assert_eq!(sniff_art_ext(&webp), Some("webp"));
+        assert_eq!(sniff_art_ext(b"not art at all"), None);
+        assert_eq!(sniff_art_ext(&[]), None);
     }
 }

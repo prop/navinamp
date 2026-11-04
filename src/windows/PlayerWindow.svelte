@@ -22,18 +22,17 @@
    */
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
-  import {
-    isPermissionGranted,
-    requestPermission,
-    sendNotification,
-  } from "@tauri-apps/plugin-notification";
 
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import OnboardingLauncher from "../components/OnboardingLauncher.svelte";
   import { queue, isAudioPath } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
+  import {
+    artForTrack,
+    localArtUrl,
+    navidromeArtUrl,
+  } from "../lib/library/ipc";
   import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
@@ -126,51 +125,34 @@
   // trigger. Automatic toasts require the menu preference and "no NaVinaMP
   // window focused"; the native global shortcut is an explicit request and
   // bypasses those gates.
-  let notifyPermission: NotificationPermission | null = null;
+  //
+  // Sending goes through the Rust side (`notify_track_started` → notify-rust
+  // → UNUserNotificationCenter): the webview's Web Notification API ignores
+  // images and cannot be granted permission in WKWebView, while the Rust
+  // path carries album art as a native attachment and lets the OS handle
+  // authorization (prompt on the first notification, remembered after).
   let notifyWarned = false;
-  let notifyDeniedWarned = false;
 
-  async function ensureNotifyPermission(manual: boolean): Promise<boolean> {
-    try {
-      // Re-check the OS state first: the user may have granted or revoked
-      // it in system settings since the last call.
-      if (await isPermissionGranted()) {
-        notifyPermission = "granted";
-        return true;
-      }
-      if (notifyPermission === "denied") {
-        if (!notifyDeniedWarned) {
-          notifyDeniedWarned = true;
-          console.warn("[navinamp] notifications denied — enable them in the OS settings");
-        }
-        return false;
-      }
-      if (!manual) {
-        // Automatic path: keep the existing lazy permission request.
-        notifyPermission = await requestPermission();
-        return notifyPermission === "granted";
-      }
-      // Do not prompt a user who opted out of automatic notifications.
-      if (!audio.notifyTrack) return false;
-      // A permission prompt raised from a background app may never appear.
-      // Bring the player forward for this one-time grant; afterwards the
-      // shortcut works while any other app is focused.
-      if (!appFocused()) {
-        try {
-          await getCurrentWindow().setFocus();
-        } catch {
-          // Best effort — still try the prompt.
-        }
-      }
-      notifyPermission = await requestPermission();
-      return notifyPermission === "granted";
-    } catch (e) {
-      if (!notifyWarned) {
-        notifyWarned = true;
-        console.warn(`[navinamp] notifications unavailable: ${e}`);
-      }
-      return false;
+  /** Album art as base64 for the notification attachment; null = no art. */
+  async function fetchNotifyArt(): Promise<string | null> {
+    const item = queue.currentItem;
+    if (!item) return null;
+    // Navidrome tracks use the server's scaled getCoverArt; local tracks the
+    // embedded-art cache. Any failure just means no art on the toast.
+    const url =
+      item.remoteId != null
+        ? await navidromeArtUrl(item.serverId, item.remoteId, 300)
+        : localArtUrl(await artForTrack(item.path) ?? "");
+    if (!url) return null;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    let binary = "";
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
     }
+    return btoa(binary);
   }
 
   async function showNowPlaying(manual = false): Promise<void> {
@@ -183,12 +165,11 @@
       if (manual) console.warn("[navinamp] notify shortcut: nothing is playing");
       return;
     }
-    if (!(await ensureNotifyPermission(manual))) return;
     try {
-      // No body: the OS already shows the app name as the toast source,
-      // and QueueItem carries no album to use as a secondary line.
-      sendNotification({
+      const artBase64 = await fetchNotifyArt().catch(() => null);
+      await invoke("notify_track_started", {
         title: item.artist ? `${item.artist} — ${item.title}` : item.title,
+        artBase64,
       });
     } catch (e) {
       if (!notifyWarned) {

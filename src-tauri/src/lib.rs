@@ -155,7 +155,8 @@ pub fn run() {
             windows::window_set_always_on_top,
             windows::window_drag_region_ready,
             media::media_metadata,
-            media::media_playback
+            media::media_playback,
+            media::notify_track_started
         ])
         .build(tauri::generate_context!())
         .expect("error while building NaVinaMP");
