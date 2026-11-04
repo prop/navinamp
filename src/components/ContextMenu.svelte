@@ -70,16 +70,22 @@
       }
     };
     const dismiss = () => onclose();
+    // Scrolling the menu itself must not dismiss it. Only a scroll outside
+    // (the playlist list underneath) invalidates the anchor position.
+    const onScroll = (e: Event) => {
+      if (el && e.composedPath().includes(el)) return;
+      onclose();
+    };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
     window.addEventListener("resize", dismiss);
-    window.addEventListener("scroll", dismiss, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("blur", dismiss);
     return () => {
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", dismiss);
-      window.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("blur", dismiss);
     };
   });
@@ -131,6 +137,12 @@
     position: fixed;
     z-index: 1000;
     min-width: 170px;
+    /* The playlist window is only 275px wide; keep the fixed menu inside it
+       so long values wrap against the visible width instead of being clipped
+       by the window edge. */
+    max-width: calc(100vw - 8px);
+    max-height: calc(100vh - 8px);
+    box-sizing: border-box;
     padding: 3px 0;
     background: #161616;
     border: 1px solid #3a3a3a;
@@ -141,8 +153,8 @@
     user-select: none;
     /* The playlist window is only ~230px tall; a details block + actions can
        exceed it, so the menu scrolls instead of clipping. */
-    max-height: calc(100vh - 8px);
     overflow-y: auto;
+    overscroll-behavior: contain;
     scrollbar-width: thin;
     scrollbar-color: #2f4f33 #161616;
   }
@@ -158,6 +170,7 @@
 
   .info {
     max-width: 360px;
+    box-sizing: border-box;
     padding: 3px 10px 5px;
   }
 
@@ -175,8 +188,8 @@
 
   .ivalue {
     min-width: 0;
-    /* Wrap instead of clipping: album titles and quality strings run long,
-       and the block can afford a second line. */
+    /* Wrap inside the menu's viewport-capped width: album titles and quality
+       strings can be much longer than the playlist window. */
     overflow-wrap: anywhere;
     color: #a8a8b0;
   }
