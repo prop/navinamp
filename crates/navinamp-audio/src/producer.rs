@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use crate::callback::Callback;
 use crate::decoder::PcmSource;
@@ -56,6 +56,29 @@ struct QueuedTrack {
     src: PcmSource,
 }
 
+/// A next-track open handed to the prefetch thread.
+///
+/// Opening a remote source is not cheap: the transport performs the initial
+/// ranged GET, ReplayGain scans the headers (usually another GET), and
+/// symphonia probes the container. Doing that inline in `cmd_enqueue` blocks
+/// the producer thread while it is still filling the ring for the track that
+/// just started — audible as a short burst followed by an underrun. The open
+/// therefore happens on its own thread; the result is installed by the
+/// producer once it arrives (stale results are dropped by request id).
+struct PrefetchRequest {
+    id: u64,
+    source: TrackSource,
+}
+
+struct PrefetchResult {
+    request: PrefetchRequest,
+    result: Result<PcmSource, AudioError>,
+}
+
+struct PrefetchJob {
+    id: u64,
+}
+
 pub(crate) struct Producer {
     cmd_rx: Receiver<Command>,
     shared: Arc<Shared>,
@@ -65,6 +88,10 @@ pub(crate) struct Producer {
     ring: Option<RingProducer>,
     current: Option<ActiveTrack>,
     next: Option<QueuedTrack>,
+    /// Request currently being opened by the prefetch thread (one at a time).
+    prefetch: Option<PrefetchJob>,
+    prefetch_tx: Sender<PrefetchRequest>,
+    prefetch_rx: Receiver<PrefetchResult>,
     /// Output frames ever pushed into the ring (engine timeline).
     pushed: u64,
     next_track_id: u64,
@@ -86,6 +113,7 @@ impl Producer {
         events: Arc<Events>,
     ) -> Result<JoinHandle<()>, AudioError> {
         let default_cfg = sink.default_config()?;
+        let (prefetch_tx, prefetch_rx) = spawn_prefetcher()?;
         let mut producer = Self {
             cmd_rx,
             shared,
@@ -95,6 +123,9 @@ impl Producer {
             ring: None,
             current: None,
             next: None,
+            prefetch: None,
+            prefetch_tx,
+            prefetch_rx,
             pushed: 0,
             next_track_id: 0,
             draining: false,
@@ -141,7 +172,8 @@ impl Producer {
     }
 
     fn idle_timeout(&self) -> Duration {
-        if self.current.is_some() || self.next.is_some() || self.draining {
+        if self.current.is_some() || self.next.is_some() || self.prefetch.is_some() || self.draining
+        {
             Duration::from_millis(5)
         } else {
             Duration::from_millis(100)
@@ -150,7 +182,7 @@ impl Producer {
 
     /// Do one unit of work. Returns `true` if there is likely more work now.
     fn tick(&mut self) -> bool {
-        let mut worked = false;
+        let mut worked = self.poll_prefetch();
 
         self.flush_pending();
 
@@ -165,7 +197,9 @@ impl Producer {
             let exact = t.src.decoded_frames() as f64 / f64::from(t.src.rate());
             self.shared.finish_session(t.id, exact);
             self.events.emit(Event::TrackFinished { id: t.id });
-            if self.next.is_none() {
+            // With a prefetch still in flight the queue is not over: wait for
+            // the opener instead of draining to silence at the track boundary.
+            if self.next.is_none() && self.prefetch.is_none() {
                 self.draining = true;
                 self.drain_started = Some(Instant::now());
             }
@@ -214,6 +248,49 @@ impl Producer {
             worked = true;
         }
 
+        worked
+    }
+
+    /// Install a completed next-track open, if it still belongs to the
+    /// current request. A newer `EnqueueNext`/`Play`/`Stop` may have
+    /// superseded it while the opener thread was busy with the network.
+    fn poll_prefetch(&mut self) -> bool {
+        let mut worked = false;
+        while let Ok(result) = self.prefetch_rx.try_recv() {
+            worked = true;
+            let wanted = self
+                .prefetch
+                .as_ref()
+                .is_some_and(|job| job.id == result.request.id);
+            if !wanted {
+                continue;
+            }
+            self.prefetch = None;
+            match result.result {
+                Ok(src) => {
+                    self.next = Some(QueuedTrack {
+                        id: result.request.id,
+                        source: result.request.source,
+                        src,
+                    });
+                    // A successful late enqueue rescues a draining queue.
+                    self.draining = false;
+                    self.drain_started = None;
+                }
+                Err(e) => {
+                    self.events.emit(Event::Error {
+                        id: Some(result.request.id),
+                        msg: e.msg(),
+                    });
+                    // If the current track already finished, there is nothing
+                    // left to play: drain now that the failure is known.
+                    if self.current.as_ref().is_some_and(|t| t.announced) {
+                        self.draining = true;
+                        self.drain_started = Some(Instant::now());
+                    }
+                }
+            }
+        }
         worked
     }
 
@@ -266,6 +343,7 @@ impl Producer {
             }
         }
         self.next = None;
+        self.prefetch = None;
         self.draining = false;
         self.drain_started = None;
         self.hard_reset();
@@ -294,18 +372,52 @@ impl Producer {
 
     fn cmd_enqueue(&mut self, source: TrackSource) {
         let id = self.alloc_id();
-        match open_source(&source) {
-            Ok(src) => {
-                self.next = Some(QueuedTrack { id, source, src });
-                // A late enqueue during drain rescues the queue gaplessly.
-                self.draining = false;
-                self.drain_started = None;
+        if self.current.is_none() {
+            // Idle: EnqueueNext starts playback immediately, exactly like Play.
+            self.prefetch = None;
+            match open_source(&source) {
+                Ok(src) => {
+                    self.next = Some(QueuedTrack { id, source, src });
+                    self.draining = false;
+                    self.drain_started = None;
+                }
+                Err(e) => {
+                    self.events.emit(Event::Error {
+                        id: Some(id),
+                        msg: e.msg(),
+                    });
+                }
             }
-            Err(e) => {
-                self.events.emit(Event::Error {
-                    id: Some(id),
-                    msg: e.msg(),
-                });
+            return;
+        }
+
+        // Replacing the pending next: stop the old one from playing, and let
+        // the opener run in the background. The producer keeps decoding the
+        // current track while the network request is in flight.
+        self.next = None;
+        self.draining = false;
+        self.drain_started = None;
+        let request = PrefetchRequest { id, source };
+        self.prefetch = Some(PrefetchJob { id });
+        if let Err(err) = self.prefetch_tx.send(request) {
+            // Opener thread is gone (only possible during shutdown). Fall
+            // back to the old inline behavior so playback still works.
+            self.prefetch = None;
+            let request = err.0;
+            match open_source(&request.source) {
+                Ok(src) => {
+                    self.next = Some(QueuedTrack {
+                        id: request.id,
+                        source: request.source,
+                        src,
+                    });
+                }
+                Err(e) => {
+                    self.events.emit(Event::Error {
+                        id: Some(request.id),
+                        msg: e.msg(),
+                    });
+                }
             }
         }
     }
@@ -313,6 +425,7 @@ impl Producer {
     fn cmd_stop(&mut self) {
         self.current = None;
         self.next = None;
+        self.prefetch = None;
         self.draining = false;
         self.drain_started = None;
         self.shared.set_metadata(None);
@@ -661,4 +774,33 @@ fn open_source(source: &TrackSource) -> Result<PcmSource, AudioError> {
         TrackSource::File(path) => PcmSource::open(path),
         TrackSource::Remote { url } => PcmSource::open_remote(url),
     }
+}
+
+/// Spawn the next-track opener thread and return its request/result ends.
+///
+/// The thread lives as long as the engine: when the producer (and with it
+/// `prefetch_tx`) is dropped, `recv()` returns and the worker exits. It is
+/// deliberately *not* joined — an in-flight HTTP open must not delay app
+/// shutdown, and a detached result simply fails to send.
+fn spawn_prefetcher() -> std::io::Result<(Sender<PrefetchRequest>, Receiver<PrefetchResult>)> {
+    let (request_tx, request_rx) = crossbeam_channel::unbounded::<PrefetchRequest>();
+    let (result_tx, result_rx) = crossbeam_channel::unbounded::<PrefetchResult>();
+    std::thread::Builder::new()
+        .name("navinamp-audio-prefetch".to_string())
+        .spawn(move || {
+            while let Ok(request) = request_rx.recv() {
+                // If several `EnqueueNext` commands arrived while the previous
+                // open was blocking on the network, only the newest can still
+                // be wanted. Drain the queue and open just that one.
+                let mut request = request;
+                while let Ok(newer) = request_rx.try_recv() {
+                    request = newer;
+                }
+                let result = open_source(&request.source);
+                if result_tx.send(PrefetchResult { request, result }).is_err() {
+                    break;
+                }
+            }
+        })?;
+    Ok((request_tx, result_rx))
 }

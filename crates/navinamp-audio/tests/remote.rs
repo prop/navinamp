@@ -8,6 +8,7 @@ mod common;
 
 use std::io::{Read as _, Write as _};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,16 +45,24 @@ struct Server {
 
 impl Server {
     fn start(mode: Mode, body: Vec<u8>) -> Self {
+        Self::start_with_first_delay(mode, body, Duration::ZERO)
+    }
+
+    /// Like [`Self::start`], but the first request accepted is answered only
+    /// after `delay`. Used to prove that opening the next track cannot stall
+    /// playback of the current one.
+    fn start_with_first_delay(mode: Mode, body: Vec<u8>, delay: Duration) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
         let addr = listener.local_addr().expect("addr");
         let requests: Seen = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&requests);
+        let delayed = Arc::new(AtomicBool::new(false));
         std::thread::Builder::new()
             .name("http-fixture".into())
             .spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { break };
-                    if handle(&mut stream, mode, &body, &seen).is_err() {
+                    if handle(&mut stream, mode, &body, &seen, delay, &delayed).is_err() {
                         break;
                     }
                 }
@@ -72,8 +81,20 @@ impl Server {
 }
 
 /// Serve exactly one request on `stream`, then close.
-fn handle(stream: &mut TcpStream, mode: Mode, body: &[u8], seen: &Seen) -> std::io::Result<()> {
+fn handle(
+    stream: &mut TcpStream,
+    mode: Mode,
+    body: &[u8],
+    seen: &Seen,
+    first_delay: Duration,
+    delayed: &AtomicBool,
+) -> std::io::Result<()> {
     let request = read_request(stream)?;
+    // Delay only the first request (prefetch of the next track), leaving the
+    // rest of that track's open at normal speed.
+    if !delayed.swap(true, Ordering::Relaxed) && !first_delay.is_zero() {
+        std::thread::sleep(first_delay);
+    }
     let range = request.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
         name.trim()
@@ -519,4 +540,67 @@ fn gapless_local_to_remote_transition_is_sample_exact() {
     let tail = sink.pull(256);
     assert!(tail.iter().all(|&s| s == 0.0), "silence after EndOfQueue");
     let _ = TryRecvError::Empty;
+}
+
+// ---------------------------------------------------------------------------
+// (e) slow next-track open must not starve the track that just started
+// ---------------------------------------------------------------------------
+
+#[test]
+fn slow_next_track_open_does_not_stall_current_playback() {
+    // Regression: `EnqueueNext` used to open the next source inline on the
+    // producer thread. With a remote next track that does the initial ranged
+    // GET + ReplayGain + probe, playback of the just-started current track
+    // ran for ~125 ms (the prefill) and then froze while the network open
+    // completed. Opening must happen off-thread, behind the ring buffer.
+    let (wav_a, exp_a) = common::stereo_sine_fixture("prefetch-a", RATE, 1.0, 440.0);
+    let (wav_b, exp_b) = common::stereo_sine_fixture("prefetch-b", RATE, 0.5, 660.0);
+    let body = std::fs::read(&wav_b).expect("read fixture wav");
+    let server = Server::start_with_first_delay(Mode::Ranges, body, Duration::from_millis(500));
+
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::Play(TrackSource::File(wav_a)))
+        .expect("play local a");
+    engine
+        .send(Command::EnqueueNext(TrackSource::Remote {
+            url: server.url(),
+        }))
+        .expect("enqueue slow remote b");
+    start_and_get_playing(&engine, &sink, &rx);
+
+    // The first half-second of A must be pure audio: the producer has to
+    // keep decoding while the opener thread waits on the delayed GET.
+    let mut head = Vec::new();
+    pull_frames(&sink, &mut head, RATE as usize / 2);
+    assert_close(
+        &head,
+        &exp_a[..RATE as usize],
+        1e-9,
+        "current track during a slow next-track open",
+    );
+    assert_eq!(
+        engine.underrun_frames(),
+        0,
+        "a slow next-track open starved the current track"
+    );
+
+    // Finish A; B was opened during the wait, so the transition stays gapless.
+    let mut tail_a = Vec::new();
+    pull_frames(&sink, &mut tail_a, RATE as usize / 2);
+    assert_close(
+        &tail_a,
+        &exp_a[RATE as usize..],
+        1e-9,
+        "current track tail after the slow open",
+    );
+    let mut b = Vec::new();
+    pull_frames(&sink, &mut b, exp_b.len() / 2);
+    assert_close(&b, &exp_b, 1e-9, "next track after the slow open");
+
+    drain_queue(&engine, &sink, &rx);
+    assert_no_starved_underrun(&engine);
 }
