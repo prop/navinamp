@@ -68,6 +68,15 @@ struct QueuedTrack {
 struct PrefetchRequest {
     id: u64,
     source: TrackSource,
+    kind: PrefetchKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrefetchKind {
+    /// The gapless successor, installed in `next` when ready.
+    Next,
+    /// An explicit Play target; installed as the current track when ready.
+    Play,
 }
 
 struct PrefetchResult {
@@ -77,6 +86,13 @@ struct PrefetchResult {
 
 struct PrefetchJob {
     id: u64,
+    kind: PrefetchKind,
+}
+
+/// A `Play` waiting for its source to open without blocking the producer.
+struct PendingPlay {
+    id: u64,
+    source: TrackSource,
 }
 
 pub(crate) struct Producer {
@@ -90,6 +106,13 @@ pub(crate) struct Producer {
     next: Option<QueuedTrack>,
     /// Request currently being opened by the prefetch thread (one at a time).
     prefetch: Option<PrefetchJob>,
+    /// A Play whose source is still opening; the current track keeps playing
+    /// until the opener hands it over.
+    pending_play: Option<PendingPlay>,
+    /// A successor requested while `pending_play` occupied the opener. The
+    /// frontend already added it to its expectations, so it must still be
+    /// prefetched once the Play target starts.
+    deferred_next: Option<(u64, TrackSource)>,
     prefetch_tx: Sender<PrefetchRequest>,
     prefetch_rx: Receiver<PrefetchResult>,
     /// Output frames ever pushed into the ring (engine timeline).
@@ -124,6 +147,8 @@ impl Producer {
             current: None,
             next: None,
             prefetch: None,
+            pending_play: None,
+            deferred_next: None,
             prefetch_tx,
             prefetch_rx,
             pushed: 0,
@@ -172,7 +197,12 @@ impl Producer {
     }
 
     fn idle_timeout(&self) -> Duration {
-        if self.current.is_some() || self.next.is_some() || self.prefetch.is_some() || self.draining
+        if self.current.is_some()
+            || self.next.is_some()
+            || self.prefetch.is_some()
+            || self.pending_play.is_some()
+            || self.deferred_next.is_some()
+            || self.draining
         {
             Duration::from_millis(5)
         } else {
@@ -197,9 +227,9 @@ impl Producer {
             let exact = t.src.decoded_frames() as f64 / f64::from(t.src.rate());
             self.shared.finish_session(t.id, exact);
             self.events.emit(Event::TrackFinished { id: t.id });
-            // With a prefetch still in flight the queue is not over: wait for
-            // the opener instead of draining to silence at the track boundary.
-            if self.next.is_none() && self.prefetch.is_none() {
+            // With a prefetch or an explicit Play still in flight the queue
+            // is not over: wait for the opener instead of draining to silence.
+            if self.next.is_none() && self.prefetch.is_none() && self.pending_play.is_none() {
                 self.draining = true;
                 self.drain_started = Some(Instant::now());
             }
@@ -261,25 +291,59 @@ impl Producer {
             let wanted = self
                 .prefetch
                 .as_ref()
-                .is_some_and(|job| job.id == result.request.id);
+                .is_some_and(|job| job.id == result.request.id && job.kind == result.request.kind);
             if !wanted {
                 continue;
             }
-            self.prefetch = None;
-            match result.result {
-                Ok(src) => {
+            let job = self.prefetch.take().expect("checked above");
+            let PrefetchResult { request, result } = result;
+            match (job.kind, result) {
+                (PrefetchKind::Play, Ok(src)) => {
+                    // The Play target finished opening. The old track played
+                    // through the wait; replace it now.
+                    if let Some(pending) = self.pending_play.take()
+                        && pending.id == request.id
+                    {
+                        self.install_play(QueuedTrack {
+                            id: pending.id,
+                            source: pending.source,
+                            src,
+                        });
+                        // The frontend may have requested the successor while
+                        // this Play was still opening; feed it now that the
+                        // opener is free again.
+                        if let Some((id, source)) = self.deferred_next.take() {
+                            self.prefetch_next(id, source);
+                        }
+                    }
+                }
+                (PrefetchKind::Play, Err(e)) => {
+                    self.pending_play = None;
+                    self.deferred_next = None;
+                    self.events.emit(Event::Error {
+                        id: Some(request.id),
+                        msg: e.msg(),
+                    });
+                    // If the current track already finished, there is nothing
+                    // left to play: drain now that the failure is known.
+                    if self.current.as_ref().is_some_and(|t| t.announced) {
+                        self.draining = true;
+                        self.drain_started = Some(Instant::now());
+                    }
+                }
+                (PrefetchKind::Next, Ok(src)) => {
                     self.next = Some(QueuedTrack {
-                        id: result.request.id,
-                        source: result.request.source,
+                        id: request.id,
+                        source: request.source,
                         src,
                     });
                     // A successful late enqueue rescues a draining queue.
                     self.draining = false;
                     self.drain_started = None;
                 }
-                Err(e) => {
+                (PrefetchKind::Next, Err(e)) => {
                     self.events.emit(Event::Error {
-                        id: Some(result.request.id),
+                        id: Some(request.id),
                         msg: e.msg(),
                     });
                     // If the current track already finished, there is nothing
@@ -320,22 +384,80 @@ impl Producer {
     }
 
     fn cmd_play(&mut self, source: TrackSource) {
-        let id = self.alloc_id();
-        let src = match open_source(&source) {
-            Ok(s) => s,
-            Err(e) => {
-                // Report and keep whatever is playing; if idle, ensure Stopped.
-                self.events.emit(Event::Error {
-                    id: Some(id),
-                    msg: e.msg(),
-                });
-                if self.current.is_none() {
+        // A new Play supersedes any successor requested for the old target.
+        self.deferred_next = None;
+        // Idle: there is no current audio to protect, so opening inline keeps
+        // the existing immediate-start behavior.
+        if self.current.is_none() {
+            let id = self.alloc_id();
+            match open_source(&source) {
+                Ok(src) => self.install_play(QueuedTrack { id, source, src }),
+                Err(e) => {
+                    // Report and keep the engine stopped.
+                    self.events.emit(Event::Error {
+                        id: Some(id),
+                        msg: e.msg(),
+                    });
                     self.shared.set_status(PlaybackStatus::Stopped);
                 }
-                return;
             }
-        };
+            return;
+        }
 
+        // Fast path: the requested track is already the pre-opened next source
+        // (Next/Play on the immediate successor). Install it without touching
+        // the network or resetting the producer for another open.
+        if self.next.as_ref().is_some_and(|q| q.source == source) {
+            let q = self.next.take().expect("checked above");
+            self.install_play(q);
+            return;
+        }
+
+        // Open off the producer thread. The old track keeps playing until the
+        // opener hands over the new source, so a slow remote Play cannot starve
+        // the current track's ring buffer.
+        let id = self.alloc_id();
+        self.next = None;
+        self.prefetch = None;
+        self.pending_play = Some(PendingPlay {
+            id,
+            source: source.clone(),
+        });
+        self.draining = false;
+        self.drain_started = None;
+        let request = PrefetchRequest {
+            id,
+            source,
+            kind: PrefetchKind::Play,
+        };
+        self.prefetch = Some(PrefetchJob {
+            id,
+            kind: PrefetchKind::Play,
+        });
+        if let Err(err) = self.prefetch_tx.send(request) {
+            // Opener thread panicked (spawn failure would have aborted engine
+            // start). Fall back to the old inline behavior.
+            self.prefetch = None;
+            self.pending_play = None;
+            let request = err.0;
+            match open_source(&request.source) {
+                Ok(src) => self.install_play(QueuedTrack {
+                    id: request.id,
+                    source: request.source,
+                    src,
+                }),
+                Err(e) => {
+                    self.events.emit(Event::Error {
+                        id: Some(request.id),
+                        msg: e.msg(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Replace the current track with an already-open source.
+    fn install_play(&mut self, q: QueuedTrack) {
         if let Some(old) = self.current.take() {
             // The old track ends without ceremony (it was replaced, not finished).
             if !old.announced {
@@ -344,6 +466,7 @@ impl Producer {
         }
         self.next = None;
         self.prefetch = None;
+        self.pending_play = None;
         self.draining = false;
         self.drain_started = None;
         self.hard_reset();
@@ -351,7 +474,7 @@ impl Producer {
         // Prefer running the device at the source rate (bit-exact, no resample).
         // Gapless transitions never re-open the device — only explicit Play does.
         let desired = SinkConfig {
-            sample_rate: src.rate(),
+            sample_rate: q.src.rate(),
             channels: 2,
         };
         if desired != self.sink_cfg && self.open_sink_at(desired).is_err() {
@@ -365,13 +488,20 @@ impl Producer {
             });
         }
 
-        self.start_track(QueuedTrack { id, source, src });
+        self.start_track(q);
         self.prefill();
         self.shared.set_status(PlaybackStatus::Playing);
     }
 
     fn cmd_enqueue(&mut self, source: TrackSource) {
         let id = self.alloc_id();
+        if self.pending_play.is_some() {
+            // A Play is opening. Keep the successor for after its
+            // TrackStarted: the frontend has already added it to expectations,
+            // so dropping it would leave the engine with nothing prefetched.
+            self.deferred_next = Some((id, source));
+            return;
+        }
         if self.current.is_none() {
             // Idle: EnqueueNext starts playback immediately, exactly like Play.
             self.prefetch = None;
@@ -390,15 +520,23 @@ impl Producer {
             }
             return;
         }
+        self.prefetch_next(id, source);
+    }
 
-        // Replacing the pending next: stop the old one from playing, and let
-        // the opener run in the background. The producer keeps decoding the
-        // current track while the network request is in flight.
+    /// Replace the pre-opened successor with `source`, opening it off-thread.
+    fn prefetch_next(&mut self, id: u64, source: TrackSource) {
         self.next = None;
         self.draining = false;
         self.drain_started = None;
-        let request = PrefetchRequest { id, source };
-        self.prefetch = Some(PrefetchJob { id });
+        let request = PrefetchRequest {
+            id,
+            source,
+            kind: PrefetchKind::Next,
+        };
+        self.prefetch = Some(PrefetchJob {
+            id,
+            kind: PrefetchKind::Next,
+        });
         if let Err(err) = self.prefetch_tx.send(request) {
             // Opener thread panicked (spawn failure would have aborted engine
             // start). Fall back to the old inline behavior so playback still
@@ -427,6 +565,8 @@ impl Producer {
         self.current = None;
         self.next = None;
         self.prefetch = None;
+        self.pending_play = None;
+        self.deferred_next = None;
         self.draining = false;
         self.drain_started = None;
         self.shared.set_metadata(None);

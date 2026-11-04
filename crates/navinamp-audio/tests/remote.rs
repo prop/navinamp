@@ -604,3 +604,93 @@ fn slow_next_track_open_does_not_stall_current_playback() {
     drain_queue(&engine, &sink, &rx);
     assert_no_starved_underrun(&engine);
 }
+
+// ---------------------------------------------------------------------------
+// (f) slow explicit Play must not starve the track that is already playing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn slow_play_open_does_not_stall_current_playback() {
+    // Regression: `Play` used to open its source inline on the producer
+    // thread. With a remote target whose initial GET is slow, the current
+    // track's ring drained and playback glitched. The current track must keep
+    // playing while the opener fetches the Play target off-thread.
+    let (wav_a, exp_a) = common::stereo_sine_fixture("play-prefetch-a", RATE, 3.0, 440.0);
+    let (wav_b, _exp_b) = common::stereo_sine_fixture("play-prefetch-b", RATE, 0.5, 660.0);
+    let body = std::fs::read(&wav_b).expect("read fixture wav");
+    let server = Server::start_with_first_delay(Mode::Ranges, body, Duration::from_millis(1800));
+
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::Play(TrackSource::File(wav_a)))
+        .expect("play local a");
+    start_and_get_playing(&engine, &sink, &rx);
+
+    engine
+        .send(Command::Play(TrackSource::Remote { url: server.url() }))
+        .expect("play slow remote b");
+
+    // A must continue sample-exactly while B's initial GET is delayed. The old
+    // inline path blocked the producer here and underran after the ring emptied.
+    let mut head = Vec::new();
+    pull_frames(&sink, &mut head, RATE as usize * 6 / 5);
+    assert_close(
+        &head,
+        &exp_a[..RATE as usize * 12 / 5],
+        1e-9,
+        "current track during a slow Play open",
+    );
+    assert_eq!(
+        engine.underrun_frames(),
+        0,
+        "a slow Play open starved the current track"
+    );
+
+    // B eventually starts; the manual switch itself may discard A's buffered
+    // tail, but it must not leave the engine starved or stopped.
+    let started = wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+    assert!(matches!(started, Event::TrackStarted { .. }));
+    drain_queue(&engine, &sink, &rx);
+    assert_no_starved_underrun(&engine);
+}
+
+// ---------------------------------------------------------------------------
+// (g) successor enqueued during a slow Play must still be prefetched
+// ---------------------------------------------------------------------------
+
+#[test]
+fn successor_enqueued_during_slow_play_is_deferred() {
+    // The frontend sends `audio_play` and then immediately `audio_enqueue`
+    // for the successor, before the Play target's TrackStarted. The opener is
+    // busy with Play at that point; the successor must be remembered and fed
+    // once the Play source starts, or the queue loses its gapless next.
+    let (wav_a, _) = common::stereo_sine_fixture("deferred-play-a", RATE, 1.0, 440.0);
+    let (wav_b, _) = common::stereo_sine_fixture("deferred-play-b", RATE, 0.5, 660.0);
+    let (wav_c, _) = common::stereo_sine_fixture("deferred-play-c", RATE, 0.5, 880.0);
+    let body = std::fs::read(&wav_b).expect("read fixture wav");
+    let server = Server::start_with_first_delay(Mode::Ranges, body, Duration::from_millis(300));
+
+    let sink = TestSink::new(RATE);
+    let engine = engine_on(&sink);
+    let rx = engine.subscribe();
+
+    engine
+        .send(Command::Play(TrackSource::File(wav_a)))
+        .expect("play local a");
+    start_and_get_playing(&engine, &sink, &rx);
+
+    engine
+        .send(Command::Play(TrackSource::Remote { url: server.url() }))
+        .expect("play slow remote b");
+    engine
+        .send(Command::EnqueueNext(TrackSource::File(wav_c)))
+        .expect("enqueue successor c");
+
+    let _ = wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+    let _ = wait_event(&sink, &rx, |e| matches!(e, Event::TrackStarted { .. }));
+    drain_queue(&engine, &sink, &rx);
+    assert_no_starved_underrun(&engine);
+}
