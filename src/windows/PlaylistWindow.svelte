@@ -11,9 +11,10 @@
    */
   import { open } from "@tauri-apps/plugin-dialog";
 
+  import AddUrlDialog from "../components/AddUrlDialog.svelte";
   import PlaylistEditor from "../components/PlaylistEditor.svelte";
   import { expandAudioPaths } from "../lib/library/ipc";
-  import { formatTime } from "../lib/player/queue.svelte";
+  import { formatTime, type QueueItemMeta } from "../lib/player/queue.svelte";
   import {
     layoutMode,
     queueIntent,
@@ -34,6 +35,13 @@
   const currentIndex = $derived(snap?.currentIndex ?? null);
   const shuffle = $derived(snap?.shuffle ?? false);
   const repeat = $derived(snap?.repeat ?? "off");
+
+  let showAddUrl = $state(false);
+
+  function addUrl(meta: QueueItemMeta): void {
+    queueIntent({ type: "addUrl", meta });
+    showAddUrl = false;
+  }
 
   // Folded strip: classic windowshade shows the playing track and its length.
   const stripTitle = $derived.by(() => {
@@ -91,6 +99,19 @@
     }
   }
 
+  // Ctrl/Cmd+U opens ADD URL (the playlist window owns the shortcut).
+  $effect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (mode !== "normal") return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "u") {
+        e.preventDefault();
+        showAddUrl = true;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   // Size the OS window to the panel's box (initial mount + body/shade height
   // changes, e.g. the list growing) via a ResizeObserver on the root.
   let root: HTMLElement | null = $state(null);
@@ -146,7 +167,12 @@
       onmove={(from, to) => queueIntent({ type: "move", from, to })}
       onadd={() => void addAfterCurrent()}
       onadddir={() => void addDirAfterCurrent()}
+      onaddurl={() => (showAddUrl = true)}
     />
+
+    {#if showAddUrl}
+      <AddUrlDialog onsubmit={addUrl} onclose={() => (showAddUrl = false)} />
+    {/if}
   {/if}
 </div>
 

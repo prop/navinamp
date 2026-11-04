@@ -87,9 +87,10 @@
 //! spill on the first seek and served locally thereafter (the spill is
 //! deleted on drop). Gapless local↔remote transitions and lookahead
 //! pre-opening work identically to files; the next tracks' initial GETs,
-//! ReplayGain scans and container probes run on opener threads. The
-//! transport never touches the audio callback; URL credentials are scrubbed
-//! from surfaced errors.
+//! ReplayGain scans and container probes run on opener threads. Resolved
+//! media links can carry request headers (a matching User-Agent / Referer)
+//! through [`TrackSource::RemoteWithHeaders`]. The transport never touches the
+//! audio callback; URL credentials are scrubbed from surfaced errors.
 //!
 //! ## Example
 //!
@@ -168,6 +169,18 @@ pub enum TrackSource {
         /// Absolute `http://`/`https://` URL. May carry query credentials
         /// (Subsonic tokens); the engine never logs it.
         url: String,
+    },
+    /// A remote stream that needs extra request headers on every GET.
+    ///
+    /// Used by resolved media links (e.g. yt-dlp's `http_headers`, which carry
+    /// a matching User-Agent/Referer). Behaving exactly like
+    /// [`TrackSource::Remote`] otherwise.
+    RemoteWithHeaders {
+        /// Absolute `http://`/`https://` URL. May carry credentials; the
+        /// engine never logs it.
+        url: String,
+        /// Extra request headers (`(name, value)`).
+        headers: Vec<(String, String)>,
     },
 }
 
