@@ -151,53 +151,55 @@
         through yt-dlp.
       </div>
 
-      <div class="yt">
-        <div class="ytrow">
-          <span class="ytlabel">YT-DLP</span>
-          {#if status == null && statusError == null}
-            <span class="bad">checking…</span>
-          {:else if status?.found}
-            <span class="ok" title={status.resolvedPath ?? ""}>
-              ✓ {status.version ?? "found"}
-            </span>
-          {:else}
-            <span class="bad">not found</span>
-          {/if}
-          <button class="mini" onclick={togglePath} disabled={savingPath}>
-            {showPath ? "HIDE" : "PATH"}
-          </button>
-        </div>
-
-        {#if showPath}
-          <div class="pathrow">
-            <input
-              bind:value={pathInput}
-              class="txt small"
-              type="text"
-              placeholder="absolute path (blank = auto-detect)"
-              spellcheck="false"
-              autocapitalize="off"
-              autocorrect="off"
-              onkeydown={(e) => {
-                if (e.key === "Enter") void savePath();
-              }} />
-            <button class="mini" onclick={() => void savePath()} disabled={savingPath}>
-              {savingPath ? "…" : "SAVE"}
+      {#if looksYouTube || status?.found !== true || showPath}
+        <div class="yt">
+          <div class="ytrow">
+            <span class="ytlabel">YT-DLP</span>
+            {#if status == null && statusError == null}
+              <span class="bad">checking…</span>
+            {:else if status?.found}
+              <span class="ok" title={status.resolvedPath ?? ""}>
+                ✓ {status.version ?? "found"}
+              </span>
+            {:else}
+              <span class="bad">not found</span>
+            {/if}
+            <button class="mini" onclick={togglePath} disabled={savingPath}>
+              {showPath ? "HIDE" : "PATH"}
             </button>
           </div>
-          <div class="hint">
-            e.g. <code>brew install yt-dlp</code>, or save the binary path. YouTube
-            support is optional.
-          </div>
-        {:else if status == null && statusError == null}
-          <div class="hint">checking for yt-dlp…</div>
-        {:else if status?.found !== true}
-          <div class="hint">
-            Install <code>yt-dlp</code> (or set its path) to add YouTube links.
-          </div>
-        {/if}
-        {#if statusError}<div class="err small">{statusError}</div>{/if}
-      </div>
+
+          {#if showPath}
+            <div class="pathrow">
+              <input
+                bind:value={pathInput}
+                class="txt small"
+                type="text"
+                placeholder="absolute path (blank = auto-detect)"
+                spellcheck="false"
+                autocapitalize="off"
+                autocorrect="off"
+                onkeydown={(e) => {
+                  if (e.key === "Enter") void savePath();
+                }} />
+              <button class="mini" onclick={() => void savePath()} disabled={savingPath}>
+                {savingPath ? "…" : "SAVE"}
+              </button>
+            </div>
+            <div class="hint">
+              e.g. <code>brew install yt-dlp</code>, or save the binary path.
+              YouTube support is optional.
+            </div>
+          {:else if status == null && statusError == null}
+            <div class="hint">checking for yt-dlp…</div>
+          {:else if status?.found !== true}
+            <div class="hint">
+              Install <code>yt-dlp</code> (or set its path) to add YouTube links.
+            </div>
+          {/if}
+          {#if statusError}<div class="err small">{statusError}</div>{/if}
+        </div>
+      {/if}
 
       {#if error}<div class="err">{error}</div>{/if}
     </div>
