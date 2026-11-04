@@ -265,6 +265,54 @@ async fn get_artists_flattens_index_groups() {
 }
 
 #[tokio::test]
+async fn get_album_list2_pages_and_parses_song_counts() {
+    let server = MockServer::start().await;
+    let client = connected_client(&server).await;
+    mock_endpoint(
+        &server,
+        "getAlbumList2",
+        ok_response(json!({
+            "albumList2": { "album": [
+                { "id": "al-1", "name": "Debut", "artist": "Björk",
+                  "songCount": 11, "duration": 2900, "coverArt": "al-1" },
+                { "id": "al-2", "name": "Post", "artist": "Björk",
+                  "songCount": 12, "duration": 3100 }
+            ]}
+        })),
+    )
+    .await;
+
+    let albums = client
+        .get_album_list2(500, 500, Some("lib-2"))
+        .await
+        .expect("album page parses");
+    assert_eq!(albums.len(), 2);
+    assert_eq!(albums[0].song_count, 11);
+    assert_eq!(albums[1].song_count, 12);
+
+    let requests = requests_to(&server, "getAlbumList2").await;
+    let params = query(&requests[0]);
+    assert_eq!(
+        params.get("type").map(String::as_str),
+        Some("alphabeticalByName")
+    );
+    assert_eq!(params.get("size").map(String::as_str), Some("500"));
+    assert_eq!(params.get("offset").map(String::as_str), Some("500"));
+    assert_eq!(
+        params.get("musicFolderId").map(String::as_str),
+        Some("lib-2")
+    );
+
+    // No library selection must omit the filter.
+    client
+        .get_album_list2(0, 100, None)
+        .await
+        .expect("unfiltered page parses");
+    let requests = requests_to(&server, "getAlbumList2").await;
+    assert!(!query(&requests[1]).contains_key("musicFolderId"));
+}
+
+#[tokio::test]
 async fn music_folders_parse_the_multi_library_index() {
     let server = MockServer::start().await;
     let client = connected_client(&server).await;

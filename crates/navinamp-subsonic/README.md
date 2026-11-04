@@ -54,6 +54,7 @@ work; that is a Subsonic spec property, not a client choice.
 |---|---|---|
 | `connect` / `ping` | `ping` | connect = ping + capture `serverVersion` |
 | `get_artists` | `getArtists` | flattens `index[].artist[]` |
+| `get_album_list2` | `getAlbumList2` | paged alphabetical list; sums `songCount` for track-based sync progress |
 | `get_album` | `getAlbum` | songs inline; leaf of the sync walk |
 | `search3` | `search3` | songs + albums (artist hits ignored by design) |
 | `get_playlists` | `getPlaylists` | |

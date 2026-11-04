@@ -270,7 +270,8 @@ export function navidromeSetStreaming(
 
 // ─── events ─────────────────────────────────────────────────────────────────
 
-/** `navidrome-progress` payload while a sync runs (throttled server-side). */
+/** `navidrome-progress` payload while a sync runs (throttled server-side).
+ *  Values are **tracks**; `total` is 0 when the pre-walk count failed. */
 export interface NavidromeProgressPayload {
   scanned: number;
   total: number;

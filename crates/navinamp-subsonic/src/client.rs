@@ -182,6 +182,31 @@ impl SubsonicClient {
         Ok(resp.album)
     }
 
+    /// One page of the alphabetical album list. Used before a sync walk to
+    /// sum `songCount` and show progress in tracks instead of albums; the
+    /// sync itself still walks artists → albums for per-album failure
+    /// isolation and the artist count in the report.
+    ///
+    /// `size` is the Subsonic page size (servers cap it at 500).
+    pub async fn get_album_list2(
+        &self,
+        offset: u32,
+        size: u32,
+        music_folder_id: Option<&str>,
+    ) -> Result<Vec<AlbumSummary>, SubsonicError> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("type", "alphabeticalByName".to_owned()),
+            ("size", size.to_string()),
+            ("offset", offset.to_string()),
+        ];
+        if let Some(id) = music_folder_id {
+            params.push(("musicFolderId", id.to_owned()));
+        }
+        let inner = self.request("getAlbumList2.view", &params).await?;
+        let resp: GetAlbumList2Response = payload(inner)?;
+        Ok(resp.album_list2.album)
+    }
+
     /// `search3`: songs + albums matching `query`.
     ///
     /// A limit of `0` is passed through to the server (Subsonic treats it as
