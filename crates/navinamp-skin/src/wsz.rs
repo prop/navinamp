@@ -1043,6 +1043,8 @@ fn eq_window(out: &mut Builder) {
     // The close glyph is painted into the titlebar strip at the far right;
     // overlay a pixel-identical 9×9 crop so it is actually clickable. There
     // is no separate pressed-state art in eqmain.bmp, so reuse the crop.
+    // eqmain.bmp also supplies eq.bg/eq.titlebar, so a missing file already
+    // removes the whole EQ surface — no separate button fallback is needed.
     if let Some(close) = out.bitmap("eq.close", "eqmain.bmp", 264, 137, 9, 9) {
         objects.push(button(
             "eq.close",
