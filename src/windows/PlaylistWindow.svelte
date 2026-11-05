@@ -198,7 +198,11 @@
       `--pl-current:${t.current}`,
       `--pl-bg:${t.normalbg}`,
       `--pl-border:${mixHex(t.normal, t.normalbg, 0.35)}`,
-      `--pl-font:${t.font ?? 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'}`,
+      `--pl-font:${
+        t.font
+          ? `${t.font}, Tahoma, sans-serif`
+          : 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'
+      }`,
     ].join(";");
   });
 

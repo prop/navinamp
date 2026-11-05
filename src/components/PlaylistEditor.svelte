@@ -505,7 +505,11 @@
       `--pl-border:${mixHex(normal, bg, 0.35)}`,
       `--pl-thumb:${mixHex(normal, bg, 0.55)}`,
       `--pl-hover:${mixHex(bg, "#ffffff", 0.08)}`,
-      `--pl-font:${t?.font ?? 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'}`,
+      `--pl-font:${
+        t?.font
+          ? `${t.font}, Tahoma, sans-serif`
+          : 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'
+      }`,
       `--row-h:${rowHeight}px`,
     ].join(";");
   });
