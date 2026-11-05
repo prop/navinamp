@@ -530,7 +530,9 @@
     inset: 0;
     transform-origin: top left;
     pointer-events: none;
-    z-index: 5;
+    /* Above the drag layer so an open row/action menu can overlap the
+       titlebar and still receive clicks (its children re-enable events). */
+    z-index: 11;
   }
 
   .list-slot {
