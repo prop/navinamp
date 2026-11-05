@@ -77,6 +77,9 @@
     notifyTrack: true,
   });
   let seeking = $state<number | null>(null);
+  /** Last playback/feed failure, surfaced in the existing warning bar. */
+  let playbackError = $state<string | null>(null);
+  let warningsOpen = $state(false);
 
   // Long-press transport seek: 1s per 100ms tick while PREV/NEXT is held.
   // The end margin keeps fast-forward from tripping TrackFinished.
@@ -87,10 +90,16 @@
   let holdTarget = 0;
   let holdItemId: string | null = null;
 
-  // Feed errors inside the queue module surface on the console: the visible
-  // M1 log moved to the library window's DEV block, and cross-window log
-  // relay is deliberately not part of the bus contract.
-  queue.setLog((line) => console.log(`[navinamp] ${line}`));
+  // Feed errors inside the queue module used to be console-only, which made
+  // a failed remote URL resolution invisible in release builds. Mirror them
+  // into the player's warning badge as well.
+  queue.setLog((line) => {
+    console.log(`[navinamp] ${line}`);
+    if (line.startsWith("✖")) {
+      playbackError = line.replace(/^✖\s*/, "");
+      warningsOpen = true;
+    }
+  });
 
   async function refresh() {
     try {
@@ -183,6 +192,12 @@
   $effect(() => {
     const unlisten = listen<EngineEvent>("audio-event", (ev) => {
       const e = ev.payload;
+      if (e.type === "Error") {
+        playbackError = e.msg;
+        warningsOpen = true;
+      } else if (e.type === "TrackStarted") {
+        playbackError = null;
+      }
       const note = queue.handleEngineEvent(e);
       console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);
       if (e.type === "TrackStarted") void showNowPlaying();
@@ -376,7 +391,6 @@
 
   // ── acceptance-run diagnostics: skin warnings visible in-app ─────────────
 
-  let warningsOpen = $state(false);
   const skinWarnings = $derived(
     (skin?.warnings ?? []).map((w: Warning) => formatWarning(w)),
   );
@@ -386,7 +400,11 @@
   const layoutMode = $derived(playerLayoutMode());
   const playerLayout = $derived(skin ? resolveLayout(skin, "main", layoutMode) : null);
   const resolveWarnings = $derived(playerLayout?.warnings ?? []);
-  const allWarnings = $derived([...skinWarnings, ...resolveWarnings]);
+  const allWarnings = $derived([
+    ...skinWarnings,
+    ...resolveWarnings,
+    ...(playbackError ? [`playback: ${playbackError}`] : []),
+  ]);
   const dragStrips = $derived.by(() =>
     skin && playerLayout ? dragRects(skin.skin, playerLayout) : [],
   );
@@ -663,7 +681,8 @@
   .warnline {
     font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     color: #d8a63c;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .status {
