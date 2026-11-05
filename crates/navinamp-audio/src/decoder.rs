@@ -69,7 +69,16 @@ impl PcmSource {
     /// ReplayGain tags are read before the hand-off to symphonia (one extra
     /// ranged GET on range-capable servers).
     pub(crate) fn open_remote(url: &str) -> Result<Self, AudioError> {
-        let mut stream = HttpStream::open(url).map_err(AudioError::Io)?;
+        Self::open_remote_with_headers(url, &[])
+    }
+
+    /// Open a remote stream with extra request headers (resolved media URLs
+    /// sometimes require a matching User-Agent/Referer).
+    pub(crate) fn open_remote_with_headers(
+        url: &str,
+        headers: &[(String, String)],
+    ) -> Result<Self, AudioError> {
+        let mut stream = HttpStream::open_with_headers(url, headers).map_err(AudioError::Io)?;
         let source_len = Some(stream.total_len());
         let replaygain_gain = replaygain::scan(&mut stream);
         stream.rewind().map_err(AudioError::Io)?;

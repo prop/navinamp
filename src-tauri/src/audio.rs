@@ -25,6 +25,8 @@ use navinamp_audio::{
     TrackSource, UpcomingTrack, eq_presets as eq_preset_table,
 };
 
+use crate::streams::StreamHeaders;
+
 /// Name of the Tauri event engine events are forwarded to.
 const EVENT_NAME: &str = "audio-event";
 /// Volume + EQ preferences file inside the app config dir.
@@ -359,12 +361,21 @@ fn eq_mutate(state: &Audio, f: impl FnOnce(&EngineHandle)) -> Result<(), String>
     Ok(())
 }
 
-/// Maps a UI-provided `path` to a engine source: `http(s)://` URLs play as
-/// remote streams (Navidrome), everything else is a local file. The IPC
-/// signature stays a plain string on the JS side.
-fn track_source(path: String) -> TrackSource {
+/// Maps a UI-provided `path` to an engine source: `http(s)://` URLs play as
+/// remote streams (Navidrome, direct playlist URLs, resolved YouTube audio),
+/// everything else is a local file. Resolver-provided headers (yt-dlp) travel
+/// through the process-wide registry so the IPC signature stays a plain string.
+fn track_source(path: String, headers: &StreamHeaders) -> TrackSource {
     if path.starts_with("http://") || path.starts_with("https://") {
-        TrackSource::Remote { url: path }
+        let extra = headers.get(&path);
+        if extra.is_empty() {
+            TrackSource::Remote { url: path }
+        } else {
+            TrackSource::RemoteWithHeaders {
+                url: path,
+                headers: extra,
+            }
+        }
     } else {
         TrackSource::File(path.into())
     }
@@ -384,6 +395,7 @@ pub struct UpcomingInput {
 pub fn audio_play(
     app: AppHandle,
     state: State<'_, Audio>,
+    headers: State<'_, StreamHeaders>,
     path: String,
     key: Option<String>,
 ) -> Result<(), String> {
@@ -391,15 +403,21 @@ pub fn audio_play(
     match key {
         Some(key) => send_if_running(&state, || Command::PlayKeyed {
             key,
-            source: track_source(path),
+            source: track_source(path, &headers),
         }),
-        None => send_if_running(&state, || Command::Play(track_source(path))),
+        None => send_if_running(&state, || Command::Play(track_source(path, &headers))),
     }
 }
 
 #[tauri::command]
-pub fn audio_enqueue(state: State<'_, Audio>, path: String) -> Result<(), String> {
-    send_if_running(&state, || Command::EnqueueNext(track_source(path)))
+pub fn audio_enqueue(
+    state: State<'_, Audio>,
+    headers: State<'_, StreamHeaders>,
+    path: String,
+) -> Result<(), String> {
+    send_if_running(&state, || {
+        Command::EnqueueNext(track_source(path, &headers))
+    })
 }
 
 /// Declare the ordered upcoming tracks after the current one. The engine
@@ -407,6 +425,7 @@ pub fn audio_enqueue(state: State<'_, Audio>, path: String) -> Result<(), String
 #[tauri::command]
 pub fn audio_set_upcoming(
     state: State<'_, Audio>,
+    headers: State<'_, StreamHeaders>,
     tracks: Vec<UpcomingInput>,
 ) -> Result<(), String> {
     send_if_running(&state, || {
@@ -415,7 +434,7 @@ pub fn audio_set_upcoming(
                 .into_iter()
                 .map(|track| UpcomingTrack {
                     key: track.key,
-                    source: track_source(track.path),
+                    source: track_source(track.path, &headers),
                 })
                 .collect(),
         )
@@ -674,6 +693,26 @@ pub fn audio_spectrum(state: State<'_, Audio>) -> Spectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolver_headers_attach_to_the_matching_remote_url() {
+        let registry = StreamHeaders::default();
+        registry.insert(
+            "https://media.example/a".into(),
+            vec![("User-Agent".into(), "Test UA".into())],
+        );
+        match track_source("https://media.example/a".into(), &registry) {
+            TrackSource::RemoteWithHeaders { url, headers } => {
+                assert_eq!(url, "https://media.example/a");
+                assert_eq!(headers, vec![("User-Agent".into(), "Test UA".into())]);
+            }
+            other => panic!("expected header-carrying source, got {other:?}"),
+        }
+        assert!(matches!(
+            track_source("https://media.example/b".into(), &registry),
+            TrackSource::Remote { .. }
+        ));
+    }
 
     #[test]
     fn audio_state_payload_serializes_metadata_camel_case() {

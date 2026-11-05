@@ -9,10 +9,10 @@
    *
    * Interactions: click selects, double-click plays, pointer-drag reorders
    * (drop indicator, no live reshuffle — simple and robust), Delete removes
-   * the selection, ↑/↓ move the selection. ADD opens the caller's dialog;
-   * REM removes the selection; SEL/MISC are placeholders until M4.
+   * the selection, ↑/↓ move the selection. ADD / ADD DIR open the caller's
+   * dialogs; ADD URL adds an http(s) stream; REM removes the selection.
    */
-  import type { QueueItem } from "../lib/player/queue.svelte";
+  import { isStreamUrl, type QueueItem } from "../lib/player/queue.svelte";
   import type { SkinTheme } from "../lib/skin/theme";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import { clearEqFor, getArtistEq, getTrackEq, rememberEq } from "../lib/audio/auto";
@@ -29,6 +29,7 @@
     onmove: (from: number, to: number) => void;
     onadd: () => void;
     onadddir: () => void;
+    onaddurl: () => void;
   }
 
   let {
@@ -40,6 +41,7 @@
     onmove,
     onadd,
     onadddir,
+    onaddurl,
   }: Props = $props();
 
   // Must match the .row height so drag math stays trivial.
@@ -272,6 +274,11 @@
         [`${t.playCount}×`, added ? `added ${added}` : ""].filter(Boolean).join(" · "),
       );
       add("source", t.source === "navidrome" ? "Navidrome" : "Local");
+    } else if (isStreamUrl(item.path)) {
+      add(
+        "source",
+        item.streamKind === "youtube" ? "YouTube · yt-dlp" : "stream URL",
+      );
     } else {
       add("source", "not in library");
     }
@@ -283,10 +290,11 @@
     if (!m) return [];
     const item = items[m.index];
     if (!item) return [];
+    const stream = isStreamUrl(item.path);
     const list: ContextMenuItem[] = [
       { id: "play", label: "Play" },
       { id: "remove", label: "Remove from queue", danger: true },
-      { id: "copy", label: "Copy path" },
+      { id: "copy", label: stream ? "Copy URL" : "Copy path" },
     ];
     if (item.remoteId != null) {
       list.push({ id: "sep", label: "", separator: true });
@@ -323,13 +331,15 @@
     const item = items[index];
     if (!item) return;
     selected = index;
-    const cachedTrack = trackCache.get(item.path) ?? null;
+    const stream = isStreamUrl(item.path);
+    const cachedTrack = stream ? null : (trackCache.get(item.path) ?? null);
     const cachedStar = starCache.get(item.path) ?? null;
     menuTrack = cachedTrack;
     menuInfo = item.remoteId != null ? cachedStar : null;
     menu = { x: e.clientX, y: e.clientY, index, path: item.path };
 
-    const needsTrack = !trackCache.has(item.path);
+    // Stream rows are not library rows: skip the DB lookup entirely.
+    const needsTrack = !stream && !trackCache.has(item.path);
     const needsStar = item.remoteId != null && cachedStar == null;
     if (!needsTrack && !needsStar) return;
     void libraryTrack(item.path)
@@ -521,6 +531,9 @@
   <footer class="bar">
     <button onclick={() => onadd()}>ADD</button>
     <button onclick={() => onadddir()} title="add a folder recursively">ADD DIR</button>
+    <button onclick={() => onaddurl()} title="add an http(s) audio stream or YouTube link">
+      ADD URL
+    </button>
     <button
       onclick={() => selected != null && onremove(selected)}
       disabled={selected == null}>REM</button
@@ -529,7 +542,6 @@
       onclick={goToCurrent}
       disabled={currentIndex == null}
       title="scroll to the current queue item">NOW</button>
-    <button disabled title="TODO(M4): sort and misc ops">MISC</button>
     <span class="totals">{totalText}</span>
   </footer>
 </div>
@@ -655,8 +667,8 @@
   .bar {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 3px 6px;
+    gap: 3px;
+    padding: 3px 5px;
     background: #101010;
     border-top: 1px solid #2a2a2a;
   }
@@ -666,9 +678,10 @@
     color: #9a9a9a;
     border: 1px solid #3a3a3a;
     border-radius: 2px;
-    padding: 1px 7px;
+    /* Five compact footer actions + totals must fit the 275px playlist. */
+    padding: 1px 4px;
     font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
-    font-size: 11px;
+    font-size: 10px;
     white-space: nowrap;
     cursor: pointer;
   }
@@ -686,7 +699,7 @@
   .totals {
     margin-left: auto;
     font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
-    font-size: 11px;
+    font-size: 10px;
     color: #3ccb4e;
     white-space: nowrap;
   }

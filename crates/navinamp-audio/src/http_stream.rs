@@ -73,8 +73,18 @@ pub(crate) struct HttpResponse {
 /// mutex is uncontended).
 pub(crate) trait HttpFetch: Send + Sync {
     /// GET `url` requesting `Range: bytes=<range_start>-`. Redirects are
-    /// followed (bounded); the returned response is the final one.
-    fn get(&self, url: &str, range_start: u64) -> io::Result<HttpResponse>;
+    /// followed manually (bounded) so the returned response is the final one
+    /// and resolver headers are re-applied per hop; cross-origin sensitive
+    /// headers (cookies, authorization, Referer, Origin) are stripped when the
+    /// host changes. `headers` carries extra request headers for resolved
+    /// media URLs that require them (yt-dlp's `http_headers`, e.g. a matching
+    /// User-Agent/Referer).
+    fn get(
+        &self,
+        url: &str,
+        range_start: u64,
+        headers: &[(String, String)],
+    ) -> io::Result<HttpResponse>;
 }
 
 /// Production transport over `reqwest::blocking` (rustls).
@@ -85,7 +95,11 @@ pub(crate) struct ReqwestFetch {
 impl ReqwestFetch {
     pub(crate) fn new() -> io::Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            // Redirects are followed by `get` so it can strip resolver headers
+            // that must not cross an origin boundary (Referer/Origin, cookies,
+            // authorization). reqwest's built-in policy only removes the
+            // credential subset.
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(scrub_reqwest_error)?;
@@ -94,31 +108,92 @@ impl ReqwestFetch {
 }
 
 impl HttpFetch for ReqwestFetch {
-    fn get(&self, url: &str, range_start: u64) -> io::Result<HttpResponse> {
-        let resp = self
-            .client
-            .get(url)
-            .header("Range", format!("bytes={range_start}-"))
-            .send()
-            .map_err(scrub_reqwest_error)?;
+    fn get(
+        &self,
+        url: &str,
+        range_start: u64,
+        headers: &[(String, String)],
+    ) -> io::Result<HttpResponse> {
+        use reqwest::header::{HeaderName, HeaderValue, LOCATION};
 
-        let status = resp.status().as_u16();
-        let header = |name: &str| -> Option<String> {
-            resp.headers()
-                .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.trim().to_string())
-        };
-        let content_length = header("Content-Length").and_then(|v| v.parse().ok());
-        let content_range = header("Content-Range").and_then(|v| parse_content_range(&v));
-
-        Ok(HttpResponse {
-            status,
-            content_length,
-            content_range,
-            body: Box::new(resp),
-        })
+        let mut current =
+            reqwest::Url::parse(url).map_err(|_| io::Error::other("invalid remote URL"))?;
+        let mut current_headers = headers.to_vec();
+        let mut hops = 0usize;
+        loop {
+            let mut request = self
+                .client
+                .get(current.clone())
+                .header("Range", format!("bytes={range_start}-"));
+            for (name, value) in &current_headers {
+                // Resolver-provided headers are best-effort: one malformed
+                // value must not poison the whole stream.
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(value),
+                ) {
+                    request = request.header(name, value);
+                }
+            }
+            let resp = request.send().map_err(scrub_reqwest_error)?;
+            let status = resp.status().as_u16();
+            if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+                return Ok(response_from(resp));
+            }
+            if hops >= MAX_REDIRECTS {
+                return Err(io::Error::other("too many redirects"));
+            }
+            let location = resp
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| io::Error::other("redirect without Location"))?;
+            let next = current
+                .join(location)
+                .map_err(|_| io::Error::other("invalid redirect Location"))?;
+            if next.host_str() != current.host_str() {
+                strip_cross_origin_headers(&mut current_headers);
+            }
+            current = next;
+            hops += 1;
+        }
     }
+}
+
+/// Decode a final response into the transport-neutral shape.
+fn response_from(resp: reqwest::blocking::Response) -> HttpResponse {
+    let status = resp.status().as_u16();
+    let header = |name: &str| -> Option<String> {
+        resp.headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.trim().to_owned())
+    };
+    let content_length = header("Content-Length").and_then(|value| value.parse().ok());
+    let content_range = header("Content-Range").and_then(|value| parse_content_range(&value));
+    HttpResponse {
+        status,
+        content_length,
+        content_range,
+        body: Box::new(resp),
+    }
+}
+
+/// Headers that must not follow a redirect to a different host. The cookie /
+/// authorization subset matches reqwest's default policy; Referer and Origin
+/// are added because they can disclose the resolver's source page.
+fn strip_cross_origin_headers(headers: &mut Vec<(String, String)>) {
+    headers.retain(|(name, _)| {
+        !matches!(
+            name.trim().to_ascii_lowercase().as_str(),
+            "authorization"
+                | "cookie"
+                | "proxy-authorization"
+                | "www-authenticate"
+                | "referer"
+                | "origin"
+        )
+    });
 }
 
 /// Parses `bytes <start>-<end>/<total>` (`*` total is rejected — we need a
@@ -164,6 +239,9 @@ impl SyncBody {
 pub(crate) struct HttpStream<F: HttpFetch = ReqwestFetch> {
     url: String,
     fetch: F,
+    /// Extra request headers applied to every ranged GET (empty for ordinary
+    /// sources; populated for resolved streams that need a matching UA etc.).
+    headers: Vec<(String, String)>,
     /// Total resource length in bytes (always known — `Content-Length` or
     /// `Content-Range` total is required up front).
     total: u64,
@@ -192,9 +270,14 @@ impl<F: HttpFetch> HttpStream<F> {
         self.total
     }
 
-    /// Open `url`, fetching through `fetch` (tests inject a fake here).
-    pub(crate) fn with_fetch(url: &str, fetch: F) -> io::Result<Self> {
-        let resp = fetch.get(url, 0)?;
+    /// Open `url`, fetching through `fetch` (tests inject a fake here), with
+    /// extra request headers on every GET.
+    pub(crate) fn with_fetch_headers(
+        url: &str,
+        fetch: F,
+        headers: Vec<(String, String)>,
+    ) -> io::Result<Self> {
+        let resp = fetch.get(url, 0, &headers)?;
         let (total, body) = match resp.status {
             206 => {
                 let cr = resp.content_range.as_ref().ok_or_else(|| {
@@ -232,6 +315,7 @@ impl<F: HttpFetch> HttpStream<F> {
         Ok(Self {
             url: url.to_owned(),
             fetch,
+            headers,
             total,
             pos: 0,
             body,
@@ -257,7 +341,7 @@ impl<F: HttpFetch> HttpStream<F> {
             return Ok(());
         }
 
-        let resp = self.fetch.get(&self.url, abs)?;
+        let resp = self.fetch.get(&self.url, abs, &self.headers)?;
         match resp.status {
             206 => {
                 let cr = resp.content_range.as_ref().ok_or_else(|| {
@@ -340,8 +424,9 @@ impl<F: HttpFetch> HttpStream<F> {
 
 /// `HttpStream<ReqwestFetch>` opened against a real URL.
 impl HttpStream<ReqwestFetch> {
-    pub(crate) fn open(url: &str) -> io::Result<Self> {
-        Self::with_fetch(url, ReqwestFetch::new()?)
+    /// Open against a real URL, with resolver-provided request headers.
+    pub(crate) fn open_with_headers(url: &str, headers: &[(String, String)]) -> io::Result<Self> {
+        Self::with_fetch_headers(url, ReqwestFetch::new()?, headers.to_vec())
     }
 }
 
@@ -441,7 +526,9 @@ impl<F: HttpFetch + 'static> symphonia::core::io::MediaSource for HttpStream<F> 
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+
+    type SeenHeaders = Arc<Mutex<Vec<Vec<(String, String)>>>>;
 
     /// In-memory transport: serves `data` either with real 206s or always
     /// with full-body 200s (transcode behavior). Records requested offsets.
@@ -449,6 +536,7 @@ mod tests {
         data: Vec<u8>,
         honor_ranges: bool,
         requests: Mutex<Vec<u64>>,
+        headers: SeenHeaders,
         status: Option<u16>,
     }
 
@@ -458,6 +546,7 @@ mod tests {
                 data,
                 honor_ranges: true,
                 requests: Mutex::new(Vec::new()),
+                headers: Arc::new(Mutex::new(Vec::new())),
                 status: None,
             }
         }
@@ -467,6 +556,7 @@ mod tests {
                 data,
                 honor_ranges: false,
                 requests: Mutex::new(Vec::new()),
+                headers: Arc::new(Mutex::new(Vec::new())),
                 status: None,
             }
         }
@@ -476,6 +566,7 @@ mod tests {
                 data: Vec::new(),
                 honor_ranges: false,
                 requests: Mutex::new(Vec::new()),
+                headers: Arc::new(Mutex::new(Vec::new())),
                 status: Some(status),
             }
         }
@@ -486,8 +577,14 @@ mod tests {
     }
 
     impl HttpFetch for FakeFetch {
-        fn get(&self, _url: &str, range_start: u64) -> io::Result<HttpResponse> {
+        fn get(
+            &self,
+            _url: &str,
+            range_start: u64,
+            headers: &[(String, String)],
+        ) -> io::Result<HttpResponse> {
             self.requests.lock().unwrap().push(range_start);
+            self.headers.lock().unwrap().push(headers.to_vec());
             if let Some(status) = self.status {
                 return Ok(HttpResponse {
                     status,
@@ -537,7 +634,8 @@ mod tests {
         use symphonia::core::io::MediaSource as _;
 
         let fetch = FakeFetch::ranged(data());
-        let mut stream = HttpStream::with_fetch("http://x/media", fetch).unwrap();
+        let mut stream =
+            HttpStream::with_fetch_headers("http://x/media", fetch, Vec::new()).unwrap();
         assert_eq!(stream.byte_len(), Some(1000));
         assert!(stream.is_seekable());
 
@@ -565,9 +663,55 @@ mod tests {
     }
 
     #[test]
+    fn extra_headers_are_applied_to_initial_and_seek_requests() {
+        let fetch = FakeFetch::ranged(data());
+        let seen = Arc::clone(&fetch.headers);
+        let mut stream = HttpStream::with_fetch_headers(
+            "http://x/media",
+            fetch,
+            vec![("User-Agent".to_owned(), "Test UA".to_owned())],
+        )
+        .unwrap();
+
+        // The initial open already carried the headers; a seek must too.
+        read_all(&mut stream, 500, 10).unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        for headers in seen.iter() {
+            assert!(
+                headers
+                    .iter()
+                    .any(|(name, value)| name == "User-Agent" && value == "Test UA"),
+                "missing header in {headers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_origin_redirect_headers_are_stripped() {
+        let mut headers = vec![
+            ("User-Agent".to_owned(), "Test UA".to_owned()),
+            ("Referer".to_owned(), "https://www.youtube.com/".to_owned()),
+            ("Origin".to_owned(), "https://www.youtube.com".to_owned()),
+            ("Authorization".to_owned(), "Bearer secret".to_owned()),
+            ("Cookie".to_owned(), "session=x".to_owned()),
+            ("Accept".to_owned(), "*/*".to_owned()),
+        ];
+        strip_cross_origin_headers(&mut headers);
+        assert_eq!(
+            headers,
+            vec![
+                ("User-Agent".to_owned(), "Test UA".to_owned()),
+                ("Accept".to_owned(), "*/*".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn range_ignoring_server_spills_on_first_seek() {
         let fetch = FakeFetch::full_only(data());
-        let mut stream = HttpStream::with_fetch("http://x/media", fetch).unwrap();
+        let mut stream =
+            HttpStream::with_fetch_headers("http://x/media", fetch, Vec::new()).unwrap();
 
         // Sequential reads stream off the initial 200 body (no spill yet).
         let mut head = vec![0u8; 16];
@@ -600,7 +744,7 @@ mod tests {
     #[test]
     fn http_error_status_is_an_open_error() {
         let fetch = FakeFetch::failing(404);
-        let err = HttpStream::with_fetch("http://x/missing", fetch)
+        let err = HttpStream::with_fetch_headers("http://x/missing", fetch, Vec::new())
             .map(|_| ())
             .unwrap_err();
         assert!(err.to_string().contains("404"), "{err}");
@@ -609,7 +753,8 @@ mod tests {
     #[test]
     fn seek_past_eof_reads_zero() {
         let fetch = FakeFetch::ranged(data());
-        let mut stream = HttpStream::with_fetch("http://x/media", fetch).unwrap();
+        let mut stream =
+            HttpStream::with_fetch_headers("http://x/media", fetch, Vec::new()).unwrap();
         stream.seek(SeekFrom::Start(5000)).unwrap();
         let mut buf = [0u8; 8];
         assert_eq!(stream.read(&mut buf).unwrap(), 0);
