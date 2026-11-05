@@ -125,10 +125,70 @@ async function decodeImage(src: string): Promise<ImageBitmap | HTMLImageElement>
 export class BmFont {
   readonly spec: BmFontSpec;
   private img: ImageBitmap | HTMLImageElement;
+  /** Lazily sampled glyph colour, used by the HTML fallback for missing glyphs. */
+  private sampledColor: string | null = null;
 
   constructor(img: ImageBitmap | HTMLImageElement, spec: BmFontSpec) {
     this.img = img;
     this.spec = spec;
+  }
+
+  /**
+   * The strip's glyph colour, sampled from the `a` cell (the classic font's
+   * cells are a single colour on black). Used when the strip cannot render a
+   * string — e.g. Cyrillic text — so the HTML fallback keeps the skin's
+   * colour instead of the generic green.
+   */
+  fallbackColor(): string {
+    if (this.sampledColor != null) return this.sampledColor;
+    this.sampledColor = "#c8c8c8";
+    try {
+      const cell = this.cell("a") ?? this.cell("0");
+      if (!cell) return this.sampledColor;
+      const canvas = document.createElement("canvas");
+      canvas.width = cell.w;
+      canvas.height = cell.h;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return this.sampledColor;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(
+        this.img as CanvasImageSource,
+        cell.x,
+        cell.y,
+        cell.w,
+        cell.h,
+        0,
+        0,
+        cell.w,
+        cell.h,
+      );
+      const data = ctx.getImageData(0, 0, cell.w, cell.h).data;
+      const counts = new Map<number, number>();
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const a = data[i + 3];
+        // Ignore transparent and near-black glyph-well pixels.
+        if (a < 16 || r + g + b < 30) continue;
+        const key = (r << 16) | (g << 8) | b;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      let best = -1;
+      let bestCount = 0;
+      for (const [color, count] of counts) {
+        if (count > bestCount) {
+          best = color;
+          bestCount = count;
+        }
+      }
+      if (best >= 0) {
+        this.sampledColor = `#${best.toString(16).padStart(6, "0")}`;
+      }
+    } catch {
+      // Canvas unavailable or strip tainted: keep the neutral fallback.
+    }
+    return this.sampledColor ?? "#c8c8c8";
   }
 
   /**

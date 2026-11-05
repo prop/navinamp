@@ -298,12 +298,19 @@
 
   const style = $derived.by(() => {
     const p = o?.params ?? {};
+    // Classic bitmap skins: when a Cyrillic/CJK title cannot use the strip,
+    // keep the HTML fallback in the strip's own glyph colour instead of the
+    // generic green. Non-bitmap skins leave `font` null and keep CSS green.
     return [
       `left:${obj.x}px`,
       `top:${obj.y}px`,
       `width:${obj.w ?? 0}px`,
       `height:${obj.h ?? 0}px`,
-      p["color"] ? `color:${p["color"]}` : "",
+      p["color"]
+        ? `color:${p["color"]}`
+        : font
+          ? `color:${font.fallbackColor()}`
+          : "",
       p["font"] && !stripUrl ? `font-family:${p["font"]}` : "",
       p["fontsize"] ? `font-size:${p["fontsize"]}px` : "",
       p["bold"] === "1" ? "font-weight:bold" : "",
