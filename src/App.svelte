@@ -16,11 +16,29 @@
   import LibraryWindow from "./windows/LibraryWindow.svelte";
   import PlayerWindow from "./windows/PlayerWindow.svelte";
   import PlaylistWindow from "./windows/PlaylistWindow.svelte";
-  import { initWindowBus } from "./lib/window/bus.svelte";
+  import { cycleUiScale, initWindowBus } from "./lib/window/bus.svelte";
   import { LABEL } from "./lib/window/identity";
 
   initWindowBus();
+
+  /** Alt+S cycles the global UI scale from every window. */
+  function onKeydown(e: KeyboardEvent): void {
+    if (e.repeat) return;
+    // Don't rescale mid-tour/modal: the spotlight geometry would move.
+    if (document.querySelector('[aria-modal="true"]') != null) return;
+    if (
+      e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      (e.code === "KeyS" || e.key === "s" || e.key === "S")
+    ) {
+      e.preventDefault();
+      cycleUiScale();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 {#if LABEL === "playlist"}
   <PlaylistWindow />

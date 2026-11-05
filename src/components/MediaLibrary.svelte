@@ -114,6 +114,8 @@
   import type { QueueItemMeta } from "../lib/player/queue.svelte";
 
   interface Props {
+    /** Global UI scale of the containing window (row context menus only). */
+    scale?: number;
     /** Append tracks to the play queue. */
     onenqueue: (metas: QueueItemMeta[]) => void;
     /** Append tracks and start playing the first of them. */
@@ -123,7 +125,7 @@
     onlog: (line: string) => void;
   }
 
-  let { onenqueue, onplaynow, onreplace, onlog }: Props = $props();
+  let { scale = 1, onenqueue, onplaynow, onreplace, onlog }: Props = $props();
 
   // Must match the .trow height for content-visibility sizing.
   const ROW_H = 20;
@@ -2927,6 +2929,7 @@
       x={rowMenu.x}
       y={rowMenu.y}
       items={rowMenuItems}
+      {scale}
       onselect={rowMenuSelect}
       onclose={() => (rowMenu = null)} />
   {/if}

@@ -46,6 +46,7 @@
     publishSkinTheme,
     setMediaCommandExecutor,
     sizeWindowTo,
+    uiScale,
     windowIsVisible,
     windowSetVisible,
     windowToggleLayout,
@@ -361,7 +362,8 @@
 
   let skin = $state<SkinPayload | null>(null);
   let skinError = $state<string | null>(null);
-  let scale = $state(1); // Alt+S toggles 1×/2× (no room for UI buttons here)
+  // Global UI scale (DEV tab / Alt+S); all windows share it.
+  const scale = $derived(uiScale.value);
   let skinSeq = 0;
 
   async function reloadSkin(): Promise<void> {
@@ -415,9 +417,9 @@
     skin && playerLayout ? dragRects(skin.skin, playerLayout) : [],
   );
 
-  // Size the OS window to the layout rect × scale. Fires on skin load, on
-  // shade toggles (windows-changed flips layoutMode → re-resolve → new rect)
-  // and on the Alt+S scale toggle.
+  // Size the OS window to the layout rect × global scale. Fires on skin
+  // load, on shade toggles (windows-changed flips layoutMode → re-resolve →
+  // new rect) and whenever the DEV tab / Alt+S changes the global scale.
   $effect(() => {
     const l = playerLayout;
     if (!l) return;
@@ -430,13 +432,11 @@
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey) return;
-      if (e.key === "s" || e.key === "S") {
-        e.preventDefault();
-        scale = scale === 1 ? 2 : 1;
-      } else if (e.key === "l" || e.key === "L") {
+      if (e.key === "l" || e.key === "L") {
         // Universal library opener: classic .wsz skins have no LIBRARY
         // button (Winamp 2 predates the media library), so the shortcut is
-        // the fallback for every skin.
+        // the fallback for every skin. (Alt+S lives in App so every window
+        // can cycle the global scale.)
         e.preventDefault();
         windowSetVisible("library", !windowIsVisible("library")).catch(warnIpc);
       }

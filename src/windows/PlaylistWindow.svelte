@@ -40,6 +40,7 @@
     queueSnapshot,
     sizeWindowTo,
     skinTheme,
+    uiScale,
     windowSetVisible,
     windowToggleLayout,
   } from "../lib/window/bus.svelte";
@@ -93,7 +94,8 @@
   // ── skin loading (same persisted pick as the player/EQ) ─────────────────
 
   let skin = $state<SkinPayload | null>(null);
-  let scale = $state(1); // Alt+S toggles 1×/2×, like the player/EQ
+  // Global UI scale (DEV tab / Alt+S); all windows share it.
+  const scale = $derived(uiScale.value);
   let skinSeq = 0;
 
   async function reloadSkin(): Promise<void> {
@@ -117,17 +119,6 @@
     return () => {
       void unlisten.then((f) => f());
     };
-  });
-
-  $effect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === "s" || e.key === "S")) {
-        e.preventDefault();
-        scale = scale === 1 ? 2 : 1;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   });
 
   // The `playlist` container must exist explicitly: resolveLayout alone falls
