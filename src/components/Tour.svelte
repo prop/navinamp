@@ -6,6 +6,7 @@
    */
   import { onMount, tick } from "svelte";
   import type { Tour } from "../lib/tours/registry";
+  import { registerEscape } from "../lib/window/escape";
   import AiSetupWizard from "./AiSetupWizard.svelte";
   import AiTourDemo from "./AiTourDemo.svelte";
 
@@ -66,14 +67,19 @@
     const onResize = () => void measure();
     window.addEventListener("resize", onResize);
     window.addEventListener("scroll", onResize, true);
+    // Escape is owned by the shared handler; leave it alone while a tour
+    // input has focus so typing a prompt cannot dismiss the tour.
+    const unregisterEscape = registerEscape(() => {
+      const active = document.activeElement as HTMLElement | null;
+      const editing =
+        active?.closest("input, textarea, select, [contenteditable='true']") != null;
+      if (!editing) onclose();
+    });
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const editing =
         target?.closest("input, textarea, select, [contenteditable='true']") != null;
-      if (!editing && event.key === "Escape") {
-        event.preventDefault();
-        onclose();
-      } else if (!editing && event.key === "ArrowRight" && !isPanel && !isLast) {
+      if (!editing && event.key === "ArrowRight" && !isPanel && !isLast) {
         event.preventDefault();
         next();
       } else if (!editing && event.key === "ArrowLeft" && index > 0) {
@@ -83,6 +89,7 @@
     };
     window.addEventListener("keydown", onKey);
     return () => {
+      unregisterEscape();
       window.removeEventListener("resize", onResize);
       window.removeEventListener("scroll", onResize, true);
       window.removeEventListener("keydown", onKey);

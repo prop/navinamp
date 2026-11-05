@@ -16,6 +16,7 @@
    * crash.
    */
   import { friendlyIpcError } from "../lib/library/ipc";
+  import { registerEscape } from "../lib/window/escape";
   import {
     navidromeConnect,
     navidromeLibraries,
@@ -42,6 +43,8 @@
   }
 
   let { onclose, onchanged, onlog }: Props = $props();
+
+  $effect(() => registerEscape(onclose));
 
   let status = $state.raw<NavidromeStatus | null>(null);
   let statusError = $state<string | null>(null);
@@ -394,7 +397,12 @@
                   bind:value={renameValue}
                   onkeydown={(e) => {
                     if (e.key === "Enter") void applyRename();
-                    if (e.key === "Escape") renamingId = null;
+                    if (e.key === "Escape") {
+                      // Cancel the rename, not the whole settings dialog.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      renamingId = null;
+                    }
                   }} />
                 <div class="pactions">
                   <button onclick={() => void applyRename()}>SAVE</button>

@@ -10,6 +10,7 @@
    * with the unsaved draft so endpoint/model/key mistakes surface here.
    */
   import { friendlyIpcError } from "../lib/library/ipc";
+  import { registerEscape } from "../lib/window/escape";
   import {
     AI_DEFAULTS,
     AI_PRESETS,
@@ -30,6 +31,8 @@
   }
 
   let { onclose, onchanged }: Props = $props();
+
+  $effect(() => registerEscape(onclose));
 
   let config = $state<AiConfig>({ ...AI_DEFAULTS });
   let loading = $state(true);

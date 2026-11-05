@@ -27,6 +27,8 @@
    * Items are data-driven; a `rating` item renders a 5-star picker and emits
    * `rate:<n>` (or `rate:0` when the current star is clicked again).
    */
+  import { registerEscape } from "../lib/window/escape";
+
   interface Props {
     x: number;
     y: number;
@@ -63,12 +65,7 @@
     const onDown = (e: PointerEvent) => {
       if (el && e.target instanceof Node && !el.contains(e.target)) onclose();
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onclose();
-      }
-    };
+    const unregisterEscape = registerEscape(onclose);
     const dismiss = () => onclose();
     // Scrolling the menu itself must not dismiss it. Only a scroll outside
     // (the playlist list underneath) invalidates the anchor position.
@@ -77,13 +74,12 @@
       onclose();
     };
     window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("keydown", onKey);
     window.addEventListener("resize", dismiss);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("blur", dismiss);
     return () => {
+      unregisterEscape();
       window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", dismiss);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("blur", dismiss);
