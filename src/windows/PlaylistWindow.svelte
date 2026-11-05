@@ -137,9 +137,14 @@
   );
 
   /** Static sample rows/ghost totals in the fallback skin are placeholders. */
+  const PLACEHOLDERS = new Set([
+    "playlist.row.divider",
+    "playlist.row.selected",
+    "playlist.row.current",
+    "playlist.totals.bg",
+  ]);
   function isPlaceholder(o: ResolvedObject): boolean {
-    const id = o.object.id ?? "";
-    return id.startsWith("playlist.row.") || id === "playlist.totals.bg";
+    return o.object.id != null && PLACEHOLDERS.has(o.object.id);
   }
 
   const skinLayout = $derived.by((): ResolvedLayout | null => {
