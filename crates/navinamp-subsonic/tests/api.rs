@@ -113,7 +113,7 @@ fn md5_hex(input: &str) -> String {
 
 async fn connected_client(server: &MockServer) -> SubsonicClient {
     mock_endpoint(server, "ping", ok_response(json!({}))).await;
-    SubsonicClient::connect(&server.uri(), USERNAME, PASSWORD)
+    SubsonicClient::connect(&server.uri(), USERNAME, PASSWORD, false)
         .await
         .expect("connect against mock")
 }
@@ -167,7 +167,7 @@ async fn failed_body_code_40_maps_to_auth() {
     )
     .await;
 
-    let error = SubsonicClient::connect(&server.uri(), USERNAME, "wrong")
+    let error = SubsonicClient::connect(&server.uri(), USERNAME, "wrong", false)
         .await
         .expect_err("code 40 must fail connect");
     assert!(matches!(error, SubsonicError::Auth), "got: {error:?}");
@@ -183,7 +183,7 @@ async fn failed_body_other_codes_map_to_server() {
     )
     .await;
 
-    let error = SubsonicClient::connect(&server.uri(), USERNAME, PASSWORD)
+    let error = SubsonicClient::connect(&server.uri(), USERNAME, PASSWORD, false)
         .await
         .expect_err("status failed must fail connect");
     assert!(
@@ -775,7 +775,7 @@ async fn connect_tolerates_base_url_variants_against_a_real_server() {
         format!("{}/rest", server.uri()),  // rest already present
         format!("{}/rest/", server.uri()), // rest + slash
     ] {
-        let client = SubsonicClient::connect(&base, USERNAME, PASSWORD)
+        let client = SubsonicClient::connect(&base, USERNAME, PASSWORD, false)
             .await
             .unwrap_or_else(|e| panic!("base {base}: {e}"));
         assert_eq!(client.server_version(), Some("0.53.0"));
