@@ -25,6 +25,7 @@ use navinamp_audio::{
     TrackSource, UpcomingTrack, eq_presets as eq_preset_table,
 };
 
+use crate::navidrome::{NavidromeState, insecure_tls_for_url};
 use crate::streams::StreamHeaders;
 
 /// Name of the Tauri event engine events are forwarded to.
@@ -365,16 +366,18 @@ fn eq_mutate(state: &Audio, f: impl FnOnce(&EngineHandle)) -> Result<(), String>
 /// remote streams (Navidrome, direct playlist URLs, resolved YouTube audio),
 /// everything else is a local file. Resolver-provided headers (yt-dlp) travel
 /// through the process-wide registry so the IPC signature stays a plain string.
-fn track_source(path: String, headers: &StreamHeaders) -> TrackSource {
+fn track_source(path: String, headers: &StreamHeaders, insecure_tls: bool) -> TrackSource {
     if path.starts_with("http://") || path.starts_with("https://") {
         let extra = headers.get(&path);
-        if extra.is_empty() {
-            TrackSource::Remote { url: path }
-        } else {
+        if !extra.is_empty() {
             TrackSource::RemoteWithHeaders {
                 url: path,
                 headers: extra,
             }
+        } else if insecure_tls {
+            TrackSource::RemoteInsecure { url: path }
+        } else {
+            TrackSource::Remote { url: path }
         }
     } else {
         TrackSource::File(path.into())
@@ -395,28 +398,34 @@ pub struct UpcomingInput {
 pub fn audio_play(
     app: AppHandle,
     state: State<'_, Audio>,
+    nav: State<'_, NavidromeState>,
     headers: State<'_, StreamHeaders>,
     path: String,
     key: Option<String>,
 ) -> Result<(), String> {
     ensure_engine(&app, &state)?;
+    let insecure_tls = insecure_tls_for_url(&nav, &path);
     match key {
         Some(key) => send_if_running(&state, || Command::PlayKeyed {
             key,
-            source: track_source(path, &headers),
+            source: track_source(path, &headers, insecure_tls),
         }),
-        None => send_if_running(&state, || Command::Play(track_source(path, &headers))),
+        None => send_if_running(&state, || {
+            Command::Play(track_source(path, &headers, insecure_tls))
+        }),
     }
 }
 
 #[tauri::command]
 pub fn audio_enqueue(
     state: State<'_, Audio>,
+    nav: State<'_, NavidromeState>,
     headers: State<'_, StreamHeaders>,
     path: String,
 ) -> Result<(), String> {
+    let insecure_tls = insecure_tls_for_url(&nav, &path);
     send_if_running(&state, || {
-        Command::EnqueueNext(track_source(path, &headers))
+        Command::EnqueueNext(track_source(path, &headers, insecure_tls))
     })
 }
 
@@ -425,6 +434,7 @@ pub fn audio_enqueue(
 #[tauri::command]
 pub fn audio_set_upcoming(
     state: State<'_, Audio>,
+    nav: State<'_, NavidromeState>,
     headers: State<'_, StreamHeaders>,
     tracks: Vec<UpcomingInput>,
 ) -> Result<(), String> {
@@ -432,9 +442,12 @@ pub fn audio_set_upcoming(
         Command::SetUpcoming(
             tracks
                 .into_iter()
-                .map(|track| UpcomingTrack {
-                    key: track.key,
-                    source: track_source(track.path, &headers),
+                .map(|track| {
+                    let insecure_tls = insecure_tls_for_url(&nav, &track.path);
+                    UpcomingTrack {
+                        key: track.key,
+                        source: track_source(track.path, &headers, insecure_tls),
+                    }
                 })
                 .collect(),
         )
@@ -701,7 +714,7 @@ mod tests {
             "https://media.example/a".into(),
             vec![("User-Agent".into(), "Test UA".into())],
         );
-        match track_source("https://media.example/a".into(), &registry) {
+        match track_source("https://media.example/a".into(), &registry, false) {
             TrackSource::RemoteWithHeaders { url, headers } => {
                 assert_eq!(url, "https://media.example/a");
                 assert_eq!(headers, vec![("User-Agent".into(), "Test UA".into())]);
@@ -709,7 +722,26 @@ mod tests {
             other => panic!("expected header-carrying source, got {other:?}"),
         }
         assert!(matches!(
-            track_source("https://media.example/b".into(), &registry),
+            track_source("https://media.example/b".into(), &registry, false),
+            TrackSource::Remote { .. }
+        ));
+    }
+
+    #[test]
+    fn insecure_flag_selects_the_remote_insecure_variant() {
+        let registry = StreamHeaders::default();
+        match track_source("https://self-signed.example/stream".into(), &registry, true) {
+            TrackSource::RemoteInsecure { url } => {
+                assert_eq!(url, "https://self-signed.example/stream");
+            }
+            other => panic!("expected insecure remote source, got {other:?}"),
+        }
+        assert!(matches!(
+            track_source(
+                "https://self-signed.example/stream".into(),
+                &registry,
+                false
+            ),
             TrackSource::Remote { .. }
         ));
     }

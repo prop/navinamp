@@ -572,6 +572,29 @@ pub(crate) fn profile_names(state: &NavidromeState) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether `url` belongs to a server profile that opted into accepting an
+/// untrusted TLS certificate. The audio engine uses this to select
+/// `TrackSource::RemoteInsecure` for Navidrome streams only; ordinary
+/// remote URLs keep normal certificate verification.
+pub(crate) fn insecure_tls_for_url(state: &NavidromeState, url: &str) -> bool {
+    let Ok(target) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let guard = state.inner.lock().unwrap();
+    guard.config.profiles.iter().any(|profile| {
+        profile.insecure_tls
+            && reqwest::Url::parse(&profile.url)
+                .map(|base| same_origin(&base, &target))
+                .unwrap_or(false)
+    })
+}
+
+fn same_origin(a: &reqwest::Url, b: &reqwest::Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
 /// Saved servers (in creation order) with the active one flagged.
 #[tauri::command]
 pub fn navidrome_profiles(state: State<'_, NavidromeState>) -> Vec<ProfileSummary> {
@@ -2195,5 +2218,38 @@ mod tests {
 
         // No stored fingerprint = new album.
         assert!(!album_matches(None, &summary, &known));
+    }
+
+    #[test]
+    fn insecure_tls_matches_only_opted_in_profile_origins() {
+        let state = NavidromeState::default();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.config.profiles.push(StoredProfile {
+                id: "p1".into(),
+                url: "https://music.example:4533/".into(),
+                insecure_tls: true,
+                ..StoredProfile::default()
+            });
+            inner.config.profiles.push(StoredProfile {
+                id: "p2".into(),
+                url: "https://secure.example:4533".into(),
+                insecure_tls: false,
+                ..StoredProfile::default()
+            });
+        }
+        assert!(insecure_tls_for_url(
+            &state,
+            "https://music.example:4533/rest/stream.view?id=t1"
+        ));
+        assert!(!insecure_tls_for_url(
+            &state,
+            "https://music.example:4534/rest/stream.view?id=t1"
+        ));
+        assert!(!insecure_tls_for_url(
+            &state,
+            "https://secure.example:4533/rest/stream.view?id=t1"
+        ));
+        assert!(!insecure_tls_for_url(&state, "not a url"));
     }
 }
