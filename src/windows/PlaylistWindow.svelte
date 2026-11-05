@@ -157,7 +157,12 @@
 
   {#if mode === "normal"}
     <div class="qbar mono">
-      <span class="pos" title={queueTotal}
+      <span
+        class="pos"
+        title={queueTotal}
+        aria-label={currentIndex == null
+          ? `queue empty; ${queueTotal}`
+          : `track ${currentIndex + 1} of ${items.length}; ${queueTotal}`}
         >{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span
       >
       <button class:on={shuffle} onclick={() => queueIntent({ type: "toggleShuffle" })}>shuffle</button>
