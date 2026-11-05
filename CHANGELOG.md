@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.13.0](https://github.com/prop/navinamp/compare/v0.12.0...v0.13.0) (2026-11-05)
+
+
+### Features
+
+* **navidrome:** per-server self-signed TLS certificate support ([92a3e11](https://github.com/prop/navinamp/commit/92a3e11f8924af7baf3963bfa183482d5e76b7e3))
+* **navidrome:** per-server self-signed TLS certificate support ([a3f4780](https://github.com/prop/navinamp/commit/a3f4780f17ae1ed4ce66e980a4ebb047aa0df863))
+* **playlist:** add URL streams and opt-in YouTube audio ([ac93c0c](https://github.com/prop/navinamp/commit/ac93c0c7dad00d8963d868c5bbe3c653c599cd0c))
+* **playlist:** add URL streams and opt-in YouTube audio ([56561ba](https://github.com/prop/navinamp/commit/56561bac3d1554370da964ae39a28ff91296d265))
+* **search:** add embedding-based semantic track matching ([34958df](https://github.com/prop/navinamp/commit/34958df783bd3ab99c38fd032d3f492cc9cf8448))
+* **search:** add embedding-based semantic track matching ([50df8a2](https://github.com/prop/navinamp/commit/50df8a27ba7cb251514096671f2c86ae267a24b7))
+
+
+### Bug Fixes
+
+* **audio:** harden URL-stream redirects and title fallback ([1dc7c5f](https://github.com/prop/navinamp/commit/1dc7c5ffb646dc36fccd9b3966d4fd565548f119))
+* **eq:** make the classic close button clickable ([3f57178](https://github.com/prop/navinamp/commit/3f57178b7f93e5ee876088542272098fcede4452))
+* **eq:** make the classic close button clickable ([2c7b41a](https://github.com/prop/navinamp/commit/2c7b41a5bf90e93c380fe3ff00807e0fd4c6045c))
+* **navidrome:** review follow-ups — scrub whole chain, hydrate TLS flag ([d608a61](https://github.com/prop/navinamp/commit/d608a61c7244e59336fb591539285409a4e3e6fa))
+* **playlist:** keep the URL dialog compact for direct streams ([b065622](https://github.com/prop/navinamp/commit/b065622b36352379a96edce9a4e2a82c8b33378f))
+* **semantic:** keep index progress accounting accurate ([d2d3526](https://github.com/prop/navinamp/commit/d2d3526fb34f5c11b6a0763569fb2a3b98b84aa5))
+
 ## [0.12.0](https://github.com/prop/navinamp/compare/v0.11.0...v0.12.0) (2026-11-04)
 
 
