@@ -1105,6 +1105,7 @@ fn open_source(source: &TrackSource) -> Result<PcmSource, AudioError> {
     match source {
         TrackSource::File(path) => PcmSource::open(path),
         TrackSource::Remote { url } => PcmSource::open_remote(url),
+        TrackSource::RemoteInsecure { url } => PcmSource::open_remote_insecure(url),
         TrackSource::RemoteWithHeaders { url, headers } => {
             PcmSource::open_remote_with_headers(url, headers)
         }
