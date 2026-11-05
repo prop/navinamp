@@ -112,6 +112,11 @@ fn blob_to_vector(blob: &[u8]) -> Option<Vec<f32>> {
 
 impl Library {
     /// Current index coverage for `model`.
+    ///
+    /// O(library size): the metadata hash is recomputed on every call instead
+    /// of being maintained by every write path. That keeps tag-change
+    /// detection migration-free at this scale; if libraries grow past ~100k
+    /// tracks, move the hash onto `tracks` and turn this into a join.
     pub fn embedding_status(&self, model: &str) -> Result<EmbeddingStatus> {
         let total = self
             .conn
@@ -169,6 +174,9 @@ impl Library {
 
     /// Tracks that need embedding for `model`, in library order. `limit`
     /// bounds one indexing pass; `None` means the whole stale set.
+    ///
+    /// Like [`Self::embedding_status`], this hashes every track's metadata on
+    /// read; it is deliberately not called on a timer.
     pub fn embedding_jobs(&self, model: &str, limit: Option<u32>) -> Result<Vec<EmbeddingJob>> {
         let limit = limit.unwrap_or(MAX_JOBS).min(MAX_JOBS) as usize;
         if limit == 0 {

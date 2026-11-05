@@ -112,6 +112,8 @@ fn not_configured(config: &AiConfig) -> String {
     status_message(config).unwrap_or_else(|| "semantic search is not configured".into())
 }
 
+/// Coverage/setup snapshot. The library hash pass is O(tracks); callers use
+/// this on mode entry, config changes, scan completion and sync completion.
 #[tauri::command]
 pub fn semantic_status(
     app: AppHandle,
@@ -155,6 +157,9 @@ pub async fn semantic_index(
     if state.indexing.swap(true, Ordering::SeqCst) {
         return Err("a semantic index build is already running".into());
     }
+    // No explicit cancel command: dropping the command future (window close)
+    // stops the loop; completed batches are committed, so a later INDEX
+    // resumes from the stale set.
     let _guard = IndexGuard(Arc::clone(&state.indexing));
 
     let model = config.embedding_model.trim().to_owned();
@@ -167,7 +172,7 @@ pub async fn semantic_index(
     let jobs = library
         .embedding_jobs(&model, None)
         .map_err(|e| e.to_string())?;
-    let total = jobs.len() as u64;
+    let mut total = jobs.len() as u64;
     if total == 0 {
         return Ok(SemanticIndexReport {
             model,
@@ -193,6 +198,11 @@ pub async fn semantic_index(
         let written = library
             .embedding_upsert(&model, &rows)
             .map_err(|e| e.to_string())?;
+        // A scan may delete a queued track mid-pass; the upsert skips it via
+        // the EXISTS guard. Shrink the progress denominator too, so the bar
+        // can actually reach 100%.
+        let skipped = chunk.len().saturating_sub(written);
+        total = total.saturating_sub(skipped as u64);
         embedded += written as u64;
         let _ = app.emit(
             PROGRESS_EVENT,
