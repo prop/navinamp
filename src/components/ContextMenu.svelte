@@ -35,19 +35,26 @@
     items: ContextMenuItem[];
     /** Optional track details (artist, album, quality, …) above the actions. */
     info?: ContextMenuInfoRow[];
+    /**
+     * Scale of the containing skin overlay. The menu is usually fixed to the
+     * viewport, but inside a CSS-transformed overlay it is positioned in the
+     * overlay's local pixels; cancel both the position and the size scale.
+     */
+    scale?: number;
     onselect: (id: string) => void;
     onclose: () => void;
   }
 
-  let { x, y, items, info = [], onselect, onclose }: Props = $props();
+  let { x, y, items, info = [], scale = 1, onselect, onclose }: Props = $props();
 
   let el = $state<HTMLDivElement | null>(null);
-  // Initial placement; the effect below clamps it after measuring. The
-  // component remounts per open, so capturing x/y once is intended.
+  // Initial placement in the containing block's local pixels; the effect
+  // below clamps it after measuring. The component remounts per open, so
+  // capturing x/y once is intended.
   // svelte-ignore state_referenced_locally
-  let left = $state(x);
+  let left = $state(x / scale);
   // svelte-ignore state_referenced_locally
-  let top = $state(y);
+  let top = $state(y / scale);
 
   // Clamp after measuring (the menu width/height depend on content; the
   // details block can arrive asynchronously after the metadata lookup).
@@ -57,8 +64,10 @@
     if (!node) return;
     const w = node.offsetWidth;
     const h = node.offsetHeight;
-    left = Math.max(4, Math.min(x, window.innerWidth - w - 4));
-    top = Math.max(4, Math.min(y, window.innerHeight - h - 4));
+    const viewW = window.innerWidth / scale;
+    const viewH = window.innerHeight / scale;
+    left = Math.max(4, Math.min(x / scale, viewW - w - 4));
+    top = Math.max(4, Math.min(y / scale, viewH - h - 4));
   });
 
   $effect(() => {
@@ -87,7 +96,11 @@
   });
 </script>
 
-<div class="menu" bind:this={el} style="left:{left}px; top:{top}px;" role="menu">
+<div
+  class="menu"
+  bind:this={el}
+  style="left:{left}px; top:{top}px; max-width:calc(100vw / {scale} - 8px); max-height:calc(100vh / {scale} - 8px);"
+  role="menu">
   {#if info.length > 0}
     <div class="info" role="group" aria-label="track details">
       {#each info as row, i (i)}

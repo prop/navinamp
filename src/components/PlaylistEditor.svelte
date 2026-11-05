@@ -584,6 +584,7 @@
     y={menu.y}
     items={menuItems}
     info={menuDetails}
+    {scale}
     onselect={menuSelect}
     onclose={() => (menu = null)} />
 {/if}

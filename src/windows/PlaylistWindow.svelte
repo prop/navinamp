@@ -536,7 +536,6 @@
   .list-slot {
     position: absolute;
     pointer-events: auto;
-    overflow: hidden;
   }
 
   .skin-status {
