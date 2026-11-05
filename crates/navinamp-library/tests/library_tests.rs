@@ -434,6 +434,25 @@ fn tracks_filtered_orders_by_file_path_first() {
 }
 
 #[test]
+fn tracks_filtered_sorts_unpadded_track_numbers_naturally() {
+    let scratch = Scratch::new("natural-order");
+    let music = scratch.dir.join("music");
+    for name in ["1.wav", "2.wav", "10.wav"] {
+        common::write_file(&music.join(name), &common::wav_bytes(0.1), 1_700_000_000);
+    }
+    let library = Library::open(scratch.db()).unwrap();
+    library.scan_roots(&[music], |_| {}).unwrap();
+
+    let names: Vec<String> = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|track| track.path.rsplit('/').next().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, vec!["1.wav", "2.wav", "10.wav"]);
+}
+
+#[test]
 fn progress_reports_discovery_and_per_file_counts() {
     let (scratch, library) = scanned_library("progress-source");
     // now scan a second root to watch the callbacks

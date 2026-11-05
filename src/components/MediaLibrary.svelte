@@ -821,7 +821,9 @@
       });
       if (seq !== pageSeq) return;
       pagedRows = reset ? rows : [...pagedRows, ...rows];
-      pageOffset += PAGE_SIZE;
+      // Advance by what the server actually returned: a short final page
+      // must not make the next offset skip past the end.
+      pageOffset += rows.length;
       pageError = null;
     } catch (e) {
       if (seq !== pageSeq) return;
