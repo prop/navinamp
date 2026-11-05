@@ -57,6 +57,8 @@ export interface NavidromeProfile {
   active: boolean;
   /** Unix **seconds** of this server's last completed sync, if any. */
   syncedAt: number | null;
+  /** Accepts self-signed / untrusted TLS certificates (per-server opt-in). */
+  insecureTls: boolean;
 }
 
 /** One music library (music folder) on the server. */

@@ -387,6 +387,8 @@ pub struct ProfileSummary {
     pub user: String,
     pub active: bool,
     pub synced_at: Option<i64>,
+    /// Accepts self-signed / untrusted TLS certificates (per-server opt-in).
+    pub insecure_tls: bool,
 }
 
 /// Everything the UI needs to know about one completed sync.
@@ -587,6 +589,7 @@ pub fn navidrome_profiles(state: State<'_, NavidromeState>) -> Vec<ProfileSummar
             user: profile.user.clone(),
             active: active == Some(profile.id.as_str()),
             synced_at: profile.synced_at,
+            insecure_tls: profile.insecure_tls,
         })
         .collect()
 }
@@ -1863,12 +1866,18 @@ fn emit_progress(app: &AppHandle, scanned: u64, total: u64, server: &str, label:
 /// A connect/transport error with its cause chain appended: `reqwest` 0.13
 /// redacts the URL in transport errors and flattens TLS failures into a bare
 /// "error sending request", so an untrusted certificate would otherwise be
-/// invisible. URL runs are blanked as usual.
+/// invisible. Every chain entry is scrubbed — Subsonic's query-string
+/// credentials (`u`/`t`/`s`) ride inside URLs that reqwest reports from
+/// deeper in the chain, and only the head message is theirs to scrub.
 fn scrub_connect_error(e: &navinamp_subsonic::SubsonicError) -> String {
-    let mut msg = scrub_urls(&e.to_string());
-    let mut source = std::error::Error::source(e);
+    scrub_cause_chain(&e.to_string(), std::error::Error::source(e))
+}
+
+/// Head message plus its scrubbed cause chain (duplicate entries skipped).
+fn scrub_cause_chain(head: &str, mut source: Option<&(dyn std::error::Error + 'static)>) -> String {
+    let mut msg = scrub_urls(head);
     while let Some(cause) = source {
-        let text = cause.to_string();
+        let text = scrub_urls(&cause.to_string());
         if !msg.contains(&text) {
             msg.push_str(": ");
             msg.push_str(&text);
@@ -1931,6 +1940,54 @@ mod tests {
         // The ')' after a URL is its delimiter (reqwest's "for url (...)"),
         // not part of it — it survives.
         assert_eq!(scrub_urls("http://x and http://y)"), "<url> and <url>)");
+    }
+
+    /// Minimal error with a controllable message + cause chain.
+    #[derive(Debug)]
+    struct ChainError {
+        msg: String,
+        source: Option<Box<dyn std::error::Error + 'static>>,
+    }
+
+    impl std::fmt::Display for ChainError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.msg)
+        }
+    }
+
+    impl std::error::Error for ChainError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source.as_deref()
+        }
+    }
+
+    #[test]
+    fn connect_errors_scrub_urls_across_the_cause_chain() {
+        // The chain shape that hid the token: head carries no URL, the URL
+        // (with Subsonic's query-string credentials) rides one level down,
+        // and the TLS cause is below that.
+        let leaf = ChainError {
+            msg: "invalid peer certificate: UnknownIssuer".into(),
+            source: None,
+        };
+        let mid = ChainError {
+            msg: "error sending request for url (https://nd.example/rest/ping?u=me&t=abc123&s=def)"
+                .into(),
+            source: Some(Box::new(leaf)),
+        };
+        let head = ChainError {
+            msg: "client error (Connect)".into(),
+            source: Some(Box::new(mid)),
+        };
+
+        let scrubbed = scrub_cause_chain(&head.to_string(), Some(&head));
+        assert!(scrubbed.contains("client error (Connect)"), "{scrubbed}");
+        assert!(scrubbed.contains("(<url>)"), "{scrubbed}");
+        assert!(scrubbed.contains("invalid peer certificate"), "{scrubbed}");
+        assert!(
+            !scrubbed.contains("abc123") && !scrubbed.contains("u=me"),
+            "token must not survive anywhere in the chain: {scrubbed}"
+        );
     }
 
     #[test]

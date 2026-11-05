@@ -162,6 +162,13 @@
         : "updates this saved server and makes it active",
   );
 
+  // Hydrate the TLS checkbox from the matched profile: resetForm() clears it
+  // on unrelated actions, and without this a self-signed server's UPDATE
+  // flow would silently reconnect with certificate verification on.
+  $effect(() => {
+    if (formMatch) insecureTls = formMatch.insecureTls;
+  });
+
   async function connect(): Promise<void> {
     if (connecting) return;
     if (url.trim() === "" || user.trim() === "" || password === "") {
@@ -461,6 +468,10 @@
             <input type="checkbox" bind:checked={insecureTls} />
             allow self-signed certificates
           </label>
+          <div class="dim">
+            only for servers you control — skips certificate checks for this
+            server
+          </div>
           <div class="btnrow">
             <button class="primary" onclick={connect} disabled={connecting}>{formCta}</button>
           </div>
