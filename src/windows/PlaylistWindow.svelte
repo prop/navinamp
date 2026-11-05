@@ -59,6 +59,13 @@
   // pledit.txt colors of the loaded classic skin (classic-green default).
   const theme = $derived(skinTheme.value);
 
+  // The footer total was removed to keep the 275px action row unclipped;
+  // keep the same information on the position readout's tooltip.
+  const queueTotal = $derived.by(() => {
+    const secs = items.reduce((sum, item) => sum + (item.durationSecs ?? 0), 0);
+    return `${items.length} item${items.length === 1 ? "" : "s"}, ${formatTime(secs)}`;
+  });
+
   // ADD: insert the picked files right after the current track. The indexes
   // are computed from the snapshot and sent explicitly; the player applies
   // the intents in emission order, so the block lands contiguously. (A
@@ -150,7 +157,14 @@
 
   {#if mode === "normal"}
     <div class="qbar mono">
-      <span class="pos">{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span>
+      <span
+        class="pos"
+        title={queueTotal}
+        aria-label={currentIndex == null
+          ? `queue empty; ${queueTotal}`
+          : `track ${currentIndex + 1} of ${items.length}; ${queueTotal}`}
+        >{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span
+      >
       <button class:on={shuffle} onclick={() => queueIntent({ type: "toggleShuffle" })}>shuffle</button>
       <button class:on={repeat !== "off"} onclick={() => queueIntent({ type: "cycleRepeat" })}>
         repeat&nbsp;{repeat}
