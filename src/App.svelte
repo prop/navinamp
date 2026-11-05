@@ -27,8 +27,13 @@
     // Don't rescale mid-tour/modal: the spotlight geometry would move.
     if (document.querySelector('[aria-modal="true"]') != null) return;
     // Option+S types "ß" on macOS; keep text fields working normally.
-    const target = e.target as HTMLElement | null;
-    if (target?.closest("input, textarea, select, [contenteditable='true']") != null) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest("input, textarea, select, [contenteditable='true']") != null
+    ) {
+      return;
+    }
     if (
       e.altKey &&
       !e.ctrlKey &&
