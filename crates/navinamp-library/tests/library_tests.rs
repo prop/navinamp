@@ -420,6 +420,20 @@ fn tracks_filtered_by_artist_genre_and_paging() {
 }
 
 #[test]
+fn tracks_filtered_orders_by_file_path_first() {
+    let (_scratch, library) = scanned_library("path-order");
+    let paths: Vec<String> = library
+        .tracks_filtered(&TrackFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|track| track.path)
+        .collect();
+    let mut expected = paths.clone();
+    expected.sort_by_key(|path| path.to_lowercase());
+    assert_eq!(paths, expected);
+}
+
+#[test]
 fn progress_reports_discovery_and_per_file_counts() {
     let (scratch, library) = scanned_library("progress-source");
     // now scan a second root to watch the callbacks

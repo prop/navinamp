@@ -216,6 +216,10 @@ pub(super) fn album_tracks(conn: &Connection, album_key: &str) -> rusqlite::Resu
 
 /// Tracks matching an optional artist / album / genre / source combination,
 /// with limit + offset. `None` limit means unlimited (`LIMIT -1` in SQLite).
+///
+/// Ordered by the real file path first (`remote_path` for Navidrome rows,
+/// their filesystem path for local rows), then album/disc/track as fallbacks.
+/// This is also the order used by bulk ENQUEUE/PLAY ALL.
 pub(super) fn tracks_filtered(
     conn: &Connection,
     filter: &TrackFilter,
@@ -248,7 +252,15 @@ pub(super) fn tracks_filtered(
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
     }
-    sql.push_str(" ORDER BY album_key, disc_no, track_no, path LIMIT ? OFFSET ?");
+    // Path first: remote rows use the server-relative `remote_path` (the
+    // synthetic `navidrome://server/id` path would sort by random id), while
+    // local rows use their filesystem path. Album/disc/track remain as
+    // fallbacks for paths that do not encode the track order.
+    sql.push_str(
+        " ORDER BY COALESCE(NULLIF(remote_path, ''), path) COLLATE NOCASE,
+                   album_key, disc_no, track_no, path
+           LIMIT ? OFFSET ?",
+    );
     let limit: i64 = match filter.limit {
         Some(n) => i64::from(n),
         None => -1,

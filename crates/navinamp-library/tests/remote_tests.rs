@@ -458,6 +458,36 @@ fn remote_album_ids_group_tracks_for_quick_rescans() {
 }
 
 #[test]
+fn remote_tracks_filtered_orders_by_server_path_not_synthetic_id() {
+    let (_scratch, library) = db("remote-path-order");
+    let mut later = rt("t1", "Later album");
+    later.remote_path = Some("Z/Album/02 Later.mp3".into());
+    later.album = "Z".into();
+
+    let mut earlier = rt("t2", "Earlier album");
+    earlier.remote_path = Some("A/Album/01 Earlier.mp3".into());
+    earlier.album = "A".into();
+
+    library.sync_remote(S, vec![later, earlier]).unwrap();
+    let paths: Vec<String> = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap()
+        .into_iter()
+        .filter_map(|track| track.remote_path)
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "A/Album/01 Earlier.mp3".to_string(),
+            "Z/Album/02 Later.mp3".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn album_fingerprints_round_trip_and_prune() {
     let (_scratch, library) = db("remote-album-fingerprints");
     let first = RemoteAlbum {
