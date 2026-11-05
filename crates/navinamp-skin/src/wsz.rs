@@ -55,7 +55,7 @@
 //! | EQ curve graph | 86,17 113×19 | `eqmain.bmp` (0,294) |
 //! | EQ preamp slider | 21,38 14×63 | track `eqmain.bmp` (13,229); thumb (0,164)/(0,176) |
 //! | EQ band slider i (0–9) | 78+18·i,38 14×63 | track `eqmain.bmp` (13,229); thumb shared |
-//! | playlist tiles | 3×3 stretch grid | `pledit.bmp` |
+//! | playlist frame | 0,0 275×232 | `pledit.bmp`: 20px titlebar, 12/20px side rails, 38px bottom bar (`tile=x/y`); markers `pl.list`/`pl.totals`/`playlist.titlebar.zone`; hotspots over the baked buttons |
 //!
 //! `REGION.txt` (window click masks) is deliberately ignored — windows stay
 //! rectangular; see the README's limitations. Glyph *rendering* (`text.bmp`,
@@ -429,6 +429,47 @@ fn toggle(
         downimage: down,
         hoverimage: None,
         tooltip: Some(tooltip.to_owned()),
+        rect: at.rect(),
+        params,
+    })
+}
+
+/// Image-less click target. Classic skins bake the glyphs for the playlist
+/// titlebar/action bar into `pledit.bmp`; the hotspot only supplies the hit
+/// area and a semantic action, so `SkinButton` renders it transparent.
+fn hotspot(id: &str, action: &str, at: Place, tooltip: &str) -> GuiObject {
+    GuiObject::Button(Button {
+        id: Some(format!("wsz.{id}")),
+        action: Some(action.to_owned()),
+        image: None,
+        downimage: None,
+        hoverimage: None,
+        tooltip: Some(tooltip.to_owned()),
+        rect: at.rect(),
+        params: Params::new(),
+    })
+}
+
+/// Invisible geometry marker (no bitmap): the renderer reads the rect to
+/// place HTML content over the skin (playlist list body, totals readout,
+/// titlebar drag band).
+fn marker(id: &str, at: Place) -> GuiObject {
+    GuiObject::Layer(Layer {
+        id: Some(format!("wsz.{id}")),
+        image: None,
+        rect: at.rect(),
+        params: Params::new(),
+    })
+}
+
+/// A bitmap plane repeated along one axis (`tile=x|y|1`). Classic pledit
+/// frames are stretchable 3×3 grids: the center strip tiles horizontally and
+/// the side rails tile vertically.
+fn tiled_layer(id: &str, image: String, at: Place, axis: &str, mut params: Params) -> GuiObject {
+    params.insert("tile".to_owned(), axis.to_owned());
+    GuiObject::Layer(Layer {
+        id: Some(format!("wsz.{id}")),
+        image: Some(image),
         rect: at.rect(),
         params,
     })
@@ -1194,96 +1235,128 @@ fn eq_window_shade(out: &mut Builder, titlebar: Option<&str>) {
 
 // ---- playlist window --------------------------------------------------------
 
-/// Source rectangle inside pledit.bmp (x, y, w, h).
-type Tile = (u32, u32, u32, u32);
-/// Window rectangle; negative values anchor to the far edge, exactly like
-/// webamp-modern's pledit layout (`relatx`/`relatw`/… params below).
-type WinRect = (i32, i32, i32, i32);
-/// Extra relative-geometry params attached to a tile layer.
-type RelParams = &'static [(&'static str, &'static str)];
-
-/// Synthesizes the `playlist` container from pledit.bmp's stretchable tile
-/// grid. The list rows themselves are renderer-drawn using the pledit.txt
-/// colors carried in `Skin::params` (`pledit.color.*`); tile geometry uses
-/// the same `relatx`/`relatw`/… params a Wasabi skin would carry, which the
-/// renderer already interprets.
+/// Classic playlist geometry (275×232), cross-checked against Webamp:
+///
+/// - titlebar 0,0 275×20: 25px left corner, a repeating 25×20 tile, the
+///   100×20 "WINAMP PLAYLIST" title, 25px right corner (shade/close glyphs)
+/// - left rail 0,20 12×174; right rail 255,20 20×174 (beveled side art)
+/// - bottom bar 0,194 275×38: left 125 (ADD/REM/SEL/MISC baked in), right
+///   150 (mini transport + LED + LIST OPTS + scroll arrows)
+///
+/// The list rows are renderer-drawn HTML using pledit.txt's colors, so the
+/// container carries invisible markers for the list body/totals readout and
+/// transparent hotspots over the baked-in buttons and titlebar glyphs.
+/// No container is emitted when `pledit.bmp` is absent — the frontend then
+/// keeps its palette-themed fallback panel.
 fn playlist_window(out: &mut Builder) {
-    out.container("playlist", "Playlist Editor");
+    if find_file(out.archive, "pledit.bmp").is_none() {
+        out.missing("pledit.bmp", "playlist window");
+        return;
+    }
+
     let mut objects = Vec::new();
 
-    // The center tile is absent on purpose: the list body is a solid fill
-    // using pledit.txt's NormalBG, not a bitmap.
-    let tiles: [(&str, Tile, WinRect, RelParams); 8] = [
-        ("pl.tl", (0, 0, 25, 20), (0, 0, 25, 20), &[]),
-        (
+    // Titlebar (active row y=0; the inactive row y=21 is unused because the
+    // app does not track cross-window focus in the skin).
+    if let Some(image) = out.bitmap("pl.tl", "pledit.bmp", 0, 0, 25, 20) {
+        objects.push(layer("pl.tl", image, 0, 0, 25, 20));
+    }
+    if let Some(image) = out.bitmap("pl.tc", "pledit.bmp", 127, 0, 25, 20) {
+        objects.push(tiled_layer(
             "pl.tc",
-            (127, 0, 25, 20),
-            (25, 0, -50, 20),
-            &[("relatw", "1"), ("tile", "1")],
-        ),
-        (
-            "pl.tr",
-            (153, 0, 25, 20),
-            (-25, 0, 25, 20),
-            &[("relatx", "1")],
-        ),
-        (
+            image,
+            place(25, 0, 225, 20),
+            "x",
+            Params::new(),
+        ));
+    }
+    if let Some(image) = out.bitmap("pl.title", "pledit.bmp", 26, 0, 100, 20) {
+        objects.push(layer("pl.title", image, 87, 0, 100, 20));
+    }
+    if let Some(image) = out.bitmap("pl.tr", "pledit.bmp", 153, 0, 25, 20) {
+        objects.push(layer("pl.tr", image, 250, 0, 25, 20));
+    }
+
+    // Side rails (the list itself is the transparent 12..255 × 20..194 hole).
+    if let Some(image) = out.bitmap("pl.ml", "pledit.bmp", 0, 42, 12, 29) {
+        objects.push(tiled_layer(
             "pl.ml",
-            (0, 42, 25, 29),
-            (0, 20, 25, -58),
-            &[("relath", "1")],
-        ),
-        (
+            image,
+            place(0, 20, 12, 174),
+            "y",
+            Params::new(),
+        ));
+    }
+    if let Some(image) = out.bitmap("pl.mr", "pledit.bmp", 31, 42, 20, 29) {
+        objects.push(tiled_layer(
             "pl.mr",
-            (26, 42, 25, 29),
-            (-25, 20, 25, -58),
-            &[("relatx", "1"), ("relath", "1")],
-        ),
-        (
-            "pl.bl",
-            (0, 72, 125, 38),
-            (0, -38, 125, 38),
-            &[("relaty", "1")],
-        ),
-        (
-            "pl.bc",
-            (126, 72, 150, 38),
-            (125, -38, -275, 38),
-            &[("relaty", "1"), ("relatw", "1")],
-        ),
-        (
-            "pl.br",
-            (179, 0, 25, 38),
-            (-25, -38, 25, 38),
-            &[("relatx", "1"), ("relaty", "1")],
-        ),
-    ];
-    for (id, (tx, ty, tw, th), (x, y, w, h), rel) in tiles {
-        if let Some(image) = out.bitmap(id, "pledit.bmp", tx, ty, tw, th) {
-            let mut params = Params::new();
-            for (key, value) in rel {
-                params.insert((*key).to_owned(), (*value).to_owned());
-            }
-            objects.push(GuiObject::Layer(Layer {
-                id: Some(format!("wsz.{id}")),
-                image: Some(image),
-                rect: rect(x, y, w, h),
-                params,
-            }));
-        }
+            image,
+            place(255, 20, 20, 174),
+            "y",
+            Params::new(),
+        ));
     }
-    // Bottom-right corner block (vis + timer area of the classic playlist).
-    if let Some(image) = out.bitmap("pl.br.vis", "pledit.bmp", 205, 0, 75, 38) {
-        objects.push(GuiObject::Layer(Layer {
-            id: Some("wsz.pl.br.vis".to_owned()),
-            image: Some(image),
-            rect: rect(-100, -38, 75, 38),
-            params: [("relatx", "1"), ("relaty", "1")]
-                .into_iter()
-                .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                .collect(),
-        }));
+
+    // Bottom bar.
+    if let Some(image) = out.bitmap("pl.bl", "pledit.bmp", 0, 72, 125, 38) {
+        objects.push(layer("pl.bl", image, 0, 194, 125, 38));
     }
+    if let Some(image) = out.bitmap("pl.bc", "pledit.bmp", 126, 72, 150, 38) {
+        objects.push(layer("pl.bc", image, 125, 194, 150, 38));
+    }
+
+    // A 1×1 / nonstandard pledit.bmp yields zero frame pieces; keep the
+    // HTML fallback panel instead of an empty skinned window.
+    if objects.is_empty() {
+        return;
+    }
+
+    out.container("playlist", "Playlist Editor");
+
+    // Renderer slots (no bitmap): HTML list body, totals readout and the
+    // titlebar drag band.
+    objects.push(marker("pl.list", place(12, 20, 243, 174)));
+    objects.push(marker("pl.totals", place(126, 202, 68, 11)));
+    objects.push(marker("playlist.titlebar.zone", place(0, 0, WINDOW_W, 20)));
+
+    // Baked-in glyphs become real controls.
+    objects.push(hotspot(
+        "pl.shade",
+        "TOGGLE_SHADE",
+        place(254, 3, 9, 9),
+        "Window shade",
+    ));
+    objects.push(hotspot("pl.close", "CLOSE", place(264, 3, 9, 9), "Close"));
+    objects.push(hotspot(
+        "pl.add",
+        "PLAYLIST_ADD",
+        place(14, 202, 22, 18),
+        "Add media",
+    ));
+    objects.push(hotspot(
+        "pl.rem",
+        "PLAYLIST_REMOVE",
+        place(43, 202, 22, 18),
+        "Remove selected",
+    ));
+    objects.push(hotspot(
+        "pl.sel",
+        "PLAYLIST_SELECT",
+        place(72, 202, 22, 18),
+        "Select playing track",
+    ));
+    objects.push(hotspot(
+        "pl.misc",
+        "PLAYLIST_MISC",
+        place(101, 202, 22, 18),
+        "Playlist options",
+    ));
+    objects.push(hotspot(
+        "pl.listopts",
+        "PLAYLIST_LIST",
+        place(231, 202, 22, 18),
+        "Playlist options",
+    ));
 
     out.finish_layout("normal", WINDOW_W, PLAYLIST_H, objects);
 }
