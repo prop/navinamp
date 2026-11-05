@@ -64,7 +64,8 @@ pub struct YtdlpStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedStreamUrl {
-    /// Normalized URL stored in the queue.
+    /// Normalized URL stored in the queue (the parser may add a trailing
+    /// slash or otherwise canonicalize what the user pasted).
     pub url: String,
     /// True for a single YouTube video link (requires yt-dlp).
     pub youtube: bool,
@@ -220,7 +221,7 @@ pub(crate) fn classify_stream_url(raw: &str) -> Result<ParsedStreamUrl, String> 
     } else {
         url.path_segments()
             .and_then(|mut segments| segments.rfind(|s| !s.is_empty()))
-            .map(decode_component)
+            .map(|segment| decode_component(segment).trim().to_owned())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| display_host.clone())
     };
@@ -721,6 +722,12 @@ mod tests {
     fn host_fallback_title_and_www_trim() {
         let parsed = classify_stream_url("https://www.example.com/").expect("stream");
         assert_eq!(parsed.artist, "example.com");
+        assert_eq!(parsed.title, "example.com");
+    }
+
+    #[test]
+    fn whitespace_only_last_segment_falls_back_to_the_host() {
+        let parsed = classify_stream_url("https://example.com/%20").expect("stream");
         assert_eq!(parsed.title, "example.com");
     }
 

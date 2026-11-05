@@ -73,9 +73,12 @@ pub(crate) struct HttpResponse {
 /// mutex is uncontended).
 pub(crate) trait HttpFetch: Send + Sync {
     /// GET `url` requesting `Range: bytes=<range_start>-`. Redirects are
-    /// followed (bounded); the returned response is the final one. `headers`
-    /// carries extra request headers for resolved media URLs that require
-    /// them (yt-dlp's `http_headers`, e.g. a matching User-Agent/Referer).
+    /// followed manually (bounded) so the returned response is the final one
+    /// and resolver headers are re-applied per hop; cross-origin sensitive
+    /// headers (cookies, authorization, Referer, Origin) are stripped when the
+    /// host changes. `headers` carries extra request headers for resolved
+    /// media URLs that require them (yt-dlp's `http_headers`, e.g. a matching
+    /// User-Agent/Referer).
     fn get(
         &self,
         url: &str,
@@ -92,7 +95,11 @@ pub(crate) struct ReqwestFetch {
 impl ReqwestFetch {
     pub(crate) fn new() -> io::Result<Self> {
         let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            // Redirects are followed by `get` so it can strip resolver headers
+            // that must not cross an origin boundary (Referer/Origin, cookies,
+            // authorization). reqwest's built-in policy only removes the
+            // credential subset.
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(scrub_reqwest_error)?;
@@ -107,41 +114,86 @@ impl HttpFetch for ReqwestFetch {
         range_start: u64,
         headers: &[(String, String)],
     ) -> io::Result<HttpResponse> {
-        use reqwest::header::{HeaderName, HeaderValue};
+        use reqwest::header::{HeaderName, HeaderValue, LOCATION};
 
-        let mut request = self
-            .client
-            .get(url)
-            .header("Range", format!("bytes={range_start}-"));
-        for (name, value) in headers {
-            // Resolver-provided headers are best-effort: one malformed value
-            // must not poison the whole stream.
-            if let (Ok(name), Ok(value)) = (
-                HeaderName::from_bytes(name.as_bytes()),
-                HeaderValue::from_str(value),
-            ) {
-                request = request.header(name, value);
+        let mut current =
+            reqwest::Url::parse(url).map_err(|_| io::Error::other("invalid remote URL"))?;
+        let mut current_headers = headers.to_vec();
+        let mut hops = 0usize;
+        loop {
+            let mut request = self
+                .client
+                .get(current.clone())
+                .header("Range", format!("bytes={range_start}-"));
+            for (name, value) in &current_headers {
+                // Resolver-provided headers are best-effort: one malformed
+                // value must not poison the whole stream.
+                if let (Ok(name), Ok(value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(value),
+                ) {
+                    request = request.header(name, value);
+                }
             }
+            let resp = request.send().map_err(scrub_reqwest_error)?;
+            let status = resp.status().as_u16();
+            if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+                return Ok(response_from(resp));
+            }
+            if hops >= MAX_REDIRECTS {
+                return Err(io::Error::other("too many redirects"));
+            }
+            let location = resp
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| io::Error::other("redirect without Location"))?;
+            let next = current
+                .join(location)
+                .map_err(|_| io::Error::other("invalid redirect Location"))?;
+            if next.host_str() != current.host_str() {
+                strip_cross_origin_headers(&mut current_headers);
+            }
+            current = next;
+            hops += 1;
         }
-        let resp = request.send().map_err(scrub_reqwest_error)?;
-
-        let status = resp.status().as_u16();
-        let header = |name: &str| -> Option<String> {
-            resp.headers()
-                .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.trim().to_string())
-        };
-        let content_length = header("Content-Length").and_then(|v| v.parse().ok());
-        let content_range = header("Content-Range").and_then(|v| parse_content_range(&v));
-
-        Ok(HttpResponse {
-            status,
-            content_length,
-            content_range,
-            body: Box::new(resp),
-        })
     }
+}
+
+/// Decode a final response into the transport-neutral shape.
+fn response_from(resp: reqwest::blocking::Response) -> HttpResponse {
+    let status = resp.status().as_u16();
+    let header = |name: &str| -> Option<String> {
+        resp.headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.trim().to_owned())
+    };
+    let content_length = header("Content-Length").and_then(|value| value.parse().ok());
+    let content_range = header("Content-Range").and_then(|value| parse_content_range(&value));
+    HttpResponse {
+        status,
+        content_length,
+        content_range,
+        body: Box::new(resp),
+    }
+}
+
+/// Headers that must not follow a redirect to a different host. The cookie /
+/// authorization subset matches reqwest's default policy; Referer and Origin
+/// are added because they can disclose the resolver's source page.
+fn strip_cross_origin_headers(headers: &mut Vec<(String, String)>) {
+    headers.retain(|(name, _)| {
+        !matches!(
+            name.trim().to_ascii_lowercase().as_str(),
+            "authorization"
+                | "cookie"
+                | "proxy-authorization"
+                | "www-authenticate"
+                | "referer"
+                | "origin"
+        )
+    });
 }
 
 /// Parses `bytes <start>-<end>/<total>` (`*` total is rejected — we need a
@@ -633,6 +685,26 @@ mod tests {
                 "missing header in {headers:?}"
             );
         }
+    }
+
+    #[test]
+    fn cross_origin_redirect_headers_are_stripped() {
+        let mut headers = vec![
+            ("User-Agent".to_owned(), "Test UA".to_owned()),
+            ("Referer".to_owned(), "https://www.youtube.com/".to_owned()),
+            ("Origin".to_owned(), "https://www.youtube.com".to_owned()),
+            ("Authorization".to_owned(), "Bearer secret".to_owned()),
+            ("Cookie".to_owned(), "session=x".to_owned()),
+            ("Accept".to_owned(), "*/*".to_owned()),
+        ];
+        strip_cross_origin_headers(&mut headers);
+        assert_eq!(
+            headers,
+            vec![
+                ("User-Agent".to_owned(), "Test UA".to_owned()),
+                ("Accept".to_owned(), "*/*".to_owned()),
+            ]
+        );
     }
 
     #[test]
