@@ -96,8 +96,10 @@
   queue.setLog((line) => {
     console.log(`[navinamp] ${line}`);
     if (line.startsWith("✖")) {
-      playbackError = line.replace(/^✖\s*/, "");
-      warningsOpen = true;
+      const message = line.replace(/^✖\s*/, "");
+      // A repeat of the error the user just dismissed should not re-open it.
+      if (playbackError !== message) warningsOpen = true;
+      playbackError = message;
     }
   });
 
@@ -193,10 +195,14 @@
     const unlisten = listen<EngineEvent>("audio-event", (ev) => {
       const e = ev.payload;
       if (e.type === "Error") {
+        if (playbackError !== e.msg) warningsOpen = true;
         playbackError = e.msg;
-        warningsOpen = true;
       } else if (e.type === "TrackStarted") {
+        const hadPlaybackError = playbackError != null;
         playbackError = null;
+        // Drop an auto-opened error panel on the next successful start, but
+        // leave a user-opened skin-warning panel alone.
+        if (hadPlaybackError) warningsOpen = false;
       }
       const note = queue.handleEngineEvent(e);
       console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);

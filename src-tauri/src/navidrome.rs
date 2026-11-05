@@ -590,6 +590,8 @@ pub(crate) fn insecure_tls_for_url(state: &NavidromeState, url: &str) -> bool {
 }
 
 fn same_origin(a: &reqwest::Url, b: &reqwest::Url) -> bool {
+    // Scheme is part of the match: an `http://` profile cannot exempt an
+    // `https://` stream (http has no certificate to verify anyway).
     a.scheme() == b.scheme()
         && a.host_str() == b.host_str()
         && a.port_or_known_default() == b.port_or_known_default()
