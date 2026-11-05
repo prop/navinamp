@@ -82,6 +82,7 @@ export function windowSetSize(label: WindowLabel, w: number, h: number): Promise
 export type QueueIntent =
   | { type: "play"; index: number }
   | { type: "add"; paths: string[] }
+  | { type: "addUrl"; meta: QueueItemMeta }
   | { type: "addFromLibrary"; metas: QueueItemMeta[] }
   /** Append and start the first appended item, resolved by the player. */
   | { type: "addFromLibraryAndPlay"; metas: QueueItemMeta[] }
@@ -122,6 +123,9 @@ export function applyQueueIntent(intent: QueueIntent): void {
       break;
     case "add":
       queue.add(intent.paths);
+      break;
+    case "addUrl":
+      queue.addUrl(intent.meta);
       break;
     case "addFromLibrary":
       queue.addFromLibrary(intent.metas);

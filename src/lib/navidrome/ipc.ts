@@ -57,6 +57,8 @@ export interface NavidromeProfile {
   active: boolean;
   /** Unix **seconds** of this server's last completed sync, if any. */
   syncedAt: number | null;
+  /** Accepts self-signed / untrusted TLS certificates (per-server opt-in). */
+  insecureTls: boolean;
 }
 
 /** One music library (music folder) on the server. */
@@ -99,8 +101,15 @@ export function navidromeConnect(
   user: string,
   password: string,
   label: string | null = null,
+  insecureTls = false,
 ): Promise<NavidromeStatus> {
-  return invoke<NavidromeStatus>("navidrome_connect", { url, user, password, label });
+  return invoke<NavidromeStatus>("navidrome_connect", {
+    url,
+    user,
+    password,
+    label,
+    insecureTls,
+  });
 }
 
 /** Forget the stored credentials; returns the (now unconfigured) status. */

@@ -39,6 +39,7 @@ const SALT_BYTES: usize = 12;
 ///     "https://music.example.org",
 ///     "admin",
 ///     "correct horse battery staple",
+///     false, // verify TLS certificates
 /// )
 /// .await?;
 ///
@@ -94,11 +95,15 @@ impl SubsonicClient {
         base_url: &str,
         username: &str,
         password: &str,
+        insecure_tls: bool,
     ) -> Result<Self, SubsonicError> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .gzip(true)
             .user_agent(concat!("navinamp/", env!("CARGO_PKG_VERSION")))
+            // Self-hosted setups often serve self-signed certificates; the
+            // caller opts in per server (default keeps full verification).
+            .danger_accept_invalid_certs(insecure_tls)
             .build()?;
 
         let (salt, token) = credentials(password);

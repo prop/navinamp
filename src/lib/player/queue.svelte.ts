@@ -62,6 +62,7 @@ import { IS_PLAYER } from "../window/identity";
 
 import { friendlyIpcError, libraryMarkPlayed } from "../library/ipc";
 import { navidromeScrobble, navidromeStreamUrl } from "../navidrome/ipc";
+import { streamsResolve } from "../streams/ipc";
 
 export type RepeatMode = "off" | "all" | "one";
 
@@ -69,14 +70,19 @@ export interface QueueItem {
   /** Stable UI identity (survives reorders; the engine has its own u64 ids). */
   id: string;
   /**
-   * Local file path, or `navidrome://<serverId>/<remoteId>` for synced
-   * remote rows. Remote items resolve their real stream URL at feed time
-   * (feedPath).
+   * Local file path, an `http(s)://` playlist URL, or
+   * `navidrome://<serverId>/<remoteId>` for synced remote rows. Remote items
+   * resolve their real stream URL at feed time (feedPath).
    */
   path: string;
   title: string;
   artist: string;
   durationSecs: number | null;
+  /**
+   * Set when `path` is a link that needs a per-play resolver rather than a
+   * direct media URL. Currently only YouTube (resolved through yt-dlp).
+   */
+  streamKind?: "youtube";
   /**
    * Navidrome track id — present only on remote items; drives stream-URL
    * resolution and scrobbling. `null`/undefined ⇒ a local file.
@@ -145,6 +151,12 @@ let playingItemId: string | null = null;
 let shuffleOrder: number[] = [];
 /** Serializes play→enqueue feeds so a fast double-click cannot interleave. */
 let feedChain: Promise<void> = Promise.resolve();
+/**
+ * Engine source for each item in the current prefetch window (item id →
+ * path/URL). Re-declaring a surviving tail reuses it, so YouTube links are
+ * resolved by yt-dlp once per window entry, not once per advance.
+ */
+const windowSources = new Map<string, string>();
 /** Distinguishes our feed from a newer play() when feeds resolve. */
 let playSession = 0;
 let idCounter = 0;
@@ -154,6 +166,11 @@ export function isAudioPath(path: string): boolean {
   const dot = path.lastIndexOf(".");
   const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : "";
   return AUDIO_EXTENSIONS.has(ext);
+}
+
+/** True for a direct `http(s)://` stream URL (playlist URL rows). */
+export function isStreamUrl(path: string): boolean {
+  return /^https?:\/\//i.test(path);
 }
 
 export function formatTime(secs: number): string {
@@ -190,8 +207,15 @@ function feed(run: () => Promise<unknown>): void {
  * exactly like a file the engine cannot open.
  */
 async function feedPath(item: QueueItem): Promise<string> {
-  if (item.remoteId == null) return item.path;
-  return navidromeStreamUrl(item.serverId, item.remoteId);
+  if (item.remoteId != null) {
+    return navidromeStreamUrl(item.serverId, item.remoteId);
+  }
+  if (item.streamKind === "youtube") {
+    // Direct googlevideo URLs expire, so resolve the canonical link again
+    // every time this item is handed to the engine.
+    return (await streamsResolve(item.path)).streamUrl;
+  }
+  return item.path;
 }
 
 // ── Navidrome scrobbling (M5) ──────────────────────────────────────────────
@@ -279,7 +303,7 @@ function playedStart(item: QueueItem): void {
   // Playback left whatever was open — close (fire) before considering this.
   closePlayed();
   if (item.remoteId != null) return; // remote: scrobbling owns the listen
-  if (/^https?:\/\//i.test(item.path)) return; // fed as a stream URL, not a file
+  if (isStreamUrl(item.path)) return; // fed as a stream URL, not a file
   playedOpen = { itemId: item.id, path: item.path };
 }
 
@@ -392,11 +416,21 @@ function reconcileAhead(): void {
 
   feed(async () => {
     const tracks = await Promise.all(
-      targets.map(async (item) => ({
-        key: item.id,
-        path: await feedPath(item),
-      })),
+      targets.map(async (item) => {
+        // Reuse the source that is already open in the engine; only new
+        // window entries pay for a Navidrome/yt-dlp resolution.
+        let path = windowSources.get(item.id);
+        if (path == null) {
+          path = await feedPath(item);
+          windowSources.set(item.id, path);
+        }
+        return { key: item.id, path };
+      }),
     );
+    const keep = new Set(targets.map((item) => item.id));
+    for (const id of [...windowSources.keys()]) {
+      if (!keep.has(id)) windowSources.delete(id);
+    }
     await invoke("audio_set_upcoming", { tracks });
   });
   const exps = desired.map((index) => ({ index, id: items[index].id }));
@@ -650,6 +684,20 @@ export const queue = {
     if (isAudioPath(path)) insertItems([itemFromPath(path)], at);
   },
 
+  /**
+   * Append a validated playlist URL. URL rows bypass the file-extension
+   * allow-list; the canonical link is persisted (YouTube re-resolves its
+   * direct media URL at feed time).
+   */
+  addUrl(meta: QueueItemMeta): number {
+    if (!isStreamUrl(meta.path)) {
+      // Never echo the URL itself: playlist links may carry credentials.
+      logLine("✖ playlist URL rejected: only http(s) links are supported");
+      return items.length;
+    }
+    return insertItems([meta], items.length);
+  },
+
   remove(index: number): void {
     if (index < 0 || index >= items.length) return;
     const wasCurrent = index === currentIndex;
@@ -692,6 +740,7 @@ export const queue = {
     startPending = false;
     playingItemId = null;
     shuffleOrder = [];
+    windowSources.clear();
     if (engineLive) {
       feed(() => invoke("audio_set_upcoming", { tracks: [] }));
     }
@@ -726,6 +775,7 @@ export const queue = {
     expectations = [];
     startPending = false;
     playingItemId = null;
+    windowSources.clear();
     closeScrobble(); // the audible remote listen is over (submission=true)
     closePlayed(); // …and the local listen is over (library_mark_played)
   },
@@ -767,6 +817,7 @@ export const queue = {
         if (!engineLive) return null;
         expectations = [];
         startPending = false;
+        windowSources.clear();
         // The audible track ran dry — submit its listen now; a repeat=all
         // wrap re-opens (now-playing) from the wrap's own TrackStarted.
         closeScrobble();

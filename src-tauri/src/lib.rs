@@ -10,6 +10,7 @@ mod navidrome;
 mod semantic;
 mod skin;
 mod smart;
+mod streams;
 mod windows;
 
 #[cfg(desktop)]
@@ -37,6 +38,7 @@ pub fn run() {
         .manage(library::LibraryState::default())
         .manage(navidrome::NavidromeState::default())
         .manage(semantic::SemanticState::default())
+        .manage(streams::StreamHeaders::default())
         .manage(windows::WindowManager::default())
         .manage(media::MediaHub::default())
         .setup(|app| {
@@ -100,6 +102,10 @@ pub fn run() {
             semantic::semantic_status,
             semantic::semantic_index,
             semantic::semantic_search,
+            streams::streams_parse_url,
+            streams::streams_ytdlp_status,
+            streams::streams_set_ytdlp_path,
+            streams::streams_resolve,
             audio::eq_set_enabled,
             audio::eq_set_preamp,
             audio::eq_set_band,
