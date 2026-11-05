@@ -7,6 +7,7 @@ mod library;
 mod media;
 mod menu;
 mod navidrome;
+mod semantic;
 mod skin;
 mod smart;
 mod streams;
@@ -36,6 +37,7 @@ pub fn run() {
         .manage(skin::SkinCache::default())
         .manage(library::LibraryState::default())
         .manage(navidrome::NavidromeState::default())
+        .manage(semantic::SemanticState::default())
         .manage(streams::StreamHeaders::default())
         .manage(windows::WindowManager::default())
         .manage(media::MediaHub::default())
@@ -97,6 +99,9 @@ pub fn run() {
             ai::ai_models,
             ai::ai_search,
             ai::ai_offline_search,
+            semantic::semantic_status,
+            semantic::semantic_index,
+            semantic::semantic_search,
             streams::streams_parse_url,
             streams::streams_ytdlp_status,
             streams::streams_set_ytdlp_path,

@@ -69,6 +69,7 @@
     config.provider = next.provider;
     config.baseUrl = next.baseUrl;
     config.model = next.model;
+    config.embeddingModel = next.embeddingModel ?? "";
     fetchedModels = [];
     useCustomModel = next.models.length === 0;
     note = null;

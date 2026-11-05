@@ -49,8 +49,8 @@ const WELCOME_TOUR: Tour = {
       body: "Your player (drag its titlebar; double-click to shade) and playlist queue are already open. The Media Library adds scans, Navidrome, smart views and search.",
     },
     {
-      title: "Three ways to search",
-      body: "SIMPLE searches text, ADVANCED builds field rules, and AI turns a sentence into a rule set — offline until you connect a provider.",
+      title: "Four ways to search",
+      body: "SIMPLE searches text, ADVANCED builds field rules, AI turns a sentence into a rule set, and SEMANTIC finds tracks by meaning with embeddings.",
       target: '[data-tour="search"]',
     },
     AI_DEMO_STEP,

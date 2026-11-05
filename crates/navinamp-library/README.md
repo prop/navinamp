@@ -64,12 +64,27 @@ Plus:
   `art_backfilled`). It holds no track data; `tracks` remains the single
   track table.
 - **`tracks_fts`** — the FTS5 index (below).
+- **`track_embeddings(track_id, model, dims, text_hash, vector, updated_at)`**
+  — optional semantic-search vectors as little-endian f32 BLOBs, keyed by
+  `(track_id, model)`. Only the metadata hash is stored, so changed tags are
+  detected without duplicating the embedded text. See “Semantic search”.
 - **`<db dir>/art-cache/`** — the album-art cache (below).
 
 Text tags are stored as `''`, never `NULL`, so display code never fights
 `Option<String>`; numbers stay `NULL` when genuinely unknown. Paths are
 stored via `to_string_lossy` (non-UTF-8 paths degrade to replacement chars —
 an accepted trade-off for a TEXT-keyed table on macOS/Linux/Windows).
+
+## Semantic search (embeddings)
+
+`track_embeddings` stores one vector per `(track, embedding model)`. The
+embedded text is the compact metadata string `title | artist | album | genre |
+year` (falls back to the file stem for sparse rows), versioned so a template
+change invalidates old hashes. This crate owns the storage and ranking
+primitives — `embedding_status`, `embedding_jobs`, `embedding_upsert`,
+`embedding_vectors`, `tracks_by_ids` — while the Tauri layer calls the
+configured OpenAI-compatible `/embeddings` endpoint and computes cosine top-k
+in Rust (brute force is fine at library scale).
 
 ## Full-text search (FTS5)
 

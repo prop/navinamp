@@ -9,7 +9,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import type { SmartViewDef } from "../library/ipc";
+import type { SmartViewDef, Track } from "../library/ipc";
 
 export type AiProviderKind = "openAiCompatible" | "anthropic";
 
@@ -20,6 +20,8 @@ export interface AiConfig {
   provider: AiProviderKind;
   baseUrl: string;
   model: string;
+  /** Embedding model for SEMANTIC search; empty = not configured. */
+  embeddingModel: string;
   apiKey: string;
   timeoutSecs: number;
   /** Required for Discogs catalog lookups (free personal access token). */
@@ -34,6 +36,8 @@ export interface AiPreset {
   model: string;
   /** Current model ids for the picker; the live `/models` fetch can extend it. */
   models: string[];
+  /** Suggested embeddings model for SEMANTIC search (editable). */
+  embeddingModel?: string;
   hint?: string;
 }
 
@@ -62,6 +66,7 @@ export const AI_PRESETS: AiPreset[] = [
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-5.2",
     models: ["gpt-5.2", "gpt-5.1", "gpt-5"],
+    embeddingModel: "text-embedding-3-small",
   },
   {
     id: "anthropic",
@@ -112,7 +117,8 @@ export const AI_PRESETS: AiPreset[] = [
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.2",
     models: [],
-    hint: "no API key needed; start `ollama serve` and pull a model",
+    embeddingModel: "nomic-embed-text",
+    hint: "no API key needed; start `ollama serve` and pull a model (and an embedding model for SEMANTIC)",
   },
   {
     id: "lmstudio",
@@ -140,6 +146,7 @@ export const AI_DEFAULTS: AiConfig = {
   provider: "openAiCompatible",
   baseUrl: "https://openrouter.ai/api/v1",
   model: "deepseek/deepseek-v4.1-flash-1017",
+  embeddingModel: "",
   apiKey: "",
   timeoutSecs: 30,
   discogsToken: "",
@@ -213,6 +220,64 @@ export function aiSearch(
  */
 export function aiOfflineSearch(prompt: string): Promise<AiSearchReport> {
   return invoke<AiSearchReport>("ai_offline_search", { prompt });
+}
+
+// ── semantic search (EMBEDDINGS) ──────────────────────────────────────────
+
+/** Progress event while a semantic index build is running. */
+export const SEMANTIC_PROGRESS_EVENT = "semantic-progress";
+
+export interface SemanticProgress {
+  model: string;
+  done: number;
+  total: number;
+}
+
+/** Index coverage and setup state for SEMANTIC search. */
+export interface SemanticStatus {
+  configured: boolean;
+  providerReady: boolean;
+  model: string;
+  total: number;
+  indexed: number;
+  stale: number;
+  /** Actionable setup hint when `configured` is false. */
+  message: string | null;
+}
+
+export interface SemanticIndexReport {
+  model: string;
+  embedded: number;
+  total: number;
+}
+
+export interface SemanticSearchReport {
+  tracks: Track[];
+  model: string;
+  indexed: number;
+  dims: number;
+  explanation: string;
+}
+
+/** Current embedding coverage for the configured model. */
+export function semanticStatus(): Promise<SemanticStatus> {
+  return invoke<SemanticStatus>("semantic_status");
+}
+
+/**
+ * Embed missing/changed tracks. `rebuild` drops the model's vectors first and
+ * re-embeds the whole library. Progress arrives via SEMANTIC_PROGRESS_EVENT.
+ */
+export function semanticIndex(rebuild = false): Promise<SemanticIndexReport> {
+  return invoke<SemanticIndexReport>("semantic_index", { rebuild });
+}
+
+/** Embed the prompt and return the nearest tracks by cosine similarity. */
+export function semanticSearch(
+  prompt: string,
+  limit = 100,
+): Promise<SemanticSearchReport> {
+  return invoke<SemanticSearchReport>("semantic_search", { prompt, limit });
 }
 
 /** Broadcast after the onboarding wizard saves ai.json (all windows). */

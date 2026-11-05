@@ -1,9 +1,9 @@
 <script lang="ts">
   /**
    * AI search settings modal. Owns only configuration: provider shape,
-   * endpoint/model/key, timeout, and the Discogs token (required for catalog
-   * lookups). The AI search prompt lives in the library bar; this panel never
-   * sends a search.
+   * endpoint/model/key, the optional embeddings model for SEMANTIC search,
+   * timeout, and the Discogs token (required for catalog lookups). The search
+   * prompts live in the library bar; this panel never sends a search.
    *
    * Keys are stored plaintext in `<app_config>/ai.json` (same policy as
    * navidrome.json) and are never logged. TEST sends one tiny completion
@@ -17,6 +17,7 @@
     aiModels,
     aiSetConfig,
     aiTest,
+    notifyAiConfigChanged,
     presetById,
     type AiConfig,
     type AiProviderKind,
@@ -80,6 +81,7 @@
     config.provider = next.provider;
     config.baseUrl = next.baseUrl;
     config.model = next.model;
+    config.embeddingModel = next.embeddingModel ?? "";
     fetchedModels = [];
     useCustomModel = next.models.length === 0;
     note = null;
@@ -128,6 +130,7 @@
       config = await aiSetConfig(config);
       note = "saved";
       onchanged?.();
+      void notifyAiConfigChanged();
     } catch (e) {
       error = friendlyIpcError("save AI settings", e);
     } finally {
@@ -161,8 +164,8 @@
       {:else}
         <label class="enable">
           <input type="checkbox" bind:checked={config.enabled} />
-          enable AI search
-          <span class="hint">the AI mode appears in the library search bar</span>
+          enable AI features
+          <span class="hint">AI and SEMANTIC appear in the library search bar</span>
         </label>
 
         <div class="block">
@@ -284,6 +287,27 @@
             create a free personal access token at discogs.com/settings/developers.
             without it the AI can still build local-track rules, but no catalog is
             returned.
+          </div>
+        </div>
+
+        <div class="block">
+          <div class="bh">SEMANTIC SEARCH</div>
+          <label class="row">
+            embedding model
+            <input
+              class="txt wide"
+              type="text"
+              bind:value={config.embeddingModel}
+              placeholder="text-embedding-3-small / nomic-embed-text"
+              spellcheck="false"
+              autocorrect="off"
+              autocapitalize="off" />
+          </label>
+          <div class="hint">
+            OpenAI-compatible <code>/embeddings</code> model. Building the
+            semantic index sends track metadata (title, artist, album, genre,
+            year) to this provider and may incur API costs. Anthropic has no
+            embeddings endpoint; use an OpenAI-compatible provider.
           </div>
         </div>
 

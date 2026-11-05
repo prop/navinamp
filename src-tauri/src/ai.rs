@@ -49,6 +49,10 @@ pub struct AiConfig {
     pub provider: ProviderKind,
     pub base_url: String,
     pub model: String,
+    /// Embedding model used by SEMANTIC search (`/embeddings`). Empty =
+    /// semantic search is not configured. Only OpenAI-compatible providers
+    /// have this endpoint.
+    pub embedding_model: String,
     pub api_key: String,
     pub timeout_secs: u64,
     /// Discogs personal access token. Required for catalog lookups (the
@@ -66,6 +70,7 @@ impl Default for AiConfig {
             provider: llm.provider,
             base_url: llm.base_url,
             model: llm.model,
+            embedding_model: String::new(),
             api_key: llm.api_key,
             timeout_secs: llm.timeout_secs,
             discogs_token: String::new(),
@@ -74,7 +79,7 @@ impl Default for AiConfig {
 }
 
 impl AiConfig {
-    fn llm(&self) -> LlmConfig {
+    pub(crate) fn llm(&self) -> LlmConfig {
         LlmConfig {
             preset: self.preset.clone(),
             provider: self.provider,
@@ -88,13 +93,14 @@ impl AiConfig {
     fn sanitized(mut self) -> Self {
         self.base_url = self.base_url.trim().trim_end_matches('/').to_owned();
         self.model = self.model.trim().to_owned();
+        self.embedding_model = self.embedding_model.trim().to_owned();
         self.api_key = self.api_key.trim().to_owned();
         self.discogs_token = self.discogs_token.trim().to_owned();
         self.timeout_secs = self.timeout_secs.clamp(5, 300);
         self
     }
 
-    fn scrubbed(&self, message: impl std::fmt::Display) -> String {
+    pub(crate) fn scrubbed(&self, message: impl std::fmt::Display) -> String {
         let mut text = message.to_string();
         for secret in [&self.api_key, &self.discogs_token] {
             if !secret.is_empty() {
@@ -114,7 +120,7 @@ fn config_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join(AI_FILE))
 }
 
-fn load_config(app: &AppHandle) -> AiConfig {
+pub(crate) fn load_config(app: &AppHandle) -> AiConfig {
     config_file(app)
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -645,7 +651,7 @@ pub fn ai_offline_search(
 /// Parsed per URL component — never a string prefix — so spoofed hosts like
 /// `localhost.attacker.com`, `localhost@attacker.com` or `127.0.0.1.nip.io`
 /// do not count as local (they would receive a keyless prompt).
-fn is_local_endpoint(base_url: &str) -> bool {
+pub(crate) fn is_local_endpoint(base_url: &str) -> bool {
     use std::net::Ipv4Addr;
 
     let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
@@ -675,6 +681,21 @@ fn provider_configured(config: &AiConfig) -> bool {
             !config.api_key.is_empty() || is_local_endpoint(&config.base_url)
         }
     }
+}
+
+/// Whether the saved provider can call an OpenAI-compatible embeddings
+/// endpoint at all (a model is not required for this half of the check).
+pub(crate) fn embedding_provider_ready(config: &AiConfig) -> bool {
+    config.enabled
+        && config.provider == ProviderKind::OpenAiCompatible
+        && (!config.api_key.trim().is_empty() || is_local_endpoint(&config.base_url))
+}
+
+/// Whether the saved settings can build/query semantic embeddings: an
+/// OpenAI-compatible provider with a model and either a key or a local
+/// endpoint. Anthropic has no `/embeddings` API.
+pub(crate) fn embeddings_configured(config: &AiConfig) -> bool {
+    embedding_provider_ready(config) && !config.embedding_model.trim().is_empty()
 }
 
 /// Deterministic no-provider search: parse the prompt with [`parse_prompt`],
@@ -1365,6 +1386,36 @@ mod tests {
         assert!(!provider_configured(&config), "Anthropic requires a key");
         config.api_key = "sk".into();
         assert!(provider_configured(&config));
+    }
+
+    #[test]
+    fn embeddings_require_model_and_compatible_provider() {
+        let mut config = AiConfig {
+            enabled: true,
+            provider: ProviderKind::OpenAiCompatible,
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: "sk".into(),
+            embedding_model: String::new(),
+            ..AiConfig::default()
+        };
+        assert!(!embeddings_configured(&config), "model missing");
+        config.embedding_model = "text-embedding-3-small".into();
+        assert!(embeddings_configured(&config));
+
+        config.provider = ProviderKind::Anthropic;
+        assert!(!embeddings_configured(&config), "Anthropic unsupported");
+
+        config.provider = ProviderKind::OpenAiCompatible;
+        config.api_key.clear();
+        config.base_url = "http://localhost:11434/v1".into();
+        assert!(
+            embeddings_configured(&config),
+            "local embedding server needs no key"
+        );
+        config.base_url = "https://api.example.com/v1".into();
+        assert!(!embeddings_configured(&config), "cloud needs a key");
+        config.enabled = false;
+        assert!(!embeddings_configured(&config), "disabled");
     }
 
     #[test]
