@@ -465,11 +465,6 @@
     }
   }
 
-  const totalText = $derived.by(() => {
-    const secs = items.reduce((sum, it) => sum + (it.durationSecs ?? 0), 0);
-    return `${items.length} item${items.length === 1 ? "" : "s"}, ${fmt(secs)}`;
-  });
-
   // pledit theme as CSS custom properties (classic-green defaults cover a
   // theme-less caller; every rule below reads only these variables).
   const themeVars = $derived.by(() => {
@@ -542,7 +537,6 @@
       onclick={goToCurrent}
       disabled={currentIndex == null}
       title="scroll to the current queue item">NOW</button>
-    <span class="totals">{totalText}</span>
   </footer>
 </div>
 
@@ -678,7 +672,7 @@
     color: #9a9a9a;
     border: 1px solid #3a3a3a;
     border-radius: 2px;
-    /* Five compact footer actions + totals must fit the 275px playlist. */
+    /* Five compact footer actions must fit the 275px playlist. */
     padding: 1px 4px;
     font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
     font-size: 10px;
@@ -694,13 +688,5 @@
   .bar button:disabled {
     opacity: 0.35;
     cursor: default;
-  }
-
-  .totals {
-    margin-left: auto;
-    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
-    font-size: 10px;
-    color: #3ccb4e;
-    white-space: nowrap;
   }
 </style>
