@@ -88,6 +88,7 @@
     type SmartViewDef,
   } from "../lib/library/ipc";
   import { emptySearchDef, emptySmartViewDef, plainRules } from "../lib/library/smartView";
+  import { registerEscape } from "../lib/window/escape";
   import {
     isSyncReport,
     navidromePlaylistTracks,
@@ -326,6 +327,13 @@
   let playlistBusy = $state(false);
   let playlistNote = $state<string | null>(null);
   let playlistError = $state<string | null>(null);
+
+  $effect(() => {
+    if (!playlistSaveOpen) return;
+    return registerEscape(() => {
+      if (!playlistBusy) playlistSaveOpen = false;
+    });
+  });
 
   const playlistSaveCount = $derived(
     (searchResults ?? []).filter(

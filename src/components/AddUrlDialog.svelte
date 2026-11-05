@@ -14,6 +14,7 @@
   import { onMount } from "svelte";
 
   import type { QueueItemMeta } from "../lib/player/queue.svelte";
+  import { registerEscape } from "../lib/window/escape";
   import {
     streamsParseUrl,
     streamsResolve,
@@ -41,6 +42,12 @@
   let pathInput = $state("");
   let savingPath = $state(false);
 
+  $effect(() =>
+    registerEscape(() => {
+      if (!busy) onclose();
+    }),
+  );
+
   const looksYouTube = $derived(/youtu\.?be|youtube\.com/i.test(url));
 
   function errorText(e: unknown): string {
@@ -63,13 +70,6 @@
     void refreshStatus();
     inputEl?.focus();
   });
-
-  function onKeydown(e: KeyboardEvent): void {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      if (!busy) onclose();
-    }
-  }
 
   async function submit(): Promise<void> {
     if (busy) return;
@@ -123,8 +123,6 @@
     }
   }
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 <div class="overlay" role="dialog" aria-modal="true" aria-label="Add URL">
   <div class="panel">

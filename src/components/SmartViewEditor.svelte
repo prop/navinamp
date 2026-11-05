@@ -14,6 +14,7 @@
    * unparseable degrades to a banner. Missing backend commands surface as a
    * friendly "not available in this build" line — never a crash.
    */
+  import { registerEscape } from "../lib/window/escape";
   import {
     friendlyIpcError,
     smartViewDelete,
@@ -107,6 +108,12 @@
   let saving = $state(false);
   let deleting = $state(false);
   let publishing = $state(false);
+
+  function requestCancel(): void {
+    if (!saving && !deleting && !publishing) oncancel();
+  }
+
+  $effect(() => registerEscape(requestCancel));
   let publishNote = $state<string | null>(null);
 
   let previewSeq = 0;
