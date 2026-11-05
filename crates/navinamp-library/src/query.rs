@@ -2,6 +2,7 @@
 //! stats. All brief, single-statement affairs — the Tauri layer calls them
 //! under a short-lived mutex.
 
+use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, Row};
@@ -86,6 +87,53 @@ pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
         remote_path: row.get(26)?,
         art_id: row.get(27)?,
     })
+}
+
+/// Case-insensitive natural-order comparison for file paths: digit runs are
+/// compared by value, so `2` sorts before `10` even when the file name is not
+/// zero-padded. Registered as the `PATH_NATURAL` SQLite collation by
+/// [`crate::Library::open`]; the paged flat list uses it as its primary key.
+pub(crate) fn natural_path_cmp(a: &str, b: &str) -> Ordering {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
+            let ai = digit_end(a, i);
+            let bj = digit_end(b, j);
+            let an = strip_leading_zeros(&a[i..ai]);
+            let bn = strip_leading_zeros(&b[j..bj]);
+            let ord = an.len().cmp(&bn.len()).then_with(|| an.cmp(bn));
+            if ord != Ordering::Equal {
+                return ord;
+            }
+            i = ai;
+            j = bj;
+            continue;
+        }
+        let ca = a[i].to_ascii_lowercase();
+        let cb = b[j].to_ascii_lowercase();
+        if ca != cb {
+            return ca.cmp(&cb);
+        }
+        i += 1;
+        j += 1;
+    }
+    (a.len() - i).cmp(&(b.len() - j))
+}
+
+fn digit_end(bytes: &[u8], mut at: usize) -> usize {
+    while at < bytes.len() && bytes[at].is_ascii_digit() {
+        at += 1;
+    }
+    at
+}
+
+fn strip_leading_zeros(mut bytes: &[u8]) -> &[u8] {
+    while bytes.len() > 1 && bytes[0] == b'0' {
+        bytes = &bytes[1..];
+    }
+    bytes
 }
 
 /// Builds an FTS5 MATCH pattern from free user input: every whitespace-separated
@@ -216,6 +264,10 @@ pub(super) fn album_tracks(conn: &Connection, album_key: &str) -> rusqlite::Resu
 
 /// Tracks matching an optional artist / album / genre / source combination,
 /// with limit + offset. `None` limit means unlimited (`LIMIT -1` in SQLite).
+///
+/// Ordered by the real file path first (`remote_path` for Navidrome rows,
+/// their filesystem path for local rows), then album/disc/track as fallbacks.
+/// This is also the order used by bulk ENQUEUE/PLAY ALL.
 pub(super) fn tracks_filtered(
     conn: &Connection,
     filter: &TrackFilter,
@@ -248,7 +300,15 @@ pub(super) fn tracks_filtered(
         sql.push_str(" WHERE ");
         sql.push_str(&where_clauses.join(" AND "));
     }
-    sql.push_str(" ORDER BY album_key, disc_no, track_no, path LIMIT ? OFFSET ?");
+    // Path first: remote rows use the server-relative `remote_path` (the
+    // synthetic `navidrome://server/id` path would sort by random id), while
+    // local rows use their filesystem path. Album/disc/track remain as
+    // fallbacks for paths that do not encode the track order.
+    sql.push_str(
+        " ORDER BY COALESCE(NULLIF(remote_path, ''), path) COLLATE PATH_NATURAL,
+                   album_key, disc_no, track_no, path
+           LIMIT ? OFFSET ?",
+    );
     let limit: i64 = match filter.limit {
         Some(n) => i64::from(n),
         None => -1,
@@ -462,6 +522,19 @@ pub(super) fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn natural_path_cmp_orders_numbers_by_value() {
+        assert_eq!(natural_path_cmp("1", "2"), Ordering::Less);
+        assert_eq!(natural_path_cmp("2", "10"), Ordering::Less);
+        assert_eq!(natural_path_cmp("10", "2"), Ordering::Greater);
+        // Leading zeros do not change the numeric value.
+        assert_eq!(natural_path_cmp("track02", "track2"), Ordering::Equal);
+        // Case-insensitive ASCII, with the shorter prefix first.
+        assert_eq!(natural_path_cmp("A/1", "a/2"), Ordering::Less);
+        assert_eq!(natural_path_cmp("abc", "abcd"), Ordering::Less);
+        assert_eq!(natural_path_cmp("same", "same"), Ordering::Equal);
+    }
 
     #[test]
     fn fts_terms_are_quoted_prefixed_and_escaped() {

@@ -132,6 +132,8 @@ impl Library {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // Natural path order for the flat/paged track list (2 before 10).
+        conn.create_collation("PATH_NATURAL", query::natural_path_cmp)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
