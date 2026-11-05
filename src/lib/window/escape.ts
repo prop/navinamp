@@ -1,9 +1,11 @@
 /**
  * One Escape handler for every webview.
  *
- * Dialogs and transient overlays register a close callback; the topmost
- * registration wins. With nothing registered, Escape hides the current
- * secondary window (playlist / library / eq); the player window stays put.
+ * Dialogs and transient overlays register a close callback; the most
+ * recently registered one wins (surfaces are opened on top of each other,
+ * so mount order matches z-order). With nothing registered, Escape hides
+ * the current secondary window (playlist / library / eq); the player window
+ * stays put.
  *
  * Registration uses a stack, not a pile of window keydown listeners, so
  * nested surfaces (tour → dialog, context menu → dialog) unwind one at a
