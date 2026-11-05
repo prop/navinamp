@@ -77,6 +77,9 @@
     notifyTrack: true,
   });
   let seeking = $state<number | null>(null);
+  /** Last playback/feed failure, surfaced in the existing warning bar. */
+  let playbackError = $state<string | null>(null);
+  let warningsOpen = $state(false);
 
   // Long-press transport seek: 1s per 100ms tick while PREV/NEXT is held.
   // The end margin keeps fast-forward from tripping TrackFinished.
@@ -87,10 +90,18 @@
   let holdTarget = 0;
   let holdItemId: string | null = null;
 
-  // Feed errors inside the queue module surface on the console: the visible
-  // M1 log moved to the library window's DEV block, and cross-window log
-  // relay is deliberately not part of the bus contract.
-  queue.setLog((line) => console.log(`[navinamp] ${line}`));
+  // Feed errors inside the queue module used to be console-only, which made
+  // a failed remote URL resolution invisible in release builds. Mirror them
+  // into the player's warning badge as well.
+  queue.setLog((line) => {
+    console.log(`[navinamp] ${line}`);
+    if (line.startsWith("✖")) {
+      const message = line.replace(/^✖\s*/, "");
+      // A repeat of the error the user just dismissed should not re-open it.
+      if (playbackError !== message) warningsOpen = true;
+      playbackError = message;
+    }
+  });
 
   async function refresh() {
     try {
@@ -183,6 +194,16 @@
   $effect(() => {
     const unlisten = listen<EngineEvent>("audio-event", (ev) => {
       const e = ev.payload;
+      if (e.type === "Error") {
+        if (playbackError !== e.msg) warningsOpen = true;
+        playbackError = e.msg;
+      } else if (e.type === "TrackStarted") {
+        const hadPlaybackError = playbackError != null;
+        playbackError = null;
+        // Drop an auto-opened error panel on the next successful start, but
+        // leave a user-opened skin-warning panel alone.
+        if (hadPlaybackError) warningsOpen = false;
+      }
       const note = queue.handleEngineEvent(e);
       console.log(`[navinamp] ${note ?? rawEngineLine(e)}`);
       if (e.type === "TrackStarted") void showNowPlaying();
@@ -376,7 +397,6 @@
 
   // ── acceptance-run diagnostics: skin warnings visible in-app ─────────────
 
-  let warningsOpen = $state(false);
   const skinWarnings = $derived(
     (skin?.warnings ?? []).map((w: Warning) => formatWarning(w)),
   );
@@ -386,7 +406,11 @@
   const layoutMode = $derived(playerLayoutMode());
   const playerLayout = $derived(skin ? resolveLayout(skin, "main", layoutMode) : null);
   const resolveWarnings = $derived(playerLayout?.warnings ?? []);
-  const allWarnings = $derived([...skinWarnings, ...resolveWarnings]);
+  const allWarnings = $derived([
+    ...skinWarnings,
+    ...resolveWarnings,
+    ...(playbackError ? [`playback: ${playbackError}`] : []),
+  ]);
   const dragStrips = $derived.by(() =>
     skin && playerLayout ? dragRects(skin.skin, playerLayout) : [],
   );
@@ -663,7 +687,8 @@
   .warnline {
     font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     color: #d8a63c;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .status {

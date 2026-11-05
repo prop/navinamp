@@ -170,6 +170,15 @@ pub enum TrackSource {
         /// (Subsonic tokens); the engine never logs it.
         url: String,
     },
+    /// A remote stream whose TLS certificate must not be verified.
+    ///
+    /// Self-hosted servers commonly use a self-signed certificate. The
+    /// caller opts in per server (the Navidrome profile's insecure-TLS
+    /// setting); this variant keeps the exception scoped to that stream.
+    RemoteInsecure {
+        /// Absolute `http(s)://` URL. May carry credentials; never logged.
+        url: String,
+    },
     /// A remote stream that needs extra request headers on every GET.
     ///
     /// Used by resolved media links (e.g. yt-dlp's `http_headers`, which carry

@@ -69,7 +69,13 @@ impl PcmSource {
     /// ReplayGain tags are read before the hand-off to symphonia (one extra
     /// ranged GET on range-capable servers).
     pub(crate) fn open_remote(url: &str) -> Result<Self, AudioError> {
-        Self::open_remote_with_headers(url, &[])
+        Self::open_remote_with_headers_opts(url, &[], false)
+    }
+
+    /// Open a remote stream whose TLS certificate should not be verified.
+    /// Used only for server profiles that explicitly opted into insecure TLS.
+    pub(crate) fn open_remote_insecure(url: &str) -> Result<Self, AudioError> {
+        Self::open_remote_with_headers_opts(url, &[], true)
     }
 
     /// Open a remote stream with extra request headers (resolved media URLs
@@ -78,7 +84,16 @@ impl PcmSource {
         url: &str,
         headers: &[(String, String)],
     ) -> Result<Self, AudioError> {
-        let mut stream = HttpStream::open_with_headers(url, headers).map_err(AudioError::Io)?;
+        Self::open_remote_with_headers_opts(url, headers, false)
+    }
+
+    fn open_remote_with_headers_opts(
+        url: &str,
+        headers: &[(String, String)],
+        insecure_tls: bool,
+    ) -> Result<Self, AudioError> {
+        let mut stream = HttpStream::open_with_headers_opts(url, headers, insecure_tls)
+            .map_err(AudioError::Io)?;
         let source_len = Some(stream.total_len());
         let replaygain_gain = replaygain::scan(&mut stream);
         stream.rewind().map_err(AudioError::Io)?;

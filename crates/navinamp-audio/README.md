@@ -44,7 +44,9 @@ play opener ("navinamp-audio-play-opener")
   `std::env::temp_dir()` on the first seek and served locally from then on
   (deleted on drop). Redirects are followed up to 5 hops. Subsonic stream
   URLs embed auth tokens, so every error surfaced scrubs the URL to `<url>`;
-  nothing in the engine logs URLs. Gapless local↔remote transitions and
+  nothing in the engine logs URLs. `TrackSource::Remote` keeps normal TLS
+  verification; self-signed/private-CA servers use `RemoteInsecure`, opted in
+  per Navidrome profile and scoped to that stream. Gapless local↔remote transitions and
   window pre-opening behave exactly like files. The current track's transport
   lives on the producer thread; opening a lookahead source or an explicit
   `Play` target (initial GET, ReplayGain scan, container probe) runs on an

@@ -93,7 +93,7 @@ pub(crate) struct ReqwestFetch {
 }
 
 impl ReqwestFetch {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(crate) fn new(insecure_tls: bool) -> io::Result<Self> {
         let client = reqwest::blocking::Client::builder()
             // Redirects are followed by `get` so it can strip resolver headers
             // that must not cross an origin boundary (Referer/Origin, cookies,
@@ -101,6 +101,11 @@ impl ReqwestFetch {
             // credential subset.
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
+            // The caller opts in per Navidrome profile; ordinary remote URLs
+            // keep normal certificate verification. Hostname verification is
+            // disabled alongside it for self-signed certs with a bare CN.
+            .danger_accept_invalid_certs(insecure_tls)
+            .tls_danger_accept_invalid_hostnames(insecure_tls)
             .build()
             .map_err(scrub_reqwest_error)?;
         Ok(Self { client })
@@ -424,9 +429,14 @@ impl<F: HttpFetch> HttpStream<F> {
 
 /// `HttpStream<ReqwestFetch>` opened against a real URL.
 impl HttpStream<ReqwestFetch> {
-    /// Open against a real URL, with resolver-provided request headers.
-    pub(crate) fn open_with_headers(url: &str, headers: &[(String, String)]) -> io::Result<Self> {
-        Self::with_fetch_headers(url, ReqwestFetch::new()?, headers.to_vec())
+    /// Open against a real URL, with resolver-provided request headers and
+    /// an optional per-source TLS-verification bypass.
+    pub(crate) fn open_with_headers_opts(
+        url: &str,
+        headers: &[(String, String)],
+        insecure_tls: bool,
+    ) -> io::Result<Self> {
+        Self::with_fetch_headers(url, ReqwestFetch::new(insecure_tls)?, headers.to_vec())
     }
 }
 
