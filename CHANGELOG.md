@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.14.0](https://github.com/prop/navinamp/compare/v0.13.0...v0.14.0) (2026-11-06)
+
+
+### Features
+
+* **audio:** support self-signed remote streams ([1dda52a](https://github.com/prop/navinamp/commit/1dda52a5a11389af85ac522a7ac582ffab93e5f0))
+* **brand:** add wine-drop logo and regenerate icons ([97435d8](https://github.com/prop/navinamp/commit/97435d8304f81210b8a76afdc7145581b2259633))
+* **brand:** wine logo and README refresh ([9c0cff7](https://github.com/prop/navinamp/commit/9c0cff7a963ef4e18e2185bcc5bc748296f91802))
+* **player:** surface playback errors in the warning badge ([1692173](https://github.com/prop/navinamp/commit/1692173a03cb26e280311c52c5bee6356d08a29d))
+* **playlist:** skin the editor frame and action bar ([72c6c8d](https://github.com/prop/navinamp/commit/72c6c8dd03ae865d86904c849ae7b49b29c0e27b))
+* **playlist:** skin the editor frame and action bar ([ba7cba5](https://github.com/prop/navinamp/commit/ba7cba5dbf0048f4baef003d7cdc49827c200822))
+* **ui:** add a global UI scale selector ([8766d24](https://github.com/prop/navinamp/commit/8766d2425781872db28c31d8e2f937bdddbe8170))
+* **ui:** add a global UI scale selector ([3c97f2c](https://github.com/prop/navinamp/commit/3c97f2c410a5503bdb100c4114d47d3f437d01c4))
+* **ui:** close dialogs and secondary windows with Escape ([5c70b91](https://github.com/prop/navinamp/commit/5c70b91a924ff44ebd48d35af326b3223c6a1fb6))
+* **ui:** close dialogs and secondary windows with Escape ([81ef0ad](https://github.com/prop/navinamp/commit/81ef0ad2fa9aea3912689419c2ccbd99660877f1))
+
+
+### Bug Fixes
+
+* **library:** natural path order for unpadded track numbers ([abd353b](https://github.com/prop/navinamp/commit/abd353b905ede3ba01b6028bf63d9d580ef42cd3))
+* **library:** order paged views and bulk adds by file path ([f7e9481](https://github.com/prop/navinamp/commit/f7e94818a4ccf361d8caa8d23b31b959eca49ce9))
+* **library:** order paged views and bulk adds by file path ([4b0352e](https://github.com/prop/navinamp/commit/4b0352e1766b2442aa89b865b38c66fef8bffaa0))
+* **navidrome:** play self-signed profiles through the insecure source ([51ed615](https://github.com/prop/navinamp/commit/51ed61563e75d424716e875e33d22ce8af9613e9))
+* **navidrome:** play streams from self-signed profiles ([1c4c7d4](https://github.com/prop/navinamp/commit/1c4c7d4ad9f1ce0f64bbf4a9af9c92fa75657d20))
+* **notify:** consume art_path on Linux (cfg cleanup made it unused there) ([1973607](https://github.com/prop/navinamp/commit/197360721ae6735692b101dc584f06e2bef63d26))
+* **notify:** deliver via NSUserNotificationCenter so dev runs work ([9cbc801](https://github.com/prop/navinamp/commit/9cbc8018924e4020551e73df5a42e1965a709f94))
+* **notify:** deliver via NSUserNotificationCenter so dev runs work ([2a7e3e0](https://github.com/prop/navinamp/commit/2a7e3e073715f22067881d743c08dea9781af920))
+* **notify:** review follow-ups — DND note, macos temp cleanup, pin ([6154f0d](https://github.com/prop/navinamp/commit/6154f0ddb93c4159b3933be85360f9c0050af2f6))
+* **player:** close the playback warning panel when the error clears ([77eaa00](https://github.com/prop/navinamp/commit/77eaa00522af8927678835b8ba42d1c9c860856a))
+* **playlist:** address review follow-ups ([681d4f7](https://github.com/prop/navinamp/commit/681d4f701871217727c036608d575c85e226b23f))
+* **playlist:** expose the queue summary to assistive tech ([509fff4](https://github.com/prop/navinamp/commit/509fff4c82b5b6bc729f989e5910c451e3268fec))
+* **playlist:** filter only the fallback skin's sample placeholders ([db2e870](https://github.com/prop/navinamp/commit/db2e8708a40d464caadbd7294364cb744a3a0b11))
+* **playlist:** keep a generic font fallback after the skin font ([ee793d5](https://github.com/prop/navinamp/commit/ee793d55829cee7fff193800c9e013d0cf2455e0))
+* **playlist:** keep footer actions inside the narrow window ([469a964](https://github.com/prop/navinamp/commit/469a964a7f389e7b7c61c37d396a8f06e381a7a5))
+* **playlist:** keep footer actions inside the narrow window ([4958cc7](https://github.com/prop/navinamp/commit/4958cc78d1092d50639ee5c29b915fd9fe3a63fb))
+* **playlist:** keep open menus above the titlebar drag layer ([4c58e59](https://github.com/prop/navinamp/commit/4c58e59943461049445f1b72f32b7da101ddf50e))
+* **playlist:** keep row menus aligned inside the scaled skin overlay ([8fd3451](https://github.com/prop/navinamp/commit/8fd3451dcc219296615636096f41ee7020aff300))
+* **skin:** make the bitmap fallback color reactive and cover time ([9f82d03](https://github.com/prop/navinamp/commit/9f82d03ac48048979306075a69a2d3d9de8ede58))
+* **skin:** match bitmap glyph color for missing-glyph fallback ([648956b](https://github.com/prop/navinamp/commit/648956b634c9c4fbdafe59897af49b30f3b5417b))
+* **skin:** match bitmap glyph color for missing-glyph fallback ([27ad4cb](https://github.com/prop/navinamp/commit/27ad4cb72e35f05ebd199a5909759ebd81d7a8db))
+* **ui:** guard Alt+S against non-element key targets ([d476016](https://github.com/prop/navinamp/commit/d4760169db6a3850b76a6892753724e933431a1f))
+* **ui:** leave Alt+S alone while typing in a field ([11951ab](https://github.com/prop/navinamp/commit/11951ab316eb9ab789a59be62cf7e3864b87c508))
+* **ui:** migrate AddUrlDialog to the shared Escape stack ([6130327](https://github.com/prop/navinamp/commit/613032771a4ebd9602294f9dc0c02cc970a0d636))
+* **ui:** retry failed window-size requests ([a80e9ef](https://github.com/prop/navinamp/commit/a80e9ef80bd38258c17d0dfb7efc2ea7c0a3ccc2))
+
 ## [0.13.0](https://github.com/prop/navinamp/compare/v0.12.0...v0.13.0) (2026-11-05)
 
 
