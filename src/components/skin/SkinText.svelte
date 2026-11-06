@@ -223,6 +223,18 @@
 
   const useGlyphs = $derived(font != null && glyphsFit);
 
+  // HTML-path colour for a bitmap skin. Don't sample unless the glyph path is
+  // actually unavailable (sampling is a real getImageData, and must not be
+  // pinned by an early read). While a declared strip is still loading or
+  // failed, use a neutral colour instead of the generic green; time readouts
+  // have their own green default and previously kept it forever on a missing
+  // numbers.bmp.
+  const fallbackColor = $derived.by(() => {
+    if (useGlyphs) return null;
+    if (font != null) return font.fallbackColor();
+    return o?.params?.["font"] ? "#c8c8c8" : null;
+  });
+
   // ── bitmap-glyph canvas ────────────────────────────────────────────────────
 
   let canvasEl = $state<HTMLCanvasElement | null>(null);
@@ -298,12 +310,15 @@
 
   const style = $derived.by(() => {
     const p = o?.params ?? {};
+    // Classic bitmap skins: when a Cyrillic/CJK title cannot use the strip,
+    // keep the HTML fallback in the strip's own glyph colour instead of the
+    // generic green. Non-bitmap skins leave `font` null and keep CSS green.
     return [
       `left:${obj.x}px`,
       `top:${obj.y}px`,
       `width:${obj.w ?? 0}px`,
       `height:${obj.h ?? 0}px`,
-      p["color"] ? `color:${p["color"]}` : "",
+      p["color"] ? `color:${p["color"]}` : fallbackColor ? `color:${fallbackColor}` : "",
       p["font"] && !stripUrl ? `font-family:${p["font"]}` : "",
       p["fontsize"] ? `font-size:${p["fontsize"]}px` : "",
       p["bold"] === "1" ? "font-weight:bold" : "",
