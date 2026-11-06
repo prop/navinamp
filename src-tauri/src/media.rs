@@ -291,7 +291,9 @@ struct MediaCommandPayload {
 /// current macOS releases, including content images; the backend can be
 /// switched to UNUserNotificationCenter via notify-rust's
 /// `preview-macos-un` feature once notifications are only expected from
-/// bundled builds.
+/// bundled builds. No authorization is requested or required on this
+/// backend — and note the observable failure mode: while Do Not Disturb /
+/// Focus is on, toasts are silently dropped.
 ///
 /// Art is best-effort: undecodable/absent bytes notify WITHOUT art rather
 /// than failing the notification. The temp file is intentionally left in
@@ -305,6 +307,7 @@ pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result
 
     let mut note = notify_rust::Notification::new();
     note.summary(&title);
+    let mut art_path: Option<std::path::PathBuf> = None;
     if let Some(encoded) = art_base64.as_deref().filter(|s| !s.trim().is_empty()) {
         // Any art failure (undecodable, unknown format, unwritable) degrades
         // to a text-only toast instead of losing the notification.
@@ -321,12 +324,21 @@ pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result
                 ));
                 if std::fs::write(&path, &bytes).is_ok() {
                     note.image_path(path.to_string_lossy().as_ref());
+                    art_path = Some(path);
                 }
             }
             None => eprintln!("navinamp notify: art skipped (undecodable or unknown format)"),
         }
     }
     note.show().map_err(|e| format!("notify: {e}"))?;
+    // macOS reads the content image eagerly inside show(), so the temp file
+    // can be removed right away. Linux's D-Bus daemon reads it lazily after
+    // show() returns, where deleting would race the toast — files are left
+    // for the OS's temp cleanup instead.
+    #[cfg(target_os = "macos")]
+    if let Some(path) = art_path {
+        std::fs::remove_file(path).ok();
+    }
     Ok(())
 }
 
