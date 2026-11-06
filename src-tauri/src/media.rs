@@ -331,15 +331,25 @@ pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result
         }
     }
     note.show().map_err(|e| format!("notify: {e}"))?;
-    // macOS reads the content image eagerly inside show(), so the temp file
-    // can be removed right away. Linux's D-Bus daemon reads it lazily after
-    // show() returns, where deleting would race the toast — files are left
-    // for the OS's temp cleanup instead.
-    #[cfg(target_os = "macos")]
-    if let Some(path) = art_path {
+    cleanup_notify_art(art_path);
+    Ok(())
+}
+
+/// The notify art temp file's post-`show()` lifecycle. macOS reads the
+/// content image eagerly inside `show()`, so the file can be removed right
+/// away. Linux's D-Bus daemon reads it lazily after `show()` returns —
+/// deleting there would race the toast, so the file is left for the OS's
+/// temp cleanup instead.
+#[cfg(target_os = "macos")]
+fn cleanup_notify_art(path: Option<std::path::PathBuf>) {
+    if let Some(path) = path {
         std::fs::remove_file(path).ok();
     }
-    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cleanup_notify_art(path: Option<std::path::PathBuf>) {
+    drop(path); // kept: the daemon may still be reading it
 }
 
 /// Push track metadata + position from the player window. Position updates
