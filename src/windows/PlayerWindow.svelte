@@ -45,8 +45,8 @@
     playerLayoutMode,
     publishSkinTheme,
     setMediaCommandExecutor,
+    sizeWindowTo,
     windowIsVisible,
-    windowSetSize,
     windowSetVisible,
     windowToggleLayout,
   } from "../lib/window/bus.svelte";
@@ -424,7 +424,7 @@
     void l.w;
     void l.h;
     void scale;
-    windowSetSize("main", l.w * scale, l.h * scale).catch(warnIpc);
+    sizeWindowTo("main", l.w * scale, l.h * scale);
   });
 
   $effect(() => {

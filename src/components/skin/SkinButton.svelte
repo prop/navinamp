@@ -157,6 +157,7 @@
 {#if o}
   <div
     class="btn"
+    class:bare={!image}
     class:hover
     class:down
     class:toggled={obj.object.kind === "togglebutton" && toggled && !activeImage}
@@ -190,6 +191,14 @@
     cursor: pointer;
     user-select: none;
     touch-action: none;
+  }
+
+  /* Image-less buttons are transparent hotspots over artwork the skin has
+     already painted (classic pledit's baked ADD/REM/SEL/MISC + titlebar
+     glyphs). Keep the hit area and focus ring, drop the fallback chrome. */
+  .btn.bare {
+    background-color: transparent;
+    outline: none;
   }
 
   .btn:focus-visible {

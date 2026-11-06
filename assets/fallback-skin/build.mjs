@@ -468,7 +468,7 @@ const TRANSPORTS = [
 const PLAYLIST_ACTIONS = [
   ["add", "PLAYLIST_ADD", "Add media"],
   ["rem", "PLAYLIST_REMOVE", "Remove selected"],
-  ["sel", "PLAYLIST_SELECT", "Select all"],
+  ["sel", "PLAYLIST_SELECT", "Select playing track"],
   ["misc", "PLAYLIST_MISC", "Playlist options"],
 ];
 // EQ metrics (classic Winamp EQ geometry in a 275x116 window): the
@@ -911,11 +911,11 @@ function generate() {
 
   // ---- skin.xml -----------------------------------------------------------
 
-  // Title-bar window buttons; `shadeAction` wires the shade button to a real
-  // action (player titlebar only — the playlist's stays decorative).
-  const winButtons = (prefix, shadeAction) =>
+  // Title-bar window buttons. `actions` wires individual glyphs to real
+  // actions (the playlist wires all three; the player wires shade only).
+  const winButtons = (prefix, actions = {}) =>
     WIN_BUTTONS.map(([name, tip], i) => {
-      const action = name === "shade" && shadeAction ? ` action="${shadeAction}"` : "";
+      const action = actions[name] ? ` action="${actions[name]}"` : "";
       return `    <togglebutton id="${prefix}.${name}"${action} image="player.win.${name}.normal" hoverimage="player.win.${name}.hover" downimage="player.win.${name}.down" x="${227 + i * 16}" y="2" w="14" h="10" tooltip="${tip}"/>`;
     }).join("\n");
 
@@ -980,7 +980,7 @@ ${elementsXml}
        one toggles the real window layout). -->
   <groupdef id="player.titlebar" background="titlebar.player.bg" x="0" y="0" w="275" h="14">
     <layer id="player.title.logo" image="player.title.logo" x="4" y="3" w="36" h="8"/>
-${winButtons("player", "TOGGLE_SHADE")}
+${winButtons("player", { shade: "TOGGLE_SHADE" })}
   </groupdef>
 
   <!-- Recessed display: ticker, play meter, big time, status, kbps/khz/stereo. -->
@@ -1014,7 +1014,7 @@ ${shadeButtons}
   <!-- Playlist window chrome (reuses the window-button sheet). -->
   <groupdef id="playlist.titlebar" background="titlebar.playlist.bg" x="0" y="0" w="275" h="14">
     <layer id="playlist.title.logo" image="playlist.title.logo" x="4" y="3" w="48" h="8"/>
-${winButtons("playlist")}
+${winButtons("playlist", { min: "MINIMIZE", shade: "TOGGLE_SHADE", close: "CLOSE" })}
   </groupdef>
 
   <!-- Playlist bottom-bar action buttons. -->
@@ -1055,7 +1055,7 @@ ${winButtons("eq")}
     <layout id="normal" x="0" y="0" w="275" h="232" background="playlist.window">
       <layer id="playlist.background" image="playlist.window" x="0" y="0" w="275" h="232"/>
       <group id="playlist.titlebar" x="0" y="0" w="275" h="14"/>
-      <layer id="playlist.list.bg" image="playlist.list.panel" x="5" y="17" w="265" h="174"/>
+      <layer id="playlist.list.bg" image="playlist.list.panel" x="5" y="17" w="265" h="174" rowheight="20"/>
       <layer id="playlist.row.divider" image="playlist.row.divider" x="9" y="21" w="257" h="13"/>
       <layer id="playlist.row.selected" image="playlist.row.selected" x="9" y="47" w="257" h="13"/>
       <layer id="playlist.row.current" image="playlist.row.current" x="9" y="21" w="257" h="13"/>

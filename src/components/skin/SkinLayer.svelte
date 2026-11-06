@@ -32,6 +32,20 @@
 
   const url = $derived(o?.image ? images[o.image] : undefined);
 
+  // Classic pledit frames stretch by repeating a 25/29px strip instead of
+  // stretching it (blurred bevels). `tile` is `x`, `y`, `1`/`both` (a Wasabi
+  // skin can carry the same hint in its params). X-only keeps the strip's
+  // natural width and fills the height (`auto 100%`); y-only is the inverse,
+  // so bevel pixels are always 1:1.
+  const tile = $derived((o?.params?.["tile"] ?? "").toLowerCase());
+  const repeatX = $derived(tile === "x" || tile === "1" || tile === "both");
+  const repeatY = $derived(tile === "y" || tile === "1" || tile === "both");
+  const tileStyle = $derived(
+    repeatX || repeatY
+      ? `background-size:${repeatX ? "auto" : "100%"} ${repeatY ? "auto" : "100%"};background-repeat:${repeatX && repeatY ? "repeat" : repeatX ? "repeat-x" : "repeat-y"};`
+      : "",
+  );
+
   // Natural strip size for the frame-count heuristic (data URLs decode async).
   let natural = $state<{ w: number; h: number } | null>(null);
 
@@ -84,7 +98,7 @@
       class="img"
       style="left:{obj.x}px; top:{obj.y}px; width:{obj.w}px; height:{obj.h}px;
         background-image:url('{url}'); background-size:{frames * 100}% 100%;
-        background-position:{-frame * obj.w}px 0px;"
+        background-position:{-frame * obj.w}px 0px;{tileStyle}"
       title={o?.id ?? undefined}
     ></div>
   {:else}

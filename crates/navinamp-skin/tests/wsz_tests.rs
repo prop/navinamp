@@ -270,8 +270,54 @@ fn full_classic_skin_synthesizes_three_containers() {
         other => panic!("expected EQ close button, got {other:?}"),
     }
 
-    // playlist: pledit.bmp tiles
-    assert_eq!(of_kind(playlist, "layer").len(), 9);
+    // playlist: pledit.bmp frame (8 tiles) + 3 HTML-slot markers, and the
+    // baked-in buttons/titlebar glyphs exposed as transparent hotspots.
+    assert_eq!(of_kind(playlist, "layer").len(), 8 + 3);
+    assert_eq!(of_kind(playlist, "button").len(), 7);
+    for action in [
+        "PLAYLIST_ADD",
+        "PLAYLIST_REMOVE",
+        "PLAYLIST_SELECT",
+        "PLAYLIST_MISC",
+        "PLAYLIST_LIST",
+        "TOGGLE_SHADE",
+        "CLOSE",
+    ] {
+        assert!(
+            with_action(playlist, action).is_some(),
+            "playlist must expose {action}"
+        );
+    }
+    let marker_ids: Vec<&str> = playlist
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            GuiObject::Layer(l) if l.image.is_none() => l.id.as_deref(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        marker_ids,
+        vec!["wsz.pl.list", "wsz.pl.totals", "wsz.playlist.titlebar.zone"]
+    );
+    let axis = |want: &str| {
+        playlist.objects.iter().find_map(|o| match o {
+            GuiObject::Layer(l) if l.id.as_deref() == Some(want) => {
+                l.params.get("tile").map(String::as_str)
+            }
+            _ => None,
+        })
+    };
+    assert_eq!(axis("wsz.pl.tc"), Some("x"), "titlebar tiles horizontally");
+    assert_eq!(axis("wsz.pl.ml"), Some("y"), "left rail tiles vertically");
+    assert_eq!(axis("wsz.pl.mr"), Some("y"), "right rail tiles vertically");
+    let rowheight = playlist.objects.iter().find_map(|o| match o {
+        GuiObject::Layer(l) if l.id.as_deref() == Some("wsz.pl.list") => {
+            l.params.get("rowheight").map(String::as_str)
+        }
+        _ => None,
+    });
+    assert_eq!(rowheight, Some("16"), "classic PE row height");
 }
 
 #[test]
@@ -646,6 +692,43 @@ fn missing_optional_files_skip_objects_but_parse() {
     assert!(
         eq.objects.is_empty(),
         "eq objects skipped with eqmain absent"
+    );
+
+    // Without pledit.bmp there is no frame to hang the HTML list on, so the
+    // container is omitted entirely and the frontend keeps its fallback panel.
+    assert!(
+        !skin.containers.iter().any(|c| c.id == "playlist"),
+        "no playlist container without pledit.bmp"
+    );
+}
+
+#[test]
+fn tiny_pledit_bmp_keeps_the_html_fallback() {
+    let mut entries: Vec<(&str, Vec<u8>)> = FULL_BMPS
+        .iter()
+        .filter(|(name, _, _)| *name != "pledit.bmp")
+        .map(|(name, w, h)| (*name, bmp(*w, *h)))
+        .collect();
+    entries.push(("pledit.bmp", bmp(1, 1)));
+    entries.push(("viscolor.txt", VISCOLOR_TXT.as_bytes().to_vec()));
+    entries.push(("pledit.txt", PLEDIT_INI_TXT.as_bytes().to_vec()));
+    let borrowed: Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(name, data)| (*name, data.as_slice()))
+        .collect();
+    let (_archive, skin, warnings) = parse_classic(zip_bytes(&borrowed));
+
+    assert!(
+        !skin.containers.iter().any(|c| c.id == "playlist"),
+        "a 1x1 frame must not produce a skinned playlist window"
+    );
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Warning::MalformedValue { element, attribute, .. }
+                if element == "pledit.bmp" && attribute == "size"
+        )),
+        "the truncated frame is reported: {warnings:#?}"
     );
 }
 

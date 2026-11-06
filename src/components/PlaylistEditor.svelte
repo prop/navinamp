@@ -1,11 +1,12 @@
 <script lang="ts">
   /**
    * Winamp3 Playlist Editor *flavor* (the M3 interaction panel). Fixed-width
-   * dark panel whose LIST AREA is themed from the loaded skin's pledit.txt
-   * colors (the `theme` prop: normal/current text, list bg, selected bg —
-   * classic green-on-black fallback) and set in a bundled OFL pixel font
-   * (Silkscreen, src/assets/fonts). Pure props/callbacks — the component
-   * knows nothing about the queue module's state or IPC.
+   * panel whose LIST AREA is themed from the loaded skin's pledit.txt colors
+   * and font (the `theme` prop: normal/current text, list bg, selected bg,
+   * font — classic green-on-black fallback). When a skin has a playlist
+   * container the window embeds this component (`embedded`) inside the skin
+   * frame and hides the HTML footer/border. Pure props/callbacks — the
+   * component knows nothing about the queue module's state or IPC.
    *
    * Interactions: click selects, double-click plays, pointer-drag reorders
    * (drop indicator, no live reshuffle — simple and robust), Delete removes
@@ -13,7 +14,7 @@
    * dialogs; ADD URL adds an http(s) stream; REM removes the selection.
    */
   import { isStreamUrl, type QueueItem } from "../lib/player/queue.svelte";
-  import type { SkinTheme } from "../lib/skin/theme";
+  import { mixHex, type SkinTheme } from "../lib/skin/theme";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import { clearEqFor, getArtistEq, getTrackEq, rememberEq } from "../lib/audio/auto";
   import { librarySetRating, libraryTrack, type Track } from "../lib/library/ipc";
@@ -24,6 +25,23 @@
     currentIndex: number | null;
     /** pledit.txt colors from the loaded skin (defaults handled by caller). */
     theme?: SkinTheme;
+    /**
+     * Selected row index (bindable): the skinned playlist window drives the
+     * skin's REM/SEL action buttons from it.
+     */
+    selected?: number | null;
+    /**
+     * Embedded mode: fill the caller's box and hide the HTML footer/border
+     * (the skin frame owns the chrome and action buttons).
+     */
+    embedded?: boolean;
+    /** Row height in CSS pixels (classic PE rows are tighter than the panel). */
+    rowHeight?: number;
+    /**
+     * Visual scale of the surrounding skin overlay (context-menu math).
+     * Pointer-to-row math measures the actual rendered scale instead.
+     */
+    scale?: number;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
@@ -36,6 +54,10 @@
     items,
     currentIndex,
     theme,
+    selected = $bindable(null),
+    embedded = false,
+    rowHeight = 20,
+    scale = 1,
     onplay,
     onremove,
     onmove,
@@ -44,12 +66,10 @@
     onaddurl,
   }: Props = $props();
 
-  // Must match the .row height so drag math stays trivial.
-  const ROW_H = 20;
+  /** Must match the rendered .row height so drag math stays trivial. */
+  const ROW_H = $derived(rowHeight);
   /** Extra rows above/below the viewport (smooth fast scrolling). */
   const OVERSCAN = 8;
-
-  let selected = $state<number | null>(null);
   let listEl: HTMLElement | null = null;
 
   // Windowed rendering: PLAY ALL on a 50k-track library must not create 50k
@@ -115,6 +135,12 @@
     }
   }
 
+  // A selection set from OUTSIDE the list (the skinned SEL action selects
+  // the playing row) must also scroll into view; clicks are already visible.
+  $effect(() => {
+    if (selected != null) ensureVisible(selected);
+  });
+
   /** Jump to the playing row (the queue can be tens of thousands of rows). */
   function goToCurrent(): void {
     if (currentIndex == null) return;
@@ -145,11 +171,23 @@
     return it.artist ? `${it.artist} - ${it.title}` : it.title;
   }
 
+  /**
+   * Screen px per layout px for the list. The skin overlay may be CSS-scaled;
+   * measuring the rendered box avoids depending on (or double-applying) the
+   * caller's scale prop.
+   */
+  function pointerUnit(): number {
+    const el = listEl;
+    if (!el || el.offsetHeight <= 0) return 1;
+    return el.getBoundingClientRect().height / el.offsetHeight || 1;
+  }
+
   function gapFrom(e: PointerEvent): number {
     const el = listEl;
     if (!el) return 0;
     const r = el.getBoundingClientRect();
-    const y = e.clientY - r.top + el.scrollTop;
+    // clientY is screen-space, scrollTop/ROW_H are layout-space.
+    const y = (e.clientY - r.top) / pointerUnit() + el.scrollTop;
     return Math.max(0, Math.min(items.length, Math.round(y / ROW_H)));
   }
 
@@ -183,7 +221,7 @@
 
   function rowMove(e: PointerEvent): void {
     if (!drag) return;
-    if (!drag.moved && Math.abs(e.clientY - dragStartY) < 4) return;
+    if (!drag.moved && Math.abs(e.clientY - dragStartY) < 4 * pointerUnit()) return;
     drag.moved = true;
     drag.gap = gapFrom(e);
   }
@@ -469,17 +507,29 @@
   // theme-less caller; every rule below reads only these variables).
   const themeVars = $derived.by(() => {
     const t = theme;
+    const normal = t?.normal ?? "#00ff00";
+    const current = t?.current ?? "#ffffff";
+    const bg = t?.normalbg ?? "#000000";
     return [
-      `--pl-normal:${t?.normal ?? "#00ff00"}`,
-      `--pl-current:${t?.current ?? "#ffffff"}`,
-      `--pl-bg:${t?.normalbg ?? "#000000"}`,
+      `--pl-normal:${normal}`,
+      `--pl-current:${current}`,
+      `--pl-bg:${bg}`,
       `--pl-selected-bg:${t?.selectedbg ?? "#0000c6"}`,
-      `--pl-marker:${t?.marker ?? t?.current ?? "#ffffff"}`,
+      `--pl-marker:${t?.marker ?? current}`,
+      `--pl-border:${mixHex(normal, bg, 0.35)}`,
+      `--pl-thumb:${mixHex(normal, bg, 0.55)}`,
+      `--pl-hover:${mixHex(bg, "#ffffff", 0.08)}`,
+      `--pl-font:${
+        t?.font
+          ? `${t.font}, Tahoma, sans-serif`
+          : 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'
+      }`,
+      `--row-h:${rowHeight}px`,
     ].join(";");
   });
 </script>
 
-<div class="pl" style={themeVars}>
+<div class="pl" class:embedded style={themeVars}>
   <div
     class="list"
     bind:this={listEl}
@@ -523,21 +573,23 @@
     </div>
   </div>
 
-  <footer class="bar">
-    <button onclick={() => onadd()}>ADD</button>
-    <button onclick={() => onadddir()} title="add a folder recursively">ADD DIR</button>
-    <button onclick={() => onaddurl()} title="add an http(s) audio stream or YouTube link">
-      ADD URL
-    </button>
-    <button
-      onclick={() => selected != null && onremove(selected)}
-      disabled={selected == null}>REM</button
-    >
-    <button
-      onclick={goToCurrent}
-      disabled={currentIndex == null}
-      title="scroll to the current queue item">NOW</button>
-  </footer>
+  {#if !embedded}
+    <footer class="bar">
+      <button onclick={() => onadd()}>ADD</button>
+      <button onclick={() => onadddir()} title="add a folder recursively">ADD DIR</button>
+      <button onclick={() => onaddurl()} title="add an http(s) audio stream or YouTube link">
+        ADD URL
+      </button>
+      <button
+        onclick={() => selected != null && onremove(selected)}
+        disabled={selected == null}>REM</button
+      >
+      <button
+        onclick={goToCurrent}
+        disabled={currentIndex == null}
+        title="scroll to the current queue item">NOW</button>
+    </footer>
+  {/if}
 </div>
 
 {#if menu}
@@ -546,6 +598,7 @@
     y={menu.y}
     items={menuItems}
     info={menuDetails}
+    {scale}
     onselect={menuSelect}
     onclose={() => (menu = null)} />
 {/if}
@@ -556,9 +609,18 @@
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--pl-border, #3a3a3a);
     background: #161616;
     user-select: none;
+  }
+
+  /* Embedded in a skin frame: the caller owns the box, border and actions. */
+  .pl.embedded {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border: none;
+    background: transparent;
   }
 
   .list {
@@ -567,7 +629,13 @@
     overflow-y: auto;
     background: var(--pl-bg);
     scrollbar-width: thin;
-    scrollbar-color: #2f4f33 var(--pl-bg);
+    scrollbar-color: var(--pl-thumb) var(--pl-bg);
+  }
+
+  .pl.embedded .list {
+    height: 100%;
+    flex: 1;
+    min-height: 0;
   }
 
   .list:focus-visible {
@@ -579,7 +647,7 @@
   }
 
   .list::-webkit-scrollbar-thumb {
-    background: #2f4f33;
+    background: var(--pl-thumb);
   }
 
   .rows {
@@ -596,10 +664,10 @@
   .row {
     display: flex;
     align-items: center;
-    height: 20px;
-    line-height: 20px;
+    height: var(--row-h, 20px);
+    line-height: var(--row-h, 20px);
     padding: 0 6px;
-    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-family: var(--pl-font);
     font-size: 11px;
     color: var(--pl-normal); /* classic Winamp playlist green by default */
     cursor: default;
@@ -607,7 +675,7 @@
   }
 
   .row:hover {
-    background: rgba(255, 255, 255, 0.06); /* subtle on any pledit bg */
+    background: var(--pl-hover); /* subtle on any pledit bg */
   }
 
   .row.selected {
@@ -643,7 +711,7 @@
 
   .empty {
     padding: 6px 8px;
-    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-family: var(--pl-font);
     font-size: 11px;
     color: var(--pl-normal);
     opacity: 0.55;
@@ -663,26 +731,26 @@
     align-items: center;
     gap: 3px;
     padding: 3px 5px;
-    background: #101010;
-    border-top: 1px solid #2a2a2a;
+    background: var(--pl-bg);
+    border-top: 1px solid var(--pl-border);
   }
 
   .bar button {
-    background: #1c1c1c;
-    color: #9a9a9a;
-    border: 1px solid #3a3a3a;
+    background: transparent;
+    color: var(--pl-normal);
+    border: 1px solid var(--pl-border);
     border-radius: 2px;
     /* Five compact footer actions must fit the 275px playlist. */
     padding: 1px 4px;
-    font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+    font-family: var(--pl-font);
     font-size: 10px;
     white-space: nowrap;
     cursor: pointer;
   }
 
   .bar button:hover:not(:disabled) {
-    border-color: #3ccb4e;
-    color: #3ccb4e;
+    border-color: var(--pl-current);
+    color: var(--pl-current);
   }
 
   .bar button:disabled {

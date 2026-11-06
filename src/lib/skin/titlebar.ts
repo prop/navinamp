@@ -4,12 +4,16 @@
  * The skin — not the app — draws the window chrome, so the draggable band
  * must be discovered from the skin model. Detection, in order:
  *
- *  1. a `<group id="player.titlebar">` instance in the CURRENT layout → its
- *     rect is the band (the fallback skin's player/playlist titlebars, and
- *     any third-party skin following the same convention);
- *  2. a short layout (≤ SHADE_STRIP_H) is a shade strip → the whole window
+ *  1. a group instance whose id is `player.titlebar` or
+ *     `<container>.titlebar` in the CURRENT layout → its rect is the band
+ *     (the fallback skin's player/playlist/EQ titlebars, and any third-party
+ *     skin following the same convention);
+ *  2. a `<layer id="<container>.titlebar.zone">` marker → its rect is the
+ *     band (the classic .wsz synthesizer uses this for pledit.bmp's 20px
+ *     playlist titlebar, which has no group definition);
+ *  3. a short layout (≤ SHADE_STRIP_H) is a shade strip → the whole window
  *     is the band;
- *  3. the classic constant: y 0..14 across the window width (the fallback
+ *  4. the classic constant: y 0..14 across the window width (the fallback
  *     skin's titlebar bitmap is 275×14, ink divider at y=13).
  *
  * Interactive objects inside the band (buttons, togglebuttons, sliders,
@@ -38,16 +42,35 @@ export interface DragRect {
 
 type GroupInstanceObj = Extract<GuiObject, { kind: "group" }>;
 
-function isTitlebarInstance(o: GuiObject): o is GroupInstanceObj {
-  return o.kind === "group" && o.id === TITLEBAR_GROUP_ID;
+function isTitlebarInstance(o: GuiObject, containerId: string): o is GroupInstanceObj {
+  if (o.kind !== "group") return false;
+  return o.id === TITLEBAR_GROUP_ID || o.id === `${containerId}.titlebar`;
 }
 
-function titlebarGroupRect(skin: Skin, resolved: ResolvedLayout): Rect | null {
+function titlebarBand(skin: Skin, resolved: ResolvedLayout): Rect | null {
   const container = skin.containers.find((c) => c.id === resolved.containerId);
   const layout = container?.layouts.find((l) => l.id === resolved.layoutId);
-  const instance = layout?.objects.find(isTitlebarInstance);
-  if (!instance || (instance.rect.w ?? 0) <= 0 || (instance.rect.h ?? 0) <= 0) return null;
-  return instance.rect;
+  const instance = layout?.objects.find((o) => isTitlebarInstance(o, resolved.containerId));
+  if (instance) {
+    const rect = instance.rect;
+    if ((rect.w ?? 0) > 0 && (rect.h ?? 0) > 0) return rect;
+  }
+  // Classic-synth marker (a no-bitmap layer at the titlebar band). Synth
+  // bitmap ids are namespaced `wsz.`, so accept both spellings.
+  const zoneIds = new Set([
+    `${resolved.containerId}.titlebar.zone`,
+    `wsz.${resolved.containerId}.titlebar.zone`,
+  ]);
+  const zone = resolved.objects.find(
+    (o) =>
+      o.object.kind === "layer" &&
+      o.object.id != null &&
+      zoneIds.has(o.object.id),
+  );
+  if (zone && (zone.w ?? 0) > 0 && (zone.h ?? 0) > 0) {
+    return { x: zone.x, y: zone.y, w: zone.w, h: zone.h };
+  }
+  return null;
 }
 
 /** Objects the user can click/drag inside the band — they need holes. */
@@ -62,7 +85,7 @@ function isInteractive(kind: string): boolean {
  */
 export function dragRects(skin: Skin, resolved: ResolvedLayout): DragRect[] {
   const band =
-    titlebarGroupRect(skin, resolved) ??
+    titlebarBand(skin, resolved) ??
     (resolved.h <= SHADE_STRIP_H
       ? { x: 0, y: 0, w: resolved.w, h: resolved.h }
       : { x: 0, y: 0, w: resolved.w, h: CLASSIC_TITLEBAR_H });
