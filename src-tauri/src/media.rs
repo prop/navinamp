@@ -283,12 +283,17 @@ struct MediaCommandPayload {
 
 /// Show a desktop "now playing" notification (issue #34), optionally with
 /// the track's album art. Sent from the Rust side (notify-rust →
-/// UNUserNotificationCenter on macOS via the `preview-macos-un` backend;
-/// the default NSUserNotificationCenter backend is deprecated and has no
-/// authorization concept) because the webview's Web Notification API
-/// ignores images and cannot be granted permission in WKWebView. macOS
-/// handles authorization itself: the OS prompts on the first notification
-/// and remembers it in System Settings.
+/// NSUserNotificationCenter on macOS — its default backend, which works
+/// from unbundled `tauri dev` runs too, unlike UNUserNotificationCenter
+/// which requires a bundled, authorized app) because the webview's Web
+/// Notification API ignores images and cannot be granted permission in
+/// WKWebView. NSUserNotificationCenter is deprecated but still delivers on
+/// current macOS releases, including content images; the backend can be
+/// switched to UNUserNotificationCenter via notify-rust's
+/// `preview-macos-un` feature once notifications are only expected from
+/// bundled builds. No authorization is requested or required on this
+/// backend — and note the observable failure mode: while Do Not Disturb /
+/// Focus is on, toasts are silently dropped.
 ///
 /// Art is best-effort: undecodable/absent bytes notify WITHOUT art rather
 /// than failing the notification. The temp file is intentionally left in
@@ -302,6 +307,7 @@ pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result
 
     let mut note = notify_rust::Notification::new();
     note.summary(&title);
+    let mut art_path: Option<std::path::PathBuf> = None;
     if let Some(encoded) = art_base64.as_deref().filter(|s| !s.trim().is_empty()) {
         // Any art failure (undecodable, unknown format, unwritable) degrades
         // to a text-only toast instead of losing the notification.
@@ -318,13 +324,32 @@ pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result
                 ));
                 if std::fs::write(&path, &bytes).is_ok() {
                     note.image_path(path.to_string_lossy().as_ref());
+                    art_path = Some(path);
                 }
             }
             None => eprintln!("navinamp notify: art skipped (undecodable or unknown format)"),
         }
     }
     note.show().map_err(|e| format!("notify: {e}"))?;
+    cleanup_notify_art(art_path);
     Ok(())
+}
+
+/// The notify art temp file's post-`show()` lifecycle. macOS reads the
+/// content image eagerly inside `show()`, so the file can be removed right
+/// away. Linux's D-Bus daemon reads it lazily after `show()` returns —
+/// deleting there would race the toast, so the file is left for the OS's
+/// temp cleanup instead.
+#[cfg(target_os = "macos")]
+fn cleanup_notify_art(path: Option<std::path::PathBuf>) {
+    if let Some(path) = path {
+        std::fs::remove_file(path).ok();
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cleanup_notify_art(path: Option<std::path::PathBuf>) {
+    drop(path); // kept: the daemon may still be reading it
 }
 
 /// Push track metadata + position from the player window. Position updates
