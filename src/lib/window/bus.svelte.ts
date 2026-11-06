@@ -98,8 +98,71 @@ export function sizeWindowTo(label: WindowLabel, w: number, h: number): void {
   }
   const prev = lastWindowSizes.get(label);
   if (prev?.w === width && prev.h === height) return;
-  lastWindowSizes.set(label, { w: width, h: height });
-  windowSetSize(label, width, height).catch(() => undefined);
+  const entry = { w: width, h: height };
+  lastWindowSizes.set(label, entry);
+  windowSetSize(label, width, height).catch(() => {
+    // Don't remember a failed request; a later observer/effect can retry it.
+    if (lastWindowSizes.get(label) === entry) lastWindowSizes.delete(label);
+  });
+}
+
+// ── UI scale (global, persisted, broadcast to every window) ────────────────
+
+const UI_SCALE_KEY = "navinamp.ui.scale";
+
+/**
+ * Dev-tab choices. Integer scales keep the pixel skin crisp; 1.25/1.5 are
+ * for scaled macOS displays. 2× is the ceiling: the library is 652×518
+ * natural, so larger values overflow most laptop screens. The OS window is
+ * sized in logical pixels and the skin is CSS-transformed, so a 2× display
+ * effectively device-pixel-scales the bitmap again.
+ */
+export const UI_SCALE_PRESETS = [1, 1.25, 1.5, 2] as const;
+
+function normalizeUiScale(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  const clamped = Math.min(
+    UI_SCALE_PRESETS[UI_SCALE_PRESETS.length - 1],
+    Math.max(UI_SCALE_PRESETS[0], value),
+  );
+  return UI_SCALE_PRESETS.reduce((best, preset) =>
+    Math.abs(preset - clamped) < Math.abs(best - clamped) ? preset : best,
+  );
+}
+
+function storedUiScale(): number {
+  try {
+    const raw = localStorage.getItem(UI_SCALE_KEY);
+    if (raw == null) return 1;
+    return normalizeUiScale(Number.parseFloat(raw));
+  } catch {
+    return 1; // storage-less webview
+  }
+}
+
+/** Current global scale; every window reads this reactive store. */
+export const uiScale = $state<{ value: number }>({ value: storedUiScale() });
+
+/**
+ * Set the global UI scale. Every window persists the value; the originating
+ * window also broadcasts it (receivers pass `broadcast = false`).
+ */
+export function setUiScale(value: number, broadcast = true): void {
+  const next = normalizeUiScale(value);
+  if (uiScale.value === next) return;
+  uiScale.value = next;
+  try {
+    localStorage.setItem(UI_SCALE_KEY, String(next));
+  } catch {
+    // storage-less webview: session-only
+  }
+  if (broadcast) void emit("ui-scale", { scale: next });
+}
+
+/** Alt+S step through the presets (works from any window). */
+export function cycleUiScale(): void {
+  const i = UI_SCALE_PRESETS.findIndex((preset) => preset === uiScale.value);
+  setUiScale(UI_SCALE_PRESETS[(i + 1) % UI_SCALE_PRESETS.length]);
 }
 
 // ── queue intents (the queue's public methods, serialized) ─────────────────
@@ -392,6 +455,15 @@ export function initWindowBus(): void {
     const p = ev.payload;
     if (!p || p.from === PLAYER_LABEL) return;
     setFocused(p.from, p.focused);
+  });
+
+  // Global UI scale: the media library's DEV tab changes it, every window
+  // (including this one) resizes its content and OS window from the store.
+  void listen<{ scale: number }>("ui-scale", (ev) => {
+    const scale = ev.payload?.scale;
+    if (typeof scale === "number" && Number.isFinite(scale)) {
+      setUiScale(scale, false);
+    }
   });
 
   if (IS_PLAYER) {

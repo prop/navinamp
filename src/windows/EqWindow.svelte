@@ -47,6 +47,7 @@
     layoutMode,
     queueSnapshot,
     sizeWindowTo,
+    uiScale,
     windowIsVisible,
     windowSetVisible,
     windowToggleLayout,
@@ -58,7 +59,8 @@
   // ── skin loading: same persisted pick as the player; reload on switch ───
 
   let skin = $state<SkinPayload | null>(null);
-  let scale = $state(1); // Alt+S toggles 1×/2× (same as the player window)
+  // Global UI scale (DEV tab / Alt+S); all windows share it.
+  const scale = $derived(uiScale.value);
   let skinSeq = 0;
 
   async function reloadSkin(): Promise<void> {
@@ -364,17 +366,6 @@
     const ro = new ResizeObserver(apply);
     ro.observe(el);
     return () => ro.disconnect();
-  });
-
-  $effect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === "s" || e.key === "S")) {
-        e.preventDefault();
-        scale = scale === 1 ? 2 : 1;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   });
 </script>
 

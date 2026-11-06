@@ -46,7 +46,10 @@
     queuePlayNow,
     queueReplaceAll,
     queueSnapshot,
+    setUiScale,
     sizeWindowTo,
+    uiScale,
+    UI_SCALE_PRESETS,
   } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
@@ -56,6 +59,10 @@
   const queueNote = $derived(
     `QUEUE ${snap?.currentIndex == null ? "--" : snap.currentIndex + 1}/${snap?.items.length ?? 0}`,
   );
+
+  // Global UI scale (DEV tab / Alt+S): the window content is laid out at its
+  // natural size and CSS-transformed; the outer box/OS window use scaled px.
+  const scale = $derived(uiScale.value);
 
   // ── tabs (#16): LIBRARY | EQUALIZER | SKIN | DEV; active tab persists ───
 
@@ -275,193 +282,236 @@
     Math.min(seeking ?? devState.positionSecs, duration || Infinity),
   );
 
-  // ── window sizing: natural panel size (mount + resizes) ─────────────────
+  // ── window sizing: natural panel size × global scale ────────────────────
+  // The inner .win keeps the unscaled layout (so the library's virtualized
+  // math and 640px panes stay intact); the outer .scaler reserves the scaled
+  // box and the OS window matches it.
 
   let root: HTMLElement | null = $state(null);
-  let lastW = 0;
-  let lastH = 0;
+  // Start at the window's default natural size (640px pane + 12px padding)
+  // so the first frame is not clipped before the ResizeObserver measures.
+  let naturalW = $state(652);
+  let naturalH = $state(518);
+  const scaledW = $derived(Math.ceil(naturalW * scale));
+  const scaledH = $derived(Math.ceil(naturalH * scale));
+
   $effect(() => {
     const el = root;
     if (!el) return;
-    const apply = () => {
-      const r = el.getBoundingClientRect();
-      const w = Math.ceil(r.width);
-      const h = Math.ceil(r.height);
-      if (w === 0 || h === 0 || (w === lastW && h === lastH)) return;
-      lastW = w;
-      lastH = h;
-      sizeWindowTo(LABEL, w, h);
+    const measure = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (w > 0 && h > 0) {
+        naturalW = w;
+        naturalH = h;
+      }
     };
-    apply();
-    const ro = new ResizeObserver(apply);
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   });
+
+  $effect(() => {
+    if (scaledW > 0 && scaledH > 0) {
+      sizeWindowTo(LABEL, scaledW, scaledH);
+    }
+  });
+
 </script>
 
-<div class="win" bind:this={root}>
-  <TitleStrip title="MEDIA LIBRARY" note={queueNote} />
+<div class="scaler" style="width:{scaledW}px; height:{scaledH}px;">
+  <div class="win" bind:this={root} style="transform:scale({scale});">
+    <TitleStrip title="MEDIA LIBRARY" note={queueNote} />
 
-  <TabStrip tabs={TABS} active={tab} onselect={(id) => (tab = id as TabId)} />
+    <TabStrip tabs={TABS} active={tab} onselect={(id) => (tab = id as TabId)} />
 
-  <!-- LIBRARY stays mounted (hidden while inactive): selection, search,
-       scroll position and loaded pages survive a tab round-trip (#16). -->
-  <div id="pane-library" class="pane" role="tabpanel" aria-labelledby="tab-library" class:off={tab !== "library"}>
-    <MediaLibrary
-      onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
-      onplaynow={(metas) => queuePlayNow(metas)}
-      onreplace={(metas) => queueReplaceAll(metas)}
-      onlog={logLine} />
-  </div>
-
-  {#if tab === "eq"}
-    <div id="pane-eq" class="pane" role="tabpanel" aria-labelledby="tab-eq">
-      <EqPanel manageCurves />
+    <!-- LIBRARY stays mounted (hidden while inactive): selection, search,
+         scroll position and loaded pages survive a tab round-trip (#16). -->
+    <div id="pane-library" class="pane" role="tabpanel" aria-labelledby="tab-library" class:off={tab !== "library"}>
+      <MediaLibrary
+        {scale}
+        onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
+        onplaynow={(metas) => queuePlayNow(metas)}
+        onreplace={(metas) => queueReplaceAll(metas)}
+        onlog={logLine} />
     </div>
-  {/if}
 
-  {#if tab === "skin"}
-    <section id="pane-skin" class="pane skinpane" role="tabpanel" aria-labelledby="tab-skin">
-      <div class="skinbar">
-        <span class="skinlabel">skin</span>
-        <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
-          {#each skins as s (s.id)}
-            <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" ? " (built-in)" : ""}</option>
-          {/each}
-        </select>
-        <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
-          {skinBusy ? "APPLYING…" : "APPLY"}
-        </button>
-        <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
-          >↻</button>
-        {#if skinNote}<span class="ok">{skinNote}</span>{/if}
-        {#if skinError}<span class="err">{skinError}</span>{/if}
+    {#if tab === "eq"}
+      <div id="pane-eq" class="pane" role="tabpanel" aria-labelledby="tab-eq">
+        <EqPanel manageCurves />
       </div>
+    {/if}
 
-      <div class="popular">
-        <div class="poprow">
-          <button
-            onclick={() => void installPopular()}
-            disabled={popularBusy || popular == null || popularMissing === 0}>
-            {popularBusy
-              ? "DOWNLOADING…"
-              : popular == null
-                ? "CHECKING PACK…"
-                : popularMissing > 0
-                  ? `INSTALL POPULAR SKINS (${popularMissing})`
-                  : "POPULAR SKINS INSTALLED"}
-          </button>
-          <button
-            class="reload"
-            title="recheck the installed pack files"
-            onclick={() => void refreshPopular()}
-            disabled={popularBusy}>↻</button>
-          {#if popularBusy && popularProgress}
-            <span class="dim">
-              {popularProgress.done}/{popularProgress.total}
-              {#if popularProgress.name} · {popularProgress.name}{/if}
-            </span>
-          {:else if popularNote}
-            <span class="ok">{popularNote}</span>
-          {/if}
-        </div>
-        <div class="popnote">
-          {popularInstalled}/{popularTotal} installed · curated {popular?.curatedAt ?? "…"} from the
-          <strong>Winamp Skin Museum</strong> (archive.org).
-          {popular?.licenseNote ?? "Skins download only when you ask; authors retain their rights."}
-        </div>
-        {#if popularError}<span class="err">{popularError}</span>{/if}
-      </div>
-    </section>
-  {/if}
-
-  {#if tab === "dev"}
-    <section id="pane-dev" class="pane dev" role="tabpanel" aria-labelledby="tab-dev">
-      <div class="devbox">
-        <div class="row">
-          <button onclick={() => void devOpenPlay()}>Open &amp; Play…</button>
-          <button onclick={() => void devEnqueue()}>Enqueue…</button>
-          <button onclick={() => emitMediaCommand("pause")} disabled={devState.status !== "playing"}>
-            Pause
-          </button>
-          <button onclick={() => emitMediaCommand("play")} disabled={devState.status !== "paused"}>
-            Resume
-          </button>
-          <button onclick={() => emitMediaCommand("stop")} disabled={devState.status === "stopped"}>
-            Stop
-          </button>
-        </div>
-
-        <div class="row">
-          <label>
-            seek
-            <input
-              type="range"
-              min="0"
-              max={Math.max(duration, 0.1)}
-              step="0.1"
-              value={position}
-              disabled={devState.status === "stopped" || duration === 0}
-              oninput={(e) => (seeking = Number(e.currentTarget.value))}
-              onchange={(e) => {
-                seeking = null;
-                void devCmd("audio_seek", { secs: Number(e.currentTarget.value) });
-              }}
-            />
-          </label>
-          <span class="mono">{fmt(position)} / {duration ? fmt(duration) : "--:--"}</span>
-        </div>
-
-        <div class="row">
-          <label>
-            vol
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={devState.volume}
-              oninput={(e) => void devCmd("audio_set_volume", { volume: Number(e.currentTarget.value) })}
-            />
-          </label>
-          <span class="mono">{Math.round(devState.volume * 100)}%</span>
-        </div>
-
-        <p class="status {devState.status}">
-          {devState.status.toUpperCase()}
-          {#if devState.bitrateKbps != null || devState.sampleRateHz != null}
-            <span class="meta">
-              {devState.bitrateKbps ?? "—"} kbps ·
-              {devState.sampleRateHz != null
-                ? (devState.sampleRateHz / 1000).toFixed(1)
-                : "—"} kHz ·
-              {devState.channels != null
-                ? devState.channels === 1
-                  ? "mono"
-                  : "stereo"
-                : "—"}
-            </span>
-          {/if}
-          {#if devState.underrunFrames > 0}
-            <span class="warn">(underruns: {devState.underrunFrames})</span>
-          {/if}
-        </p>
-
-        {#if log.length > 0}
-          <ul class="log">
-            {#each log as line}
-              <li>{line}</li>
+    {#if tab === "skin"}
+      <section id="pane-skin" class="pane skinpane" role="tabpanel" aria-labelledby="tab-skin">
+        <div class="skinbar">
+          <span class="skinlabel">skin</span>
+          <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
+            {#each skins as s (s.id)}
+              <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" ? " (built-in)" : ""}</option>
             {/each}
-          </ul>
-        {/if}
-      </div>
-    </section>
-  {/if}
+          </select>
+          <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
+            {skinBusy ? "APPLYING…" : "APPLY"}
+          </button>
+          <button class="reload" title="rescan the skins folder" onclick={() => void refreshSkins()}
+            >↻</button>
+          {#if skinNote}<span class="ok">{skinNote}</span>{/if}
+          {#if skinError}<span class="err">{skinError}</span>{/if}
+        </div>
 
+        <div class="popular">
+          <div class="poprow">
+            <button
+              onclick={() => void installPopular()}
+              disabled={popularBusy || popular == null || popularMissing === 0}>
+              {popularBusy
+                ? "DOWNLOADING…"
+                : popular == null
+                  ? "CHECKING PACK…"
+                  : popularMissing > 0
+                    ? `INSTALL POPULAR SKINS (${popularMissing})`
+                    : "POPULAR SKINS INSTALLED"}
+            </button>
+            <button
+              class="reload"
+              title="recheck the installed pack files"
+              onclick={() => void refreshPopular()}
+              disabled={popularBusy}>↻</button>
+            {#if popularBusy && popularProgress}
+              <span class="dim">
+                {popularProgress.done}/{popularProgress.total}
+                {#if popularProgress.name} · {popularProgress.name}{/if}
+              </span>
+            {:else if popularNote}
+              <span class="ok">{popularNote}</span>
+            {/if}
+          </div>
+          <div class="popnote">
+            {popularInstalled}/{popularTotal} installed · curated {popular?.curatedAt ?? "…"} from the
+            <strong>Winamp Skin Museum</strong> (archive.org).
+            {popular?.licenseNote ?? "Skins download only when you ask; authors retain their rights."}
+          </div>
+          {#if popularError}<span class="err">{popularError}</span>{/if}
+        </div>
+      </section>
+    {/if}
+
+    {#if tab === "dev"}
+      <section id="pane-dev" class="pane dev" role="tabpanel" aria-labelledby="tab-dev">
+        <div class="devbox">
+          <div class="row">
+            <button onclick={() => void devOpenPlay()}>Open &amp; Play…</button>
+            <button onclick={() => void devEnqueue()}>Enqueue…</button>
+            <button onclick={() => emitMediaCommand("pause")} disabled={devState.status !== "playing"}>
+              Pause
+            </button>
+            <button onclick={() => emitMediaCommand("play")} disabled={devState.status !== "paused"}>
+              Resume
+            </button>
+            <button onclick={() => emitMediaCommand("stop")} disabled={devState.status === "stopped"}>
+              Stop
+            </button>
+          </div>
+
+          <div class="row">
+            <label>
+              ui scale
+              <select
+                value={String(uiScale.value)}
+                aria-label="ui scale"
+                onchange={(e) => setUiScale(Number(e.currentTarget.value))}>
+                {#each UI_SCALE_PRESETS as s (s)}
+                  <option value={String(s)}>{s}×</option>
+                {/each}
+              </select>
+            </label>
+            <span class="mono">{Math.round(uiScale.value * 100)}%</span>
+            <span class="dim">all windows · Alt+S cycles</span>
+          </div>
+
+          <div class="row">
+            <label>
+              seek
+              <input
+                type="range"
+                min="0"
+                max={Math.max(duration, 0.1)}
+                step="0.1"
+                value={position}
+                disabled={devState.status === "stopped" || duration === 0}
+                oninput={(e) => (seeking = Number(e.currentTarget.value))}
+                onchange={(e) => {
+                  seeking = null;
+                  void devCmd("audio_seek", { secs: Number(e.currentTarget.value) });
+                }}
+              />
+            </label>
+            <span class="mono">{fmt(position)} / {duration ? fmt(duration) : "--:--"}</span>
+          </div>
+
+          <div class="row">
+            <label>
+              vol
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={devState.volume}
+                oninput={(e) => void devCmd("audio_set_volume", { volume: Number(e.currentTarget.value) })}
+              />
+            </label>
+            <span class="mono">{Math.round(devState.volume * 100)}%</span>
+          </div>
+
+          <p class="status {devState.status}">
+            {devState.status.toUpperCase()}
+            {#if devState.bitrateKbps != null || devState.sampleRateHz != null}
+              <span class="meta">
+                {devState.bitrateKbps ?? "—"} kbps ·
+                {devState.sampleRateHz != null
+                  ? (devState.sampleRateHz / 1000).toFixed(1)
+                  : "—"} kHz ·
+                {devState.channels != null
+                  ? devState.channels === 1
+                    ? "mono"
+                    : "stereo"
+                  : "—"}
+              </span>
+            {/if}
+            {#if devState.underrunFrames > 0}
+              <span class="warn">(underruns: {devState.underrunFrames})</span>
+            {/if}
+          </p>
+
+          {#if log.length > 0}
+            <ul class="log">
+              {#each log as line}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+      </section>
+    {/if}
+
+  </div>
+  <!-- Outside the scaled surface: the tour's spotlight uses screen-space
+       DOMRect coordinates and would be scaled/misplaced inside it. -->
   <TourHost onensurelibrary={() => (tab = "library")} />
 </div>
 
 <style>
+  /* Outer box reserves the scaled size; the inner .win keeps its natural
+     layout and is transformed from the top-left. */
+  .scaler {
+    position: relative;
+    overflow: hidden;
+    background: #000;
+  }
+
   .win {
     width: max-content; /* widest pane (640px) + padding */
     box-sizing: border-box;
@@ -474,6 +524,7 @@
     color: #c8c8c8;
     font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     user-select: none;
+    transform-origin: top left;
   }
 
   /* One pane per tab; the OS window is sized to the active pane's natural
@@ -666,6 +717,20 @@
   .devbox input[type="range"] {
     width: 260px;
     accent-color: #3ccb4e;
+  }
+
+  .devbox select {
+    background: #1a1a1a;
+    color: #c8c8c8;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+  }
+
+  .devbox .dim {
+    font-size: 0.75rem;
+    color: #666;
   }
 
   .mono {
