@@ -283,12 +283,15 @@ struct MediaCommandPayload {
 
 /// Show a desktop "now playing" notification (issue #34), optionally with
 /// the track's album art. Sent from the Rust side (notify-rust →
-/// UNUserNotificationCenter on macOS via the `preview-macos-un` backend;
-/// the default NSUserNotificationCenter backend is deprecated and has no
-/// authorization concept) because the webview's Web Notification API
-/// ignores images and cannot be granted permission in WKWebView. macOS
-/// handles authorization itself: the OS prompts on the first notification
-/// and remembers it in System Settings.
+/// NSUserNotificationCenter on macOS — its default backend, which works
+/// from unbundled `tauri dev` runs too, unlike UNUserNotificationCenter
+/// which requires a bundled, authorized app) because the webview's Web
+/// Notification API ignores images and cannot be granted permission in
+/// WKWebView. NSUserNotificationCenter is deprecated but still delivers on
+/// current macOS releases, including content images; the backend can be
+/// switched to UNUserNotificationCenter via notify-rust's
+/// `preview-macos-un` feature once notifications are only expected from
+/// bundled builds.
 ///
 /// Art is best-effort: undecodable/absent bytes notify WITHOUT art rather
 /// than failing the notification. The temp file is intentionally left in

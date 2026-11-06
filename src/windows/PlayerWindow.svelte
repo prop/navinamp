@@ -138,10 +138,10 @@
   // bypasses those gates.
   //
   // Sending goes through the Rust side (`notify_track_started` → notify-rust
-  // → UNUserNotificationCenter): the webview's Web Notification API ignores
+  // → NSUserNotificationCenter): the webview's Web Notification API ignores
   // images and cannot be granted permission in WKWebView, while the Rust
-  // path carries album art as a native attachment and lets the OS handle
-  // authorization (prompt on the first notification, remembered after).
+  // path carries album art as a native content image and works from
+  // unbundled `tauri dev` runs too.
   let notifyWarned = false;
 
   /** Album art as base64 for the notification attachment; null = no art. */
