@@ -337,6 +337,20 @@ impl SubsonicClient {
         url
     }
 
+    /// Raw bytes of a remote id's cover art (`size` = square scale px), for
+    /// consumers that need the data itself (e.g. notification attachments) —
+    /// the UI loads the same URL directly in `<img>`.
+    pub async fn cover_art_data(
+        &self,
+        id: &str,
+        size: Option<u32>,
+    ) -> Result<Vec<u8>, SubsonicError> {
+        let url = self.cover_art_url(id, size);
+        let resp = self.http.get(url).send().await?;
+        let bytes = resp.error_for_status()?.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+
     /// Scrobbles a play: `submission = false` marks "now playing",
     /// `submission = true` marks the track as played (send near completion).
     /// `time_ms` backdates the event (spec: milliseconds since epoch).
