@@ -98,8 +98,12 @@ export function sizeWindowTo(label: WindowLabel, w: number, h: number): void {
   }
   const prev = lastWindowSizes.get(label);
   if (prev?.w === width && prev.h === height) return;
-  lastWindowSizes.set(label, { w: width, h: height });
-  windowSetSize(label, width, height).catch(() => undefined);
+  const entry = { w: width, h: height };
+  lastWindowSizes.set(label, entry);
+  windowSetSize(label, width, height).catch(() => {
+    // Don't remember a failed request; a later observer/effect can retry it.
+    if (lastWindowSizes.get(label) === entry) lastWindowSizes.delete(label);
+  });
 }
 
 // ── UI scale (global, persisted, broadcast to every window) ────────────────
