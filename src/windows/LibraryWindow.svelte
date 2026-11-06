@@ -46,7 +46,7 @@
     queuePlayNow,
     queueReplaceAll,
     queueSnapshot,
-    windowSetSize,
+    sizeWindowTo,
   } from "../lib/window/bus.svelte";
   import { LABEL } from "../lib/window/identity";
   import TitleStrip from "./TitleStrip.svelte";
@@ -290,7 +290,7 @@
       if (w === 0 || h === 0 || (w === lastW && h === lastH)) return;
       lastW = w;
       lastH = h;
-      windowSetSize(LABEL, w, h).catch(() => undefined);
+      sizeWindowTo(LABEL, w, h);
     };
     apply();
     const ro = new ResizeObserver(apply);

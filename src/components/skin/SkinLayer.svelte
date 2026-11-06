@@ -34,7 +34,9 @@
 
   // Classic pledit frames stretch by repeating a 25/29px strip instead of
   // stretching it (blurred bevels). `tile` is `x`, `y`, `1`/`both` (a Wasabi
-  // skin can carry the same hint in its params).
+  // skin can carry the same hint in its params). X-only keeps the strip's
+  // natural width and fills the height (`auto 100%`); y-only is the inverse,
+  // so bevel pixels are always 1:1.
   const tile = $derived((o?.params?.["tile"] ?? "").toLowerCase());
   const repeatX = $derived(tile === "x" || tile === "1" || tile === "both");
   const repeatY = $derived(tile === "y" || tile === "1" || tile === "both");

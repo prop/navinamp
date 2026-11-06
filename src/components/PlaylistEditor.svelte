@@ -37,7 +37,10 @@
     embedded?: boolean;
     /** Row height in CSS pixels (classic PE rows are tighter than the panel). */
     rowHeight?: number;
-    /** Visual scale of the surrounding skin frame (pointer math only). */
+    /**
+     * Visual scale of the surrounding skin overlay (context-menu math).
+     * Pointer-to-row math measures the actual rendered scale instead.
+     */
     scale?: number;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
@@ -168,12 +171,23 @@
     return it.artist ? `${it.artist} - ${it.title}` : it.title;
   }
 
+  /**
+   * Screen px per layout px for the list. The skin overlay may be CSS-scaled;
+   * measuring the rendered box avoids depending on (or double-applying) the
+   * caller's scale prop.
+   */
+  function pointerUnit(): number {
+    const el = listEl;
+    if (!el || el.offsetHeight <= 0) return 1;
+    return el.getBoundingClientRect().height / el.offsetHeight || 1;
+  }
+
   function gapFrom(e: PointerEvent): number {
     const el = listEl;
     if (!el) return 0;
     const r = el.getBoundingClientRect();
-    // clientY is screen-space; the list may be CSS-scaled by the skin frame.
-    const y = (e.clientY - r.top) / scale + el.scrollTop;
+    // clientY is screen-space, scrollTop/ROW_H are layout-space.
+    const y = (e.clientY - r.top) / pointerUnit() + el.scrollTop;
     return Math.max(0, Math.min(items.length, Math.round(y / ROW_H)));
   }
 
@@ -207,7 +221,7 @@
 
   function rowMove(e: PointerEvent): void {
     if (!drag) return;
-    if (!drag.moved && Math.abs(e.clientY - dragStartY) < 4 * scale) return;
+    if (!drag.moved && Math.abs(e.clientY - dragStartY) < 4 * pointerUnit()) return;
     drag.moved = true;
     drag.gap = gapFrom(e);
   }

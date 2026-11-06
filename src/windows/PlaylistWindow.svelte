@@ -38,8 +38,8 @@
     layoutMode,
     queueIntent,
     queueSnapshot,
+    sizeWindowTo,
     skinTheme,
-    windowSetSize,
     windowSetVisible,
     windowToggleLayout,
   } from "../lib/window/bus.svelte";
@@ -136,7 +136,11 @@
     skin?.skin.containers.some((c) => c.id === "playlist" && c.layouts.length > 0) ?? false,
   );
 
-  /** Static sample rows/ghost totals in the fallback skin are placeholders. */
+  /**
+   * Static sample rows/ghost totals drawn by the built-in fallback skin.
+   * Match exact ids (not a `playlist.` prefix) so third-party layers — and
+   * `wsz.*` synthesizer content — are never swallowed.
+   */
   const PLACEHOLDERS = new Set([
     "playlist.row.divider",
     "playlist.row.selected",
@@ -159,6 +163,8 @@
     y: number;
     w: number;
     h: number;
+    /** Row height the skin wants for the HTML list (classic 16, fallback 20). */
+    rowHeight: number;
   }
 
   function findSlot(layout: ResolvedLayout | null, ids: readonly string[]): Slot | null {
@@ -167,7 +173,10 @@
       const id = o.object.id ?? "";
       if (!ids.includes(id) || o.w == null || o.h == null) continue;
       if (o.w <= 0 || o.h <= 0) continue;
-      return { x: o.x, y: o.y, w: o.w, h: o.h };
+      const requested = Number(o.object.params?.["rowheight"]);
+      const rowHeight =
+        Number.isFinite(requested) && requested >= 8 ? requested : 16;
+      return { x: o.x, y: o.y, w: o.w, h: o.h, rowHeight };
     }
     return null;
   }
@@ -178,11 +187,22 @@
   const totalsSlot = $derived(findSlot(skinLayout, ["playlist.totals", "wsz.pl.totals"]));
   const useSkin = $derived(mode === "normal" && skinLayout != null && listSlot != null);
 
+  // The action menus live in the skin overlay; fold/unskin drops them.
+  $effect(() => {
+    if (!useSkin) menu = null;
+  });
+
   // Leave the skin's 2px recessed bevel visible around the HTML list.
   const listBox = $derived.by((): Slot | null => {
     const s = listSlot;
     if (!s) return null;
-    return { x: s.x + 2, y: s.y + 2, w: Math.max(0, s.w - 4), h: Math.max(0, s.h - 4) };
+    return {
+      x: s.x + 2,
+      y: s.y + 2,
+      w: Math.max(0, s.w - 4),
+      h: Math.max(0, s.h - 4),
+      rowHeight: s.rowHeight,
+    };
   });
 
   const dragStrips = $derived.by(() =>
@@ -220,6 +240,8 @@
 
   function actionAnchor(action: string): { x: number; y: number } {
     const target = skinLayout?.objects.find((o) => actionOf(o.object) === action);
+    // Viewport pixels: the ContextMenu is inside the transformed overlay and
+    // divides by `scale` before positioning (see openMenu).
     if (!target) return { x: 8 * scale, y: 8 * scale };
     return { x: target.x * scale, y: target.y * scale };
   }
@@ -359,12 +381,24 @@
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // Size the OS window to the panel's box (initial mount + body/shade height
-  // changes, e.g. the list growing) via a ResizeObserver on the root.
+  // Size the OS window directly from the skin layout (like the player
+  // window) so the drag strips and the OS window can never drift. The
+  // unskinned/shade panel instead observes its natural content size.
   let root: HTMLElement | null = $state(null);
   let lastW = 0;
   let lastH = 0;
   $effect(() => {
+    if (useSkin && skinLayout) {
+      const w = Math.ceil(skinLayout.w * scale);
+      const h = Math.ceil(skinLayout.h * scale);
+      if (w !== lastW || h !== lastH) {
+        lastW = w;
+        lastH = h;
+        sizeWindowTo(LABEL, w, h);
+      }
+      return;
+    }
+
     const el = root;
     if (!el) return;
     const apply = () => {
@@ -374,7 +408,7 @@
       if (w === 0 || h === 0 || (w === lastW && h === lastH)) return;
       lastW = w;
       lastH = h;
-      windowSetSize(LABEL, w, h).catch(() => undefined);
+      sizeWindowTo(LABEL, w, h);
     };
     apply();
     const ro = new ResizeObserver(apply);
@@ -411,7 +445,7 @@
             {currentIndex}
             {theme}
             embedded
-            rowHeight={16}
+            rowHeight={listBox.rowHeight}
             {scale}
             bind:selected
             onplay={(i) => queueIntent({ type: "play", index: i })}
@@ -431,10 +465,20 @@
             {statusText}
           </div>
         {/if}
+
+        {#if menu}
+          <ContextMenu
+            x={menu.x}
+            y={menu.y}
+            items={menu.kind === "add" ? addMenuItems : miscMenuItems}
+            {scale}
+            onselect={menuSelect}
+            onclose={() => (menu = null)} />
+        {/if}
       </div>
 
       <div class="drag-layer" aria-hidden="true">
-        {#each dragStrips as r (r.x)}
+        {#each dragStrips as r (`${r.x}:${r.y}`)}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="drag"
@@ -487,15 +531,6 @@
     <AddUrlDialog onsubmit={addUrl} onclose={() => (showAddUrl = false)} />
   {/if}
 </div>
-
-{#if menu}
-  <ContextMenu
-    x={menu.x}
-    y={menu.y}
-    items={menu.kind === "add" ? addMenuItems : miscMenuItems}
-    onselect={menuSelect}
-    onclose={() => (menu = null)} />
-{/if}
 
 <style>
   .win {

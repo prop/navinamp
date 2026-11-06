@@ -145,6 +145,8 @@
   .menu {
     position: fixed;
     z-index: 1000;
+    /* The playlist action menu sits inside a pointer-events:none overlay. */
+    pointer-events: auto;
     min-width: 170px;
     /* The playlist window is only 275px wide; keep the fixed menu inside it
        so long values wrap against the visible width instead of being clipped

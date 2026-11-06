@@ -1055,7 +1055,7 @@ ${winButtons("eq")}
     <layout id="normal" x="0" y="0" w="275" h="232" background="playlist.window">
       <layer id="playlist.background" image="playlist.window" x="0" y="0" w="275" h="232"/>
       <group id="playlist.titlebar" x="0" y="0" w="275" h="14"/>
-      <layer id="playlist.list.bg" image="playlist.list.panel" x="5" y="17" w="265" h="174"/>
+      <layer id="playlist.list.bg" image="playlist.list.panel" x="5" y="17" w="265" h="174" rowheight="20"/>
       <layer id="playlist.row.divider" image="playlist.row.divider" x="9" y="21" w="257" h="13"/>
       <layer id="playlist.row.selected" image="playlist.row.selected" x="9" y="47" w="257" h="13"/>
       <layer id="playlist.row.current" image="playlist.row.current" x="9" y="21" w="257" h="13"/>

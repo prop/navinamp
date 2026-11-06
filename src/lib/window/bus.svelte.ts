@@ -77,6 +77,31 @@ export function windowSetSize(label: WindowLabel, w: number, h: number): Promise
   return invoke<void>("window_set_size", { label, w, h });
 }
 
+/**
+ * Deduplicating window-size writer. Every window derives its desired size
+ * from a different source (skin layout, measured content, scaled natural
+ * box), but they all go through this one guard: a `windows-changed` event
+ * cannot loop back into another identical `window_set_size` call.
+ */
+const lastWindowSizes = new Map<WindowLabel, { w: number; h: number }>();
+
+export function sizeWindowTo(label: WindowLabel, w: number, h: number): void {
+  const width = Math.ceil(w);
+  const height = Math.ceil(h);
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return;
+  }
+  const prev = lastWindowSizes.get(label);
+  if (prev?.w === width && prev.h === height) return;
+  lastWindowSizes.set(label, { w: width, h: height });
+  windowSetSize(label, width, height).catch(() => undefined);
+}
+
 // ── queue intents (the queue's public methods, serialized) ─────────────────
 
 export type QueueIntent =

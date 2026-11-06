@@ -183,6 +183,14 @@ fn find_file(archive: &SkinArchive, name: &str) -> Option<String> {
     nested
 }
 
+/// Decoded `(width, height)` of an archive image (BMP/PNG). `None` means the
+/// entry was unreadable or not a format the `image` crate handles.
+fn image_size(archive: &SkinArchive, file: &str) -> Option<(u32, u32)> {
+    let bytes = archive.read_file(file).ok()?;
+    let decoded = image::load_from_memory(&bytes).ok()?;
+    Some((decoded.width(), decoded.height()))
+}
+
 /// Reads a text entry if present; missing text files are fine (they are
 /// optional in the classic spec) and yield an empty string.
 fn read_text(archive: &SkinArchive, name: &str) -> String {
@@ -1246,12 +1254,33 @@ fn eq_window_shade(out: &mut Builder, titlebar: Option<&str>) {
 /// The list rows are renderer-drawn HTML using pledit.txt's colors, so the
 /// container carries invisible markers for the list body/totals readout and
 /// transparent hotspots over the baked-in buttons and titlebar glyphs.
-/// No container is emitted when `pledit.bmp` is absent — the frontend then
-/// keeps its palette-themed fallback panel.
+/// No container is emitted when `pledit.bmp` is absent or too small for the
+/// frame crops — the frontend then keeps its palette-themed fallback panel.
 fn playlist_window(out: &mut Builder) {
-    if find_file(out.archive, "pledit.bmp").is_none() {
+    let Some(actual) = find_file(out.archive, "pledit.bmp") else {
         out.missing("pledit.bmp", "playlist window");
         return;
+    };
+    // The frame crops reach x=276 / y=110; a truncated or placeholder
+    // pledit.bmp would otherwise emit eight out-of-range crops and a skinned
+    // window with no visible frame. Keep the HTML fallback instead.
+    match image_size(out.archive, &actual) {
+        Some((w, h)) if w >= 276 && h >= 111 => {}
+        Some((w, h)) => {
+            out.warnings.push(Warning::MalformedValue {
+                element: "pledit.bmp".to_owned(),
+                attribute: "size".to_owned(),
+                value: format!("{w}x{h}"),
+            });
+            return;
+        }
+        None => {
+            out.warnings.push(Warning::ImageDecode {
+                file: "pledit.bmp".to_owned(),
+                message: "cannot decode the playlist frame".to_owned(),
+            });
+            return;
+        }
     }
 
     let mut objects = Vec::new();
@@ -1315,7 +1344,12 @@ fn playlist_window(out: &mut Builder) {
 
     // Renderer slots (no bitmap): HTML list body, totals readout and the
     // titlebar drag band.
-    objects.push(marker("pl.list", place(12, 20, 243, 174)));
+    let mut list = marker("pl.list", place(12, 20, 243, 174));
+    if let GuiObject::Layer(layer) = &mut list {
+        // Classic PE rows are 16px in the 174px list body.
+        layer.params.insert("rowheight".to_owned(), "16".to_owned());
+    }
+    objects.push(list);
     objects.push(marker("pl.totals", place(126, 202, 68, 11)));
     objects.push(marker("playlist.titlebar.zone", place(0, 0, WINDOW_W, 20)));
 

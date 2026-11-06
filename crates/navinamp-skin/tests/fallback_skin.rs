@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use navinamp_skin::{Skin, SkinArchive, bitmap_payloads};
+use navinamp_skin::{GuiObject, Skin, SkinArchive, bitmap_payloads};
 
 const WAL: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -57,6 +57,17 @@ fn fallback_skin_has_expected_windows() {
         .expect("playlist normal layout");
     assert_eq!(pe.rect.w, Some(275));
     assert_eq!(pe.rect.h, Some(232));
+
+    // The renderer reads this to keep the fallback's roomier 20px rows.
+    let list = pe
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            GuiObject::Layer(l) if l.id.as_deref() == Some("playlist.list.bg") => Some(l),
+            _ => None,
+        })
+        .expect("playlist list slot");
+    assert_eq!(list.params.get("rowheight").map(String::as_str), Some("20"));
 }
 
 #[test]
