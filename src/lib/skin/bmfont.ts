@@ -125,7 +125,7 @@ async function decodeImage(src: string): Promise<ImageBitmap | HTMLImageElement>
 export class BmFont {
   readonly spec: BmFontSpec;
   private img: ImageBitmap | HTMLImageElement;
-  /** Lazily sampled glyph colour, used by the HTML fallback for missing glyphs. */
+  /** Lazily sampled glyph colour, used by the HTML fallback for any text the strip cannot render (missing glyphs or unsupported scripts). */
   private sampledColor: string | null = null;
 
   constructor(img: ImageBitmap | HTMLImageElement, spec: BmFontSpec) {
