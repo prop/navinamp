@@ -229,11 +229,11 @@
       "name": "Winamp 2.91 Base",
       "author": "Nullsoft",
       "fileName": "base-2-91.wsz",
-      "url": "https://archive.org/download/winampskins_base-2.91/base-2.91.wsz",
-      "size": 114148,
-      "sha256": "33fff100062f89a55b3e67fa0547df62f867f3cfceceba41afaa58562c37f01c",
-      "license": "Winamp base skin (Nullsoft/AOL) \u2014 no license stated; downloaded from archive.org on request",
-      "sourceUrl": "https://archive.org/details/winampskins_base-2.91"
+      "url": "https://r2.webampskins.org/skins/5e4f10275dcb1fb211d4a8b4f1bda236.wsz",
+      "size": 101121,
+      "sha256": "0166fb878cd41de07e1cc51067525ccd3f055b94dc3c227d61124fe528788f6f",
+      "license": "Winamp base skin (Nullsoft/AOL) \u2014 no license stated; downloaded from the Winamp Skin Museum on request",
+      "sourceUrl": "https://skins.webamp.org/skin/5e4f10275dcb1fb211d4a8b4f1bda236"
     },
     {
       "id": "winamp3-classified-v55",

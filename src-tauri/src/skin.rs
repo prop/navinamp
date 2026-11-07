@@ -583,12 +583,17 @@ mod tests {
             );
             assert_eq!(skin.file_name, format!("{}.wsz", skin.id));
             assert!(
-                skin.url.starts_with("https://archive.org/download/"),
-                "`{}` must download from the archive",
+                skin.url.starts_with("https://")
+                    && (skin.url.starts_with("https://archive.org/download/")
+                        || skin.url.starts_with("https://r2.webampskins.org/skins/")),
+                "`{}` must download over https from a curated host",
                 skin.id
             );
             assert!(
-                skin.source_url.starts_with("https://archive.org/details/"),
+                skin.source_url.starts_with("https://archive.org/details/")
+                    || skin
+                        .source_url
+                        .starts_with("https://skins.webamp.org/skin/"),
                 "`{}` needs an attribution URL",
                 skin.id
             );

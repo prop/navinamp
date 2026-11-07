@@ -96,16 +96,11 @@
   let skinNote = $state<string | null>(null);
   let skinError = $state<string | null>(null);
 
-  /** Prefer the persisted choice, then the loader's default pick. */
+  /** Prefer the persisted choice; otherwise the bundled base skin. */
   function currentSkinId(list: SkinInfo[]): string {
     const wanted = selectedSkinId();
     if (wanted != null && list.some((s) => s.id === wanted)) return wanted;
-    return (
-      list.find((s) => s.id !== "fallback" && s.id !== "base-2-91")?.id ??
-      list.find((s) => s.id === "base-2-91")?.id ??
-      list[0]?.id ??
-      ""
-    );
+    return list.find((s) => s.id === "base-2-91")?.id ?? list[0]?.id ?? "";
   }
 
   async function refreshSkins(): Promise<void> {

@@ -121,23 +121,18 @@ export async function loadSkin(id: string): Promise<SkinPayload> {
   return invoke<SkinPayload>("skin_load", { id });
 }
 
-/** Ids served from bytes embedded in the binary, never from the skins dir. */
-const BUILT_IN_IDS = new Set(["fallback", "base-2-91"]);
-
 /**
  * The skin every window loads on its own (player + EQ windows render skins;
  * each webview pulls the payload over IPC). Honours the user's persisted
- * choice, then falls back to the first installed archive, then the bundled
- * Winamp 2.91 base skin, then the built-in fallback skin. Throws when no
- * backend / broken archive — callers degrade to the mock skin
- * (src/lib/skin/mock).
+ * choice; otherwise the bundled Winamp 2.91 base skin is the default, with
+ * the built-in fallback skin as a last resort. Throws when no backend /
+ * broken archive — callers degrade to the mock skin (src/lib/skin/mock).
  */
 export async function loadDefaultSkin(): Promise<SkinPayload> {
   const skins = await listSkins();
   const wanted = selectedSkinId();
   const pick =
     skins.find((s) => s.id === wanted) ??
-    skins.find((s) => !BUILT_IN_IDS.has(s.id)) ??
     skins.find((s) => s.id === "base-2-91") ??
     skins[0];
   if (!pick) throw new Error("no skins installed");
