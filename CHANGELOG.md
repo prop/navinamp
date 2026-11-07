@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.1](https://github.com/prop/navinamp/compare/v0.15.0...v0.15.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **release:** add Applications link to the macOS dmg ([12c48da](https://github.com/prop/navinamp/commit/12c48dabc460b3768fe82bbf2ac8893a0fe7c9e8))
+* **release:** add Applications link to the macOS dmg ([c95a8e5](https://github.com/prop/navinamp/commit/c95a8e544cad638e2b8ee4841dd401122b9a39fa))
+
 ## [0.15.0](https://github.com/prop/navinamp/compare/v0.14.0...v0.15.0) (2026-11-07)
 
 
