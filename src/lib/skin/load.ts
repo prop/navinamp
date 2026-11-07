@@ -124,16 +124,16 @@ export async function loadSkin(id: string): Promise<SkinPayload> {
 /**
  * The skin every window loads on its own (player + EQ windows render skins;
  * each webview pulls the payload over IPC). Honours the user's persisted
- * choice, then falls back to the first installed archive, then the built-in
- * fallback skin. Throws when no backend / broken archive — callers degrade
- * to the mock skin (src/lib/skin/mock).
+ * choice; otherwise the bundled Winamp 2.91 base skin is the default, with
+ * the built-in fallback skin as a last resort. Throws when no backend /
+ * broken archive — callers degrade to the mock skin (src/lib/skin/mock).
  */
 export async function loadDefaultSkin(): Promise<SkinPayload> {
   const skins = await listSkins();
   const wanted = selectedSkinId();
   const pick =
     skins.find((s) => s.id === wanted) ??
-    skins.find((s) => s.id !== "fallback") ??
+    skins.find((s) => s.id === "base-2-91") ??
     skins[0];
   if (!pick) throw new Error("no skins installed");
   console.log(`[navinamp] skin: ${pick.fileName}`);
