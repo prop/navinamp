@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.15.0](https://github.com/prop/navinamp/compare/v0.14.0...v0.15.0) (2026-11-07)
+
+
+### Features
+
+* **brand:** use supplied wine glass and Navidrome logo ([cdd09ee](https://github.com/prop/navinamp/commit/cdd09eecb03f3e9ead53db90425b9abfef08894d))
+* **brand:** use supplied wine glass and Navidrome logo ([e7114ea](https://github.com/prop/navinamp/commit/e7114ea8abf56d4f7fe9bbd43955f4ccef505904))
+
+
+### Bug Fixes
+
+* **brand:** replace ambiguous monogram with a wine glass mark ([22195bf](https://github.com/prop/navinamp/commit/22195bf7513bcf5ce8cb1f36b941508c26864a7c))
+
 ## [0.14.0](https://github.com/prop/navinamp/compare/v0.13.0...v0.14.0) (2026-11-06)
 
 
