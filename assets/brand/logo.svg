@@ -1,41 +1,29 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="NaVinaMP">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#181d22"/>
-      <stop offset="1" stop-color="#0b0e11"/>
-    </linearGradient>
-    <linearGradient id="wine" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#c4485e"/>
-      <stop offset="1" stop-color="#6d1e33"/>
-    </linearGradient>
-    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#e3e8ec"/>
-      <stop offset="1" stop-color="#99a3ac"/>
-    </linearGradient>
-    <radialGradient id="glow" cx=".38" cy=".24" r=".95">
-      <stop offset="0" stop-color="#212830"/>
-      <stop offset="1" stop-color="#0a0d10" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-
-  <rect width="1024" height="1024" fill="url(#bg)"/>
-  <rect width="1024" height="1024" fill="url(#glow)"/>
-
-  <!-- wine glass -->
-  <path d="M298 206h428c0 154-94 266-214 266s-214-112-214-266z"
-        fill="#161b20" stroke="url(#metal)" stroke-width="28" stroke-linejoin="round"/>
-  <path d="M330 274h364c0 118-82 162-182 162s-182-44-182-162z" fill="url(#wine)"/>
-
-  <!-- wine waveform -->
-  <path d="M366 362c32-28 64-28 96 0s64 28 96 0 64-28 96 0 32 28 64 0"
-        fill="none" stroke="#e9edf0" stroke-width="22" stroke-linecap="round"/>
-
-  <!-- stem and base -->
-  <path d="M490 472h44v158h-44z" fill="url(#metal)"/>
-  <path d="M358 630h308c20 0 36 16 36 36s-16 36-36 36H358c-20 0-36-16-36-36s16-36 36-36z"
-        fill="url(#metal)"/>
-
-  <!-- glass shine -->
-  <path d="M347 250c6-10 20-11 28-1l54 63c14 16 0 34-19 27-38-14-66-49-63-89z"
-        fill="#ffffff" opacity=".10"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" role="img" aria-label="NaVinaMP wine glass and Navidrome-inspired logo">
+<defs>
+ <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#60B9FF"/><stop offset="1" stop-color="#0873D8"/></linearGradient>
+ <linearGradient id="wine" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E3436A"/><stop offset="1" stop-color="#730526"/></linearGradient>
+ <linearGradient id="cream" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#FFF6DD"/><stop offset="1" stop-color="#F7D5A8"/></linearGradient>
+ <clipPath id="bowl"><path d="M310 250 C310 140 690 140 690 250 L690 355 C690 482 610 551 500 551 C390 551 310 482 310 355 Z"/></clipPath>
+</defs>
+<rect width="1000" height="1000" fill="#160615"/>
+<!-- Wine glass bowl, stem and foot -->
+<path d="M310 250 C310 140 690 140 690 250 L690 355 C690 482 610 551 500 551 C390 551 310 482 310 355 Z" fill="none" stroke="url(#cream)" stroke-width="13"/>
+<path d="M500 552 L500 625 Q500 648 480 657 Q455 669 402 673 Q500 688 598 673 Q545 669 520 657 Q500 648 500 625 Z" fill="url(#cream)"/>
+<!-- Navidrome-inspired arcs -->
+<g fill="none" stroke="url(#blue)" stroke-width="27" stroke-linecap="round">
+ <path d="M341 342 A160 160 0 0 1 645 274"/>
+ <path d="M393 353 A111 111 0 0 1 604 310"/>
+ <path d="M444 355 A60 60 0 0 1 556 332"/>
+</g>
+<g clip-path="url(#bowl)">
+ <path d="M295 417 C365 371 417 454 498 460 C572 466 624 379 705 414 L705 570 L295 570 Z" fill="url(#wine)"/>
+ <path d="M295 417 C365 371 417 454 498 460 C572 466 624 379 705 414" fill="none" stroke="#E94B72" stroke-width="18"/>
+ <path d="M602 472 Q629 453 645 424" fill="none" stroke="#FFB4C5" stroke-width="12" stroke-linecap="round" opacity=".8"/>
+</g>
+<!-- Music note -->
+<path d="M504 329 L559 315 L559 389" fill="none" stroke="#FFF3D8" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+<ellipse cx="485" cy="397" rx="23" ry="18" transform="rotate(-24 485 397)" fill="#FFF3D8"/>
+<ellipse cx="542" cy="383" rx="21" ry="17" transform="rotate(-24 542 383)" fill="#FFF3D8"/>
+<!-- Wordmark -->
+<text x="500" y="820" font-family="DejaVu Sans, Arial, sans-serif" font-weight="700" font-size="105" text-anchor="middle" letter-spacing="-5"><tspan fill="#FFF1D8">NaVina</tspan><tspan fill="#C82B57">MP</tspan></text>
 </svg>
