@@ -180,10 +180,14 @@ jobs:
       - name: Package dmg (headless-safe hdiutil)
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          mkdir -p target/release/bundle/dmg
+          STAGING="target/release/bundle/dmg/NaVinaMP_${VER}"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R "target/release/bundle/macos/NaVinaMP.app" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
           hdiutil create \
             -volname "NaVinaMP" \
-            -srcfolder "target/release/bundle/macos/NaVinaMP.app" \
+            -srcfolder "$STAGING" \
             -ov -format UDZO \
             "target/release/bundle/dmg/NaVinaMP_${VER}_x64.dmg"
 
