@@ -1000,13 +1000,14 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
             let title = repair_tag_text(&song.title).into_owned();
             let artist = repair_tag_text(&song.artist).into_owned();
             let album = repair_tag_text(&song.album).into_owned();
-            // Same precedence as `map_song`: the server's album artist when
-            // reported (compilations → "Various Artists"), else the track
-            // artist. A playlist row must not disagree with its synced row.
-            let album_artist = if song.album_artist.is_empty() {
+            // Same fallback chain as `map_song`: the server's album artist
+            // (`displayAlbumArtist`) when reported (compilations → "Various
+            // Artists"), else the track artist. A playlist row must not
+            // disagree with its synced row.
+            let album_artist = if song.display_album_artist.is_empty() {
                 artist.clone()
             } else {
-                repair_tag_text(&song.album_artist).into_owned()
+                repair_tag_text(&song.display_album_artist).into_owned()
             };
             let genre = song
                 .genre
@@ -1839,7 +1840,13 @@ fn flush_remote_batch(
 /// per-song tags; `codec` from the suffix, duration from `song.duration`.
 fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteTrack {
     let album_artist = if album.artist.is_empty() {
-        song.artist.clone()
+        // Same fallback chain as `playlist_rows`: the child's display album
+        // artist when the album summary lacks one, else the track artist.
+        if song.display_album_artist.is_empty() {
+            song.artist.clone()
+        } else {
+            song.display_album_artist.clone()
+        }
     } else {
         album.artist.clone()
     };
@@ -2130,7 +2137,7 @@ mod tests {
             artist_id: "ar-1".into(),
             album: "Selected Ambient Works".into(),
             album_id: "al-1".into(),
-            album_artist: String::new(),
+            display_album_artist: String::new(),
             track_no: 1,
             disc_no: 0,
             year: 1992,
@@ -2175,7 +2182,7 @@ mod tests {
         let mut compilation = song("c");
         compilation.artist = "DJ Promo".into();
         compilation.album = "Thunderdome".into();
-        compilation.album_artist = "Various Artists".into();
+        compilation.display_album_artist = "Various Artists".into();
         let rows = playlist_rows(&[compilation], "p1");
         assert_eq!(rows[0].artist, "DJ Promo");
         assert_eq!(rows[0].album_artist, "Various Artists");
@@ -2223,9 +2230,12 @@ mod tests {
         assert_eq!(row.album_artist, "Исполнитель");
         assert_eq!(row.artist, "Aphex Twin", "ASCII tags stay untouched");
 
+        let mut s = s;
+        s.display_album_artist = "Èñïîëíèòåëü".into();
         let rows = playlist_rows(&[s], "p1");
         assert_eq!(rows[0].title, "Песня");
         assert_eq!(rows[0].album, "Альбом");
+        assert_eq!(rows[0].album_artist, "Исполнитель");
     }
 
     fn album_summary() -> AlbumSummary {

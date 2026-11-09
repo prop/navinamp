@@ -98,11 +98,11 @@ pub struct SongSummary {
     pub album: String,
     #[serde(default)]
     pub album_id: String,
-    /// The enclosing album's artist (`Various Artists` for compilations).
-    /// Empty when the server does not report it (`Child.albumArtist` is not
-    /// universal across Subsonic servers).
+    /// The enclosing album's artist as a display string
+    /// (`displayAlbumArtist`, OpenSubsonic — `Various Artists` for
+    /// compilations). Empty when the server omits it.
     #[serde(default)]
-    pub album_artist: String,
+    pub display_album_artist: String,
     #[serde(default, rename = "track")]
     pub track_no: u32,
     #[serde(default, rename = "disc", alias = "discNumber")]
@@ -420,13 +420,15 @@ mod tests {
     }
 
     #[test]
-    fn album_artist_parses_the_camel_case_attribute() {
-        // `Child.albumArtist` (Navidrome/OpenSubsonic) — absent on lenient
-        // servers, where the field stays empty and callers fall back.
+    fn display_album_artist_parses_the_open_subsonic_attribute() {
+        // Navidrome's playlist `Child` carries `displayAlbumArtist`
+        // (`childFromMediaFile` maps `mf.AlbumArtist` there); absent on
+        // lenient servers, where the field stays empty and callers fall back.
         assert_eq!(
-            song(r#"{"id":"a","title":"A","albumArtist":"Various Artists"}"#).album_artist,
+            song(r#"{"id":"a","title":"A","displayAlbumArtist":"Various Artists"}"#)
+                .display_album_artist,
             "Various Artists"
         );
-        assert_eq!(song(r#"{"id":"a","title":"A"}"#).album_artist, "");
+        assert_eq!(song(r#"{"id":"a","title":"A"}"#).display_album_artist, "");
     }
 }
