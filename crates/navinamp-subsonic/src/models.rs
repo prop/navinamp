@@ -98,6 +98,11 @@ pub struct SongSummary {
     pub album: String,
     #[serde(default)]
     pub album_id: String,
+    /// The enclosing album's artist as a display string
+    /// (`displayAlbumArtist`, OpenSubsonic — `Various Artists` for
+    /// compilations). Empty when the server omits it.
+    #[serde(default)]
+    pub display_album_artist: String,
     #[serde(default, rename = "track")]
     pub track_no: u32,
     #[serde(default, rename = "disc", alias = "discNumber")]
@@ -412,5 +417,18 @@ mod tests {
             song(r#"{"id":"a","title":"A","path":"Artist/Album/01 song.flac"}"#).path,
             "Artist/Album/01 song.flac"
         );
+    }
+
+    #[test]
+    fn display_album_artist_parses_the_open_subsonic_attribute() {
+        // Navidrome's playlist `Child` carries `displayAlbumArtist`
+        // (`childFromMediaFile` maps `mf.AlbumArtist` there); absent on
+        // lenient servers, where the field stays empty and callers fall back.
+        assert_eq!(
+            song(r#"{"id":"a","title":"A","displayAlbumArtist":"Various Artists"}"#)
+                .display_album_artist,
+            "Various Artists"
+        );
+        assert_eq!(song(r#"{"id":"a","title":"A"}"#).display_album_artist, "");
     }
 }

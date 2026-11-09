@@ -35,7 +35,9 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navinamp_library::{Library, RemoteAlbum, RemoteTrack, Track, remote_path, repair_tag_text};
+use navinamp_library::{
+    Library, RemoteAlbum, RemoteTrack, Track, album_key, remote_path, repair_tag_text,
+};
 use navinamp_subsonic::{
     AlbumDetail, AlbumSummary, MusicFolder, PlaylistSummary, SongSummary, StreamFormat,
     SubsonicClient,
@@ -998,6 +1000,15 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
             let title = repair_tag_text(&song.title).into_owned();
             let artist = repair_tag_text(&song.artist).into_owned();
             let album = repair_tag_text(&song.album).into_owned();
+            // Same fallback chain as `map_song`: the server's album artist
+            // (`displayAlbumArtist`) when reported (compilations → "Various
+            // Artists"), else the track artist. A playlist row must not
+            // disagree with its synced row.
+            let album_artist = if song.display_album_artist.is_empty() {
+                artist.clone()
+            } else {
+                repair_tag_text(&song.display_album_artist).into_owned()
+            };
             let genre = song
                 .genre
                 .as_deref()
@@ -1013,9 +1024,9 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
                     .unwrap_or(0),
                 title,
                 artist: artist.clone(),
-                album_artist: artist,
+                album_key: album_key(&album_artist, &artist, &album),
+                album_artist,
                 album,
-                album_key: String::new(),
                 genre,
                 year: (song.year > 0).then_some(i64::from(song.year)),
                 track_no: (song.track_no > 0).then_some(i64::from(song.track_no)),
@@ -1829,7 +1840,13 @@ fn flush_remote_batch(
 /// per-song tags; `codec` from the suffix, duration from `song.duration`.
 fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteTrack {
     let album_artist = if album.artist.is_empty() {
-        song.artist.clone()
+        // Same fallback chain as `playlist_rows`: the child's display album
+        // artist when the album summary lacks one, else the track artist.
+        if song.display_album_artist.is_empty() {
+            song.artist.clone()
+        } else {
+            song.display_album_artist.clone()
+        }
     } else {
         album.artist.clone()
     };
@@ -2120,6 +2137,7 @@ mod tests {
             artist_id: "ar-1".into(),
             album: "Selected Ambient Works".into(),
             album_id: "al-1".into(),
+            display_album_artist: String::new(),
             track_no: 1,
             disc_no: 0,
             year: 1992,
@@ -2159,6 +2177,35 @@ mod tests {
     }
 
     #[test]
+    fn playlist_rows_use_the_album_artist_for_compilations() {
+        // A compilation track: per-track artist, album artist on the album.
+        let mut compilation = song("c");
+        compilation.artist = "DJ Promo".into();
+        compilation.album = "Thunderdome".into();
+        compilation.display_album_artist = "Various Artists".into();
+        let rows = playlist_rows(&[compilation], "p1");
+        assert_eq!(rows[0].artist, "DJ Promo");
+        assert_eq!(rows[0].album_artist, "Various Artists");
+        assert_eq!(
+            rows[0].album_key,
+            album_key("Various Artists", "DJ Promo", "Thunderdome"),
+            "playlist rows must derive the same album key as synced rows"
+        );
+    }
+
+    #[test]
+    fn playlist_rows_fall_back_to_the_track_artist() {
+        // Servers without `albumArtist` (empty) keep the old fallback, but the
+        // album key is still derived instead of left blank.
+        let rows = playlist_rows(&[song("a")], "p1");
+        assert_eq!(rows[0].album_artist, "Aphex Twin");
+        assert_eq!(
+            rows[0].album_key,
+            album_key("Aphex Twin", "Aphex Twin", "Selected Ambient Works")
+        );
+    }
+
+    #[test]
     fn remote_text_is_charset_repaired() {
         // "Песня" / "Альбом" encoded as CP1251 and read through Latin-1.
         let mut s = song("a");
@@ -2183,9 +2230,11 @@ mod tests {
         assert_eq!(row.album_artist, "Исполнитель");
         assert_eq!(row.artist, "Aphex Twin", "ASCII tags stay untouched");
 
+        s.display_album_artist = "Èñïîëíèòåëü".into();
         let rows = playlist_rows(&[s], "p1");
         assert_eq!(rows[0].title, "Песня");
         assert_eq!(rows[0].album, "Альбом");
+        assert_eq!(rows[0].album_artist, "Исполнитель");
     }
 
     fn album_summary() -> AlbumSummary {
