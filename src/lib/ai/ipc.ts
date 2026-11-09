@@ -188,6 +188,15 @@ export interface AiSearchReport {
   preset: string;
   model: string;
   toolCalls: number;
+  /**
+   * Catalog-anchored local results (issue #82): present only when the
+   * model set `catalogAnchor` — the def's tracks filtered to tracks whose
+   * artist/album matches the fetched Discogs releases. Use these instead
+   * of re-querying the definition.
+   */
+  tracks?: Track[] | null;
+  /** How many tracks survived the catalog anchor join. */
+  catalogAnchor?: { matched: number; total: number } | null;
 }
 
 /** One Discogs catalog entry (shown even when no local tracks match). */

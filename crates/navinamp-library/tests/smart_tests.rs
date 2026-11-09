@@ -848,6 +848,20 @@ fn empty_group_matches_everything() {
     }
 }
 
+#[test]
+fn count_ignores_the_definition_limit() {
+    // AI catalog anchoring reports "matched N of M" where M must be the
+    // def's true match count, not the capped query rows (review of #83).
+    let c = rule_fixture("count");
+    let mut def = view("everything", group(MatchMode::All, vec![]));
+    def.limit = Some(2.0);
+    assert_eq!(c.library.smart_view_query(&def, 5000).unwrap().len(), 2);
+    assert_eq!(c.library.smart_view_count(&def).unwrap(), 7);
+    // No limit at all: the count still reflects every match.
+    def.limit = None;
+    assert_eq!(c.library.smart_view_count(&def).unwrap(), 7);
+}
+
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------

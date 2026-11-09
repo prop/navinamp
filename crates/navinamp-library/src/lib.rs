@@ -421,6 +421,12 @@ impl Library {
     pub fn smart_view_query(&self, def: &SmartViewDef, cap: u32) -> Result<Vec<Track>> {
         smart::query(&self.conn, def, cap)
     }
+
+    /// Total tracks matching `def`, ignoring its LIMIT — the honest
+    /// denominator for "N of M" reporting (AI catalog anchoring).
+    pub fn smart_view_count(&self, def: &SmartViewDef) -> Result<u32> {
+        smart::count(&self.conn, def)
+    }
 }
 
 // `Library` must stay `Send` so the bridge can hand it to worker threads;
