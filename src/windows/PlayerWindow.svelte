@@ -626,6 +626,8 @@
       <button
         class="warnbadge"
         title={warningsOpen ? "hide warnings" : "show warnings"}
+        aria-label="warnings"
+        aria-expanded={warningsOpen}
         onclick={() => (warningsOpen = !warningsOpen)}
       >
         ⚠ {allWarnings.length}
@@ -658,10 +660,11 @@
   }
 
   /* Acceptance-run diagnostics: skin warnings must be visible in-app.
-     Click-through by default: the bar's bounding box (which grows with the
-     expanded list) sits above the skin's transport buttons, so an interactive
-     container would swallow every pointer press while an error is shown. Only
-     the badge opts back into hit testing. */
+     The bar's bounding box (which grows with the expanded list) sits above
+     the skin's transport buttons, so an interactive container would swallow
+     every pointer press while an error is shown. The container is therefore
+     click-through; the painted panel and the badge opt back into hit testing
+     so the list still scrolls and absorbs clicks over its own area. */
   .warnbar {
     position: absolute;
     left: 4px;
@@ -693,6 +696,7 @@
     max-height: 140px;
     overflow-y: auto;
     padding: 4px 6px;
+    pointer-events: auto;
   }
 
   .warnline {
