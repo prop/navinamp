@@ -280,6 +280,59 @@ pub mod geom {
         links
     }
 
+    /// Transitive dock-follow: windows docked to a *moved* window follow
+    /// that window's delta breadth-first until the docked cluster is done.
+    /// The classic stack (player / EQ docked under it / playlist docked
+    /// under the EQ) moves as one unit even though only the EQ is a direct
+    /// partner of the player.
+    ///
+    /// `rects` are the pre-move rects of every other visible window;
+    /// `partners` are the planner's direct moves (label → new origin). A
+    /// partner whose delta is zero doesn't propagate: nothing moved means
+    /// nothing to carry along. Returns `(label, new_origin)` for every
+    /// follower, in discovery order.
+    pub fn dock_follow_plan(
+        rects: &[(String, Rect)],
+        partners: &[(String, (i32, i32))],
+        eps: i32,
+    ) -> Vec<(String, (i32, i32))> {
+        use std::collections::HashSet;
+
+        let mut out: Vec<(String, (i32, i32))> = Vec::new();
+        let mut done: HashSet<&str> = partners.iter().map(|(l, _)| l.as_str()).collect();
+        let mut queue: Vec<(String, (i32, i32))> = Vec::new();
+        for (label, target) in partners {
+            let Some(pre) = rects.iter().find(|(l, _)| l == label).map(|(_, r)| *r) else {
+                continue;
+            };
+            let delta = (target.0 - pre.x, target.1 - pre.y);
+            if delta != (0, 0) {
+                queue.push((label.clone(), delta));
+            }
+        }
+        while let Some((anchor, delta)) = queue.pop() {
+            let Some(anchor_rect) = rects.iter().find(|(l, _)| *l == anchor).map(|(_, r)| *r)
+            else {
+                continue;
+            };
+            for (label, rect) in rects {
+                if done.contains(label.as_str()) {
+                    continue;
+                }
+                if derive_links(&anchor_rect, &[(label.clone(), *rect)], eps).is_empty() {
+                    continue;
+                }
+                done.insert(label.as_str());
+                if delta != (0, 0) {
+                    let target = (rect.x + delta.0, rect.y + delta.1);
+                    out.push((label.clone(), target));
+                    queue.push((label.clone(), delta));
+                }
+            }
+        }
+        out
+    }
+
     /// Everything the drag planner needs about one Moved event.
     pub struct DragInput<'a> {
         /// Free (cursor-anchored) position of the dragged window.
@@ -589,6 +642,66 @@ pub mod geom {
             let a = rect(0, 0, 100, 50);
             let b = rect(300, 0, 100, 50);
             assert!(derive_links(&a, &[("b".into(), b)], LINK_EPS_PX).is_empty());
+        }
+
+        #[test]
+        fn dock_follow_moves_the_whole_cluster() {
+            // player / EQ docked below it / playlist docked below the EQ:
+            // only the EQ is a direct partner of the player, but the
+            // playlist must ride along.
+            let eq_pre = rect(0, 116, 275, 116);
+            let playlist_pre = rect(0, 232, 275, 232);
+            let rects = vec![
+                ("eq".to_string(), eq_pre),
+                ("playlist".to_string(), playlist_pre),
+            ];
+            let partners = vec![("eq".to_string(), (10, 121))]; // +10, +5
+            let plan = dock_follow_plan(&rects, &partners, LINK_EPS_PX);
+            assert_eq!(
+                plan,
+                vec![(
+                    "playlist".to_string(),
+                    (playlist_pre.x + 10, playlist_pre.y + 5)
+                )]
+            );
+        }
+
+        #[test]
+        fn dock_follow_is_empty_without_a_dock() {
+            // the playlist is not aligned with the EQ, so nothing follows
+            let rects = vec![
+                ("eq".to_string(), rect(0, 116, 275, 116)),
+                ("playlist".to_string(), rect(40, 400, 275, 232)),
+            ];
+            let partners = vec![("eq".to_string(), (10, 121))];
+            assert!(dock_follow_plan(&rects, &partners, LINK_EPS_PX).is_empty());
+        }
+
+        #[test]
+        fn dock_follow_zero_delta_does_not_propagate() {
+            // partner already at its target: nothing moves, nothing carries
+            let rects = vec![
+                ("eq".to_string(), rect(0, 116, 275, 116)),
+                ("playlist".to_string(), rect(0, 232, 275, 232)),
+            ];
+            let partners = vec![("eq".to_string(), (0, 116))];
+            assert!(dock_follow_plan(&rects, &partners, LINK_EPS_PX).is_empty());
+        }
+
+        #[test]
+        fn dock_follow_is_deduped_per_window() {
+            // side-by-side windows both docked to the anchor: each appears
+            // exactly once even though the anchor links both.
+            let a_pre = rect(0, 0, 100, 50);
+            let b_pre = rect(100, 0, 100, 50);
+            let c_pre = rect(200, 0, 100, 50);
+            let rects = vec![("b".to_string(), b_pre), ("c".to_string(), c_pre)];
+            let partners = vec![("b".to_string(), (5, 0)), ("c".to_string(), (205, 0))];
+            let plan = dock_follow_plan(&rects, &partners, LINK_EPS_PX);
+            assert!(
+                plan.is_empty(),
+                "both partners moved directly: no followers"
+            );
         }
 
         fn drag_input<'a>(
@@ -1596,6 +1709,17 @@ impl WindowManager {
                 }
                 record_suppress(&mut inner, l, *target);
                 actions.push((l.clone(), *target));
+            }
+            // Transitive dock-follow: windows docked to a *moved partner*
+            // (not just to the dragged window) ride along, breadth-first —
+            // the playlist docked under the EQ docked under the player.
+            for (l, target) in geom::dock_follow_plan(&others, &plan.partner_moves, LINK_EPS_PX) {
+                if let Some(st) = inner.wins.get_mut(&l) {
+                    st.rect.x = target.0;
+                    st.rect.y = target.1;
+                }
+                record_suppress(&mut inner, &l, target);
+                actions.push((l.clone(), target));
             }
             (actions, true)
         };
