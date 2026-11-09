@@ -2230,7 +2230,6 @@ mod tests {
         assert_eq!(row.album_artist, "Исполнитель");
         assert_eq!(row.artist, "Aphex Twin", "ASCII tags stay untouched");
 
-        let mut s = s;
         s.display_album_artist = "Èñïîëíèòåëü".into();
         let rows = playlist_rows(&[s], "p1");
         assert_eq!(rows[0].title, "Песня");
