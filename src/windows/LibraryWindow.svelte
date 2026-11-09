@@ -43,6 +43,7 @@
   import {
     emitMediaCommand,
     queueIntent,
+    queuePlayNext,
     queuePlayNow,
     queueReplaceAll,
     queueSnapshot,
@@ -332,6 +333,7 @@
       <MediaLibrary
         {scale}
         onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
+        onplaynext={(metas) => queuePlayNext(metas)}
         onplaynow={(metas) => queuePlayNow(metas)}
         onreplace={(metas) => queueReplaceAll(metas)}
         onlog={logLine} />

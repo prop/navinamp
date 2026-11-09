@@ -438,10 +438,12 @@
             embedded
             rowHeight={listBox.rowHeight}
             {scale}
+            {shuffle}
             bind:selected
             onplay={(i) => queueIntent({ type: "play", index: i })}
             onremove={(i) => queueIntent({ type: "remove", index: i })}
             onmove={(from, to) => queueIntent({ type: "move", from, to })}
+            onmovenext={(i) => queueIntent({ type: "moveNext", index: i })}
             onadd={() => void addAfterCurrent()}
             onadddir={() => void addDirAfterCurrent()}
             onaddurl={() => (showAddUrl = true)}
