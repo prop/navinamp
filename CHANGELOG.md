@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.16.0](https://github.com/prop/navinamp/compare/v0.15.1...v0.16.0) (2026-11-09)
+
+
+### Features
+
+* **skin:** bundle the Winamp 2.91 base skin ([f8b6d30](https://github.com/prop/navinamp/commit/f8b6d303781bce7bc9c28c612c1287ef3fa56b32))
+* **skin:** bundle the Winamp 2.91 base skin ([d3e1f6f](https://github.com/prop/navinamp/commit/d3e1f6f14945e29932cdcb76289919b2b43caa59))
+* **skin:** use the Winamp Skin Museum base-2.91 and make it the default ([93418c4](https://github.com/prop/navinamp/commit/93418c4055fd30775cd839f6f0c4b8d1788646b4))
+
 ## [0.15.1](https://github.com/prop/navinamp/compare/v0.15.0...v0.15.1) (2026-11-07)
 
 
