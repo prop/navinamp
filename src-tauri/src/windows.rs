@@ -692,7 +692,6 @@ pub mod geom {
         fn dock_follow_is_deduped_per_window() {
             // side-by-side windows both docked to the anchor: each appears
             // exactly once even though the anchor links both.
-            let a_pre = rect(0, 0, 100, 50);
             let b_pre = rect(100, 0, 100, 50);
             let c_pre = rect(200, 0, 100, 50);
             let rects = vec![("b".to_string(), b_pre), ("c".to_string(), c_pre)];
