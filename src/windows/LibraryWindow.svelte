@@ -96,11 +96,11 @@
   let skinNote = $state<string | null>(null);
   let skinError = $state<string | null>(null);
 
-  /** Prefer the persisted choice, then the loader's default pick. */
+  /** Prefer the persisted choice; otherwise the bundled base skin. */
   function currentSkinId(list: SkinInfo[]): string {
     const wanted = selectedSkinId();
     if (wanted != null && list.some((s) => s.id === wanted)) return wanted;
-    return list.find((s) => s.id !== "fallback")?.id ?? list[0]?.id ?? "";
+    return list.find((s) => s.id === "base-2-91")?.id ?? list[0]?.id ?? "";
   }
 
   async function refreshSkins(): Promise<void> {
@@ -349,7 +349,7 @@
           <span class="skinlabel">skin</span>
           <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
             {#each skins as s (s.id)}
-              <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" ? " (built-in)" : ""}</option>
+              <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" || s.id === "base-2-91" ? " (built-in)" : ""}</option>
             {/each}
           </select>
           <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
