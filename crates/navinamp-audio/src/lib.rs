@@ -135,6 +135,7 @@ mod sink;
 mod sink_cpal;
 mod sink_test;
 mod spectrum;
+mod wav_repair;
 
 pub use dsp::auto_headroom_db;
 pub use eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_RANGE_DB, EqPreset, EqState, eq_presets};
