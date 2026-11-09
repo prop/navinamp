@@ -42,9 +42,13 @@
      * Pointer-to-row math measures the actual rendered scale instead.
      */
     scale?: number;
+    /** Shuffle is on (the "play next" disable test is order-aware). */
+    shuffle?: boolean;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
+    /** Move a row to just after the current item ("play next"). */
+    onmovenext: (index: number) => void;
     onadd: () => void;
     onadddir: () => void;
     onaddurl: () => void;
@@ -58,9 +62,11 @@
     embedded = false,
     rowHeight = 20,
     scale = 1,
+    shuffle = false,
     onplay,
     onremove,
     onmove,
+    onmovenext,
     onadd,
     onadddir,
     onaddurl,
@@ -329,8 +335,19 @@
     const item = items[m.index];
     if (!item) return [];
     const stream = isStreamUrl(item.path);
+    // "Play next" reorders this row to just after the current item. The
+    // move target is a post-removal index, so convert the insertion gap
+    // with the same helper as drag & drop. Under shuffle the positional
+    // successor is not the playing successor, so only the current row is a
+    // no-op there (PlaylistWindow owns the shuffle flag).
+    const gap = currentIndex == null ? 0 : currentIndex + 1;
+    const at = dropIndex(m.index, gap);
+    const alreadyNext =
+      (currentIndex != null && m.index === currentIndex) ||
+      ((!shuffle || currentIndex == null) && at === m.index);
     const list: ContextMenuItem[] = [
       { id: "play", label: "Play" },
+      { id: "play-next", label: "Play next", disabled: alreadyNext },
       { id: "remove", label: "Remove from queue", danger: true },
       { id: "copy", label: stream ? "Copy URL" : "Copy path" },
     ];
@@ -447,6 +464,9 @@
     if (!item) return;
     if (id === "play") {
       onplay(m.index);
+    } else if (id === "play-next") {
+      // The queue computes the post-removal slot (and the shuffle successor).
+      onmovenext(m.index);
     } else if (id === "remove") {
       onremove(m.index);
     } else if (id === "copy") {

@@ -172,12 +172,16 @@ export type QueueIntent =
   | { type: "add"; paths: string[] }
   | { type: "addUrl"; meta: QueueItemMeta }
   | { type: "addFromLibrary"; metas: QueueItemMeta[] }
+  /** Enqueue right after the current item ("play next"). */
+  | { type: "addFromLibraryNext"; metas: QueueItemMeta[] }
   /** Append and start the first appended item, resolved by the player. */
   | { type: "addFromLibraryAndPlay"; metas: QueueItemMeta[] }
   | { type: "replaceAll"; metas: QueueItemMeta[] }
   | { type: "addNext"; path: string; index?: number }
   | { type: "remove"; index: number }
   | { type: "move"; from: number; to: number }
+  /** Move `index` to just after the current item ("play next"). */
+  | { type: "moveNext"; index: number }
   | { type: "clear" }
   | { type: "next" }
   | { type: "prev" }
@@ -218,6 +222,9 @@ export function applyQueueIntent(intent: QueueIntent): void {
     case "addFromLibrary":
       queue.addFromLibrary(intent.metas);
       break;
+    case "addFromLibraryNext":
+      queue.addNextFromLibrary(intent.metas);
+      break;
     case "addFromLibraryAndPlay": {
       const first = queue.addFromLibrary(intent.metas);
       queue.play(first);
@@ -235,6 +242,9 @@ export function applyQueueIntent(intent: QueueIntent): void {
       break;
     case "move":
       queue.move(intent.from, intent.to);
+      break;
+    case "moveNext":
+      queue.moveNext(intent.index);
       break;
     case "clear":
       queue.clear();
@@ -284,6 +294,12 @@ export function queuePlayNow(metas: QueueItemMeta[]): void {
 export function queueReplaceAll(metas: QueueItemMeta[]): void {
   if (metas.length === 0) return;
   queueIntent({ type: "replaceAll", metas });
+}
+
+/** "Play next" from a library view: enqueue right after the current item. */
+export function queuePlayNext(metas: QueueItemMeta[]): void {
+  if (metas.length === 0) return;
+  queueIntent({ type: "addFromLibraryNext", metas });
 }
 
 // ── reactive stores ────────────────────────────────────────────────────────

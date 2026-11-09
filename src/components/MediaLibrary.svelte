@@ -118,6 +118,8 @@
     scale?: number;
     /** Append tracks to the play queue. */
     onenqueue: (metas: QueueItemMeta[]) => void;
+    /** Enqueue tracks right after the current item ("play next"). */
+    onplaynext: (metas: QueueItemMeta[]) => void;
     /** Append tracks and start playing the first of them. */
     onplaynow: (metas: QueueItemMeta[]) => void;
     /** Replace the playlist editor/queue with these tracks. */
@@ -125,7 +127,7 @@
     onlog: (line: string) => void;
   }
 
-  let { scale = 1, onenqueue, onplaynow, onreplace, onlog }: Props = $props();
+  let { scale = 1, onenqueue, onplaynext, onplaynow, onreplace, onlog }: Props = $props();
 
   // Must match the .trow height for content-visibility sizing.
   const ROW_H = 20;
@@ -1690,6 +1692,10 @@
         id: "enqueue",
         label: bulk ? `Enqueue ${m.count.toLocaleString()} selected` : "Enqueue",
       },
+      {
+        id: "play-next",
+        label: bulk ? `Play ${m.count.toLocaleString()} selected next` : "Play next",
+      },
       { id: "copy", label: "Copy path" },
       { id: "sep", label: "", separator: true },
     ];
@@ -1770,6 +1776,14 @@
         });
       } else {
         onenqueue([toMeta(t)]);
+      }
+    } else if (id === "play-next") {
+      if (m.scope === "selection") {
+        void menuSelectionRows().then((rows) => {
+          if (rows.length > 0) onplaynext(toMetas(rows));
+        });
+      } else {
+        onplaynext([toMeta(t)]);
       }
     } else if (id === "copy") {
       // Remote rows: prefer the server's real file path over the

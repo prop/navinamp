@@ -323,6 +323,23 @@ function rebuildShuffle(): void {
   }
 }
 
+/**
+ * Put `count` item indexes immediately after the current one in shuffle
+ * order, so a "play next" insert really is the shuffle successor. Returns
+ * true when the order changed (callers re-declare the upcoming window).
+ */
+function promoteInShuffle(index: number, count: number): boolean {
+  if (!shuffle || currentIndex == null || count <= 0) return false;
+  const promoted = Array.from({ length: count }, (_, k) => index + k);
+  const moved = new Set(promoted);
+  const rest = shuffleOrder.filter((i) => !moved.has(i));
+  const pos = rest.indexOf(currentIndex);
+  if (pos < 0) return false;
+  rest.splice(pos + 1, 0, ...promoted);
+  shuffleOrder = rest;
+  return true;
+}
+
 function shuffleStep(i: number, delta: 1 | -1): number | null {
   const pos = shuffleOrder.indexOf(i);
   if (pos < 0) return null;
@@ -670,11 +687,21 @@ export const queue = {
 
   /**
    * M4 extension point: enqueue fully-tagged tracks from the library
-   * (scanner / Navidrome) without a file dialog. Same insertion rules as
-   * add(); pass an explicit insertion index for "play next" placement.
+   * (scanner / Navidrome) without a file dialog. Appends; use
+   * addNextFromLibrary() for "play next" placement.
    */
   addFromLibrary(metas: QueueItemMeta[]): number {
     return insertItems(metas, items.length);
+  },
+
+  /** Enqueue library tracks right after the current item ("play next"). */
+  addNextFromLibrary(metas: QueueItemMeta[]): number {
+    const at = currentIndex == null ? 0 : Math.min(currentIndex + 1, items.length);
+    const first = insertItems(metas, at);
+    // insertItems rebuilds the shuffle order randomly; promote the whole
+    // inserted block so shuffle mode honours "play next" too.
+    if (promoteInShuffle(first, metas.length)) reconcileAhead();
+    return first;
   },
 
   /** Insert one path at `index` (default: right after the current item). */
@@ -727,6 +754,26 @@ export const queue = {
     if (currentId != null) currentIndex = items.findIndex((it) => it.id === currentId);
     if (shuffle) rebuildShuffle();
     reconcileAhead();
+  },
+
+  /**
+   * Move `from` to just after the current item ("play next"). `to` is the
+   * final index after removal, so a row above the current one lands one
+   * slot earlier than its pre-removal `currentIndex + 1`.
+   */
+  moveNext(from: number): void {
+    if (from < 0 || from >= items.length) return;
+    const current = currentIndex;
+    if (current == null) {
+      this.move(from, 0);
+      return;
+    }
+    if (from === current) return;
+    const to = from < current ? current : current + 1;
+    this.move(from, to);
+    // move() rebuilt the shuffle order randomly; promote the moved item so
+    // shuffle mode honours "play next" too.
+    if (promoteInShuffle(to, 1)) reconcileAhead();
   },
 
   /**
