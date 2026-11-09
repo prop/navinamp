@@ -623,7 +623,13 @@
           {/each}
         </div>
       {/if}
-      <button class="warnbadge" onclick={() => (warningsOpen = !warningsOpen)}>
+      <button
+        class="warnbadge"
+        title={warningsOpen ? "hide warnings" : "show warnings"}
+        aria-label="warnings"
+        aria-expanded={warningsOpen}
+        onclick={() => (warningsOpen = !warningsOpen)}
+      >
         ⚠ {allWarnings.length}
       </button>
     </div>
@@ -653,7 +659,12 @@
     cursor: default;
   }
 
-  /* Acceptance-run diagnostics: skin warnings must be visible in-app. */
+  /* Acceptance-run diagnostics: skin warnings must be visible in-app.
+     The bar's bounding box (which grows with the expanded list) sits above
+     the skin's transport buttons, so an interactive container would swallow
+     every pointer press while an error is shown. The container is therefore
+     click-through; the painted panel and the badge opt back into hit testing
+     so the list still scrolls and absorbs clicks over its own area. */
   .warnbar {
     position: absolute;
     left: 4px;
@@ -662,7 +673,9 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-width: calc(100% - 8px);
+    /* Keep the painted list off the skin's right-hand readouts. */
+    max-width: 70%;
+    pointer-events: none;
   }
 
   .warnbadge {
@@ -674,6 +687,7 @@
     padding: 1px 6px;
     font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     cursor: pointer;
+    pointer-events: auto;
   }
 
   .warnlist {
@@ -682,6 +696,7 @@
     max-height: 140px;
     overflow-y: auto;
     padding: 4px 6px;
+    pointer-events: auto;
   }
 
   .warnline {
