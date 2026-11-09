@@ -480,7 +480,8 @@
       if (seq !== searchSeq) return;
       aiReport = report;
       searchDef = report.def;
-      const rows = report.def ? await smartViewQuery(report.def, 5000) : [];
+      const rows =
+        report.tracks ?? (report.def ? await smartViewQuery(report.def, 5000) : []);
       if (seq !== searchSeq) return;
       searchResults = rows;
       aiUsedPrompt = prompt;
@@ -2304,6 +2305,12 @@
             catalog-only answer — no local-track rules for this prompt
           </div>
         {/if}
+        {#if aiReport.catalogAnchor}
+          <div class="anchornote">
+            local tracks filtered to {aiReport.catalogAnchor.matched} of
+            {aiReport.catalogAnchor.total} — matched against the Discogs results
+          </div>
+        {/if}
         {#if aiReport.catalog.length > 0}
           <div class="catalog">
             <div class="cathead">
@@ -3101,6 +3108,12 @@
     white-space: normal;
     text-overflow: clip;
     color: #d8a63c;
+    line-height: 1.35;
+  }
+
+  .anchornote {
+    font-size: 10px;
+    color: #3ccb4e;
     line-height: 1.35;
   }
 
