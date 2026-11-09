@@ -2306,10 +2306,16 @@
           </div>
         {/if}
         {#if aiReport.catalogAnchor}
-          <div class="anchornote">
-            local tracks filtered to {aiReport.catalogAnchor.matched} of
-            {aiReport.catalogAnchor.total} — matched against the Discogs results
-          </div>
+          {#if aiReport.catalogAnchor.matched === 0}
+            <div class="anchornote empty">
+              no local tracks match the catalog — showing the catalog only
+            </div>
+          {:else}
+            <div class="anchornote">
+              local tracks filtered to {aiReport.catalogAnchor.matched} of
+              {aiReport.catalogAnchor.total} — matched against the Discogs results
+            </div>
+          {/if}
         {/if}
         {#if aiReport.catalog.length > 0}
           <div class="catalog">
@@ -3115,6 +3121,10 @@
     font-size: 10px;
     color: #3ccb4e;
     line-height: 1.35;
+  }
+
+  .anchornote.empty {
+    color: #808080;
   }
 
   .catalog {

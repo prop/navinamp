@@ -551,6 +551,12 @@ pub async fn ai_search(
                             // full-query failure skips anchoring entirely so
                             // the UI falls back to its own query.
                             let anchored = if catalog_anchor && !catalog.is_empty() {
+                                // Honest denominator: the def's TOTAL matches —
+                                // the query below is capped at 5000 rows.
+                                let total = with_library(&app, &state, |library| {
+                                    library.smart_view_count(&def).map_err(|e| e.to_string())
+                                })
+                                .ok();
                                 let keys = catalog_anchor_keys(&catalog);
                                 match with_library(&app, &state, |library| {
                                     library
@@ -558,7 +564,8 @@ pub async fn ai_search(
                                         .map_err(|e| e.to_string())
                                 }) {
                                     Ok(tracks) => {
-                                        let total = u32::try_from(tracks.len()).unwrap_or(u32::MAX);
+                                        let fetched =
+                                            u32::try_from(tracks.len()).unwrap_or(u32::MAX);
                                         let matched: Vec<Track> = tracks
                                             .into_iter()
                                             .filter(|track| track_matches_catalog(track, &keys))
@@ -569,7 +576,9 @@ pub async fn ai_search(
                                             matched,
                                             CatalogAnchor {
                                                 matched: count,
-                                                total,
+                                                // Fallback when the count query
+                                                // is unavailable.
+                                                total: total.unwrap_or(fetched),
                                             },
                                         ))
                                     }
@@ -1312,64 +1321,106 @@ async fn discogs_search(config: &AiConfig, query: &DiscogsQuery) -> Result<Disco
 
 // ── catalog anchor join (issue #82) ───────────────────────────────────────
 
-/// Transliterate + lowercase + strip non-alphanumerics: `Тараканы!` →
-/// `tarakany` = `Tarakany!`, so Cyrillic library names join against
-/// Discogs' (often transliterated) Latin names.
-fn norm_name(s: &str) -> String {
+/// One catalog key: normalized word tokens from an artist, release-title or
+/// label name.
+type CatalogKey = Vec<String>;
+
+/// Transliterate + lowercase + split into alphanumeric word tokens
+/// (`Тараканы!` → `["tarakany"]`), so Cyrillic library names join against
+/// Discogs' often-transliterated Latin names.
+fn norm_words(s: &str) -> Vec<String> {
     any_ascii::any_ascii(s)
         .to_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
         .collect()
 }
 
-/// Normalized artist / release-title / label names from the fetched
-/// releases. Discogs titles are `Artist - Title`; `Various` and blank parts
-/// are dropped (they would match nearly everything), as are very short keys.
-fn catalog_anchor_keys(catalog: &[DiscogsRelease]) -> Vec<String> {
-    fn push(raw: &str, keys: &mut Vec<String>) {
-        let n = norm_name(raw);
-        if n.len() >= 4 && n != "various" && n != "unknownartist" && !keys.contains(&n) {
-            keys.push(n);
+/// Strips a trailing Discogs format suffix — `Tarakany! – Верните экстази
+/// (CD, Album, RE)` → `Tarakany! – Верните экстази` — so the parenthesised
+/// marker never becomes a key. Titles without the suffix pass through.
+fn strip_release_suffix(title: &str) -> &str {
+    let title = title.trim();
+    if title.ends_with(')')
+        && let Some((head, _)) = title.rsplit_once(" (")
+    {
+        return head.trim();
+    }
+    title
+}
+
+/// Normalized keys from the fetched releases: the artist and release parts
+/// of Discogs' `Artist - Title` titles plus labels. `Various*`/`VA`, blank
+/// parts and keys shorter than four characters are dropped — they would
+/// match nearly everything.
+fn catalog_anchor_keys(catalog: &[DiscogsRelease]) -> Vec<CatalogKey> {
+    fn push(raw: &str, keys: &mut Vec<CatalogKey>, seen: &mut HashSet<String>) {
+        let words = norm_words(raw);
+        if words.iter().map(String::len).sum::<usize>() < 4 {
+            return;
+        }
+        if words[0].starts_with("various") || words[0] == "va" {
+            return;
+        }
+        if seen.insert(words.join(" ")) {
+            keys.push(words);
         }
     }
-    let mut keys: Vec<String> = Vec::new();
+    let mut keys: Vec<CatalogKey> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for release in catalog {
-        if let Some((artist, title)) = release
-            .title
-            .split_once(" - ")
-            .or_else(|| release.title.split_once('–'))
+        let title = strip_release_suffix(&release.title);
+        if let Some((artist, title)) = title.split_once(" - ").or_else(|| title.split_once(" – "))
         {
-            push(artist, &mut keys);
-            push(title, &mut keys);
+            push(artist, &mut keys, &mut seen);
+            push(title, &mut keys, &mut seen);
         } else {
-            push(&release.title, &mut keys);
+            push(title, &mut keys, &mut seen);
         }
         for label in &release.label {
-            push(label, &mut keys);
+            push(label, &mut keys, &mut seen);
         }
     }
     keys
 }
 
-/// Whether a local track anchors to the catalog: a key matches its
-/// normalized artist or album by equality or two-way containment (the label
-/// case needs containment — album "Operation Nordcore" vs release
-/// "Operation Nordcore Part IV").
-fn track_matches_catalog(track: &Track, keys: &[String]) -> bool {
-    matches_catalog_names(&track.artist, &track.album, keys)
+/// Whether a local track anchors to the catalog: one catalog key appears as
+/// a whole-word run in the track's artist, album artist, album or path
+/// (label compilations carry the label in `album_artist`/the folder), by
+/// equality or contiguous word containment — so `hardcore` does not match
+/// `Nekrohardcore` but `operation nordcore` matches
+/// `operation nordcore part iv`. The anchored subset keeps the def's sort
+/// order — the catalog's order is not mirrored.
+fn track_matches_catalog(track: &Track, keys: &[CatalogKey]) -> bool {
+    matches_catalog_names(
+        &[
+            &track.artist,
+            &track.album_artist,
+            &track.album,
+            &track.path,
+        ],
+        keys,
+    )
 }
 
 /// [`track_matches_catalog`] without a `Track` (unit-testable).
-fn matches_catalog_names(artist: &str, album: &str, keys: &[String]) -> bool {
-    let artist = norm_name(artist);
-    let album = norm_name(album);
+fn matches_catalog_names(fields: &[&str], keys: &[CatalogKey]) -> bool {
+    let fields: Vec<Vec<String>> = fields.iter().map(|field| norm_words(field)).collect();
     keys.iter().any(|key| {
-        [&artist, &album].into_iter().any(|field| {
-            field.len() >= 4
-                && (field == key || field.contains(key.as_str()) || key.contains(field.as_str()))
+        fields.iter().any(|field| {
+            let field_len: usize = field.iter().map(String::len).sum();
+            field_len >= 4
+                && (field == key || words_contain(field, key) || words_contain(key, field))
         })
     })
+}
+
+/// Contiguous whole-word containment of `needle` inside `hay`.
+fn words_contain(hay: &[String], needle: &[String]) -> bool {
+    !needle.is_empty()
+        && needle.len() <= hay.len()
+        && hay.windows(needle.len()).any(|window| window == needle)
 }
 
 #[cfg(test)]
@@ -1645,11 +1696,14 @@ mod tests {
     }
 
     #[test]
-    fn norm_name_joins_cyrillic_and_transliterated_names() {
-        assert_eq!(norm_name("Тараканы!"), "tarakany");
-        assert_eq!(norm_name("Tarakany!"), "tarakany");
-        assert_eq!(norm_name("  Операция   Нордкор "), "operatsiyanordkor");
-        assert_eq!(norm_name("!!! ???"), "");
+    fn norm_words_join_cyrillic_and_transliterated_names() {
+        assert_eq!(norm_words("Тараканы!"), vec!["tarakany"]);
+        assert_eq!(norm_words("Tarakany!"), vec!["tarakany"]);
+        assert_eq!(
+            norm_words("  Операция   Нордкор "),
+            vec!["operatsiya", "nordkor"]
+        );
+        assert!(norm_words("!!! ???").is_empty());
     }
 
     #[test]
@@ -1657,7 +1711,7 @@ mod tests {
         let catalog = vec![
             DiscogsRelease {
                 id: 1,
-                title: "Tarakany! - Верните экстази".into(),
+                title: "Tarakany! – Верните экстази (CD, Album, RE)".into(),
                 year: Some("2006".into()),
                 label: vec!["Shockwave".into()],
                 format: vec![],
@@ -1668,7 +1722,7 @@ mod tests {
             },
             DiscogsRelease {
                 id: 2,
-                title: "Various – Operation Nordcore Part IV".into(),
+                title: "Various Artists – Operation Nordcore Part IV".into(),
                 year: None,
                 label: vec!["Nordcore".into()],
                 format: vec![],
@@ -1678,33 +1732,79 @@ mod tests {
                 kind: "release".into(),
             },
         ];
-        let keys = catalog_anchor_keys(&catalog);
-        assert!(keys.contains(&"tarakany".to_string()), "{keys:?}");
+        let joined: Vec<String> = catalog_anchor_keys(&catalog)
+            .into_iter()
+            .map(|key| key.join(" "))
+            .collect();
+        // Artist + release survive the Discogs format suffix.
+        assert!(joined.contains(&"tarakany".to_string()), "{joined:?}");
         assert!(
-            keys.contains(&"operationnordcorepartiv".to_string()),
-            "{keys:?}"
+            joined.contains(&"vernite ekstazi".to_string()),
+            "{joined:?}"
         );
-        assert!(keys.contains(&"shockwave".to_string()), "{keys:?}");
-        assert!(keys.contains(&"nordcore".to_string()), "{keys:?}");
-        assert!(!keys.contains(&"various".to_string()), "{keys:?}");
+        assert!(
+            !joined.iter().any(|key| key.contains("cd album re")),
+            "format suffix must not become a key: {joined:?}"
+        );
+        // Labels are keys; `Various Artists` never is.
+        assert!(joined.contains(&"shockwave".to_string()), "{joined:?}");
+        assert!(joined.contains(&"nordcore".to_string()), "{joined:?}");
+        assert!(
+            !joined.iter().any(|key| key.starts_with("various")),
+            "{joined:?}"
+        );
+        assert!(
+            joined.contains(&"operation nordcore part iv".to_string()),
+            "{joined:?}"
+        );
     }
 
     #[test]
-    fn catalog_anchor_matches_artist_album_and_containment() {
-        let keys = vec!["tarakany".to_string(), "operationnordcore".to_string()];
+    fn catalog_anchor_matches_whole_words_only() {
+        let keys = vec![
+            vec!["tarakany".to_string()],
+            vec!["operation".to_string(), "nordcore".to_string()],
+        ];
         // Cyrillic artist vs transliterated key.
-        assert!(matches_catalog_names("Тараканы!", "", &keys));
-        // Album containment in both directions (the label case).
-        assert!(matches_catalog_names("", "Operation Nordcore", &keys));
+        assert!(matches_catalog_names(&["Тараканы!", "", "", ""], &keys));
+        // Album containment at word boundaries (the label case).
         assert!(matches_catalog_names(
-            "",
-            "Operation Nordcore Part IV",
+            &["", "", "Operation Nordcore", ""],
+            &keys
+        ));
+        assert!(matches_catalog_names(
+            &["", "", "Operation Nordcore Part IV", ""],
             &keys
         ));
         // A punk band that is not in the fetched catalog stays out.
-        assert!(!matches_catalog_names("Радиотранс", "18 сентября", &keys));
-        // Too-short fields/keys never match.
-        assert!(!matches_catalog_names("DJ", "", &["dj".into()]));
+        assert!(!matches_catalog_names(
+            &["Радиотранс", "", "18 сентября", ""],
+            &keys
+        ));
+        // Substring-only hits must NOT anchor (review finding).
+        assert!(!matches_catalog_names(
+            &["", "", "Nekrohardcore Extasy", ""],
+            &[vec!["hardcore".to_string()]]
+        ));
+        // …but a whole-word hit does.
+        assert!(matches_catalog_names(
+            &["", "", "Hardcore for Life", ""],
+            &[vec!["hardcore".to_string()]]
+        ));
+        // Label compilations: album_artist and the folder path cover them.
+        assert!(matches_catalog_names(
+            &["Various Artists", "Nordcore", "Compilation", ""],
+            &[vec!["nordcore".to_string()]]
+        ));
+        assert!(matches_catalog_names(
+            &["", "", "", "/music/Nordcore/VA - Compilation/track.mp3"],
+            &[vec!["nordcore".to_string()]]
+        ));
+        // Too-short fields never match.
+        assert!(!matches_catalog_names(
+            &["", "", "DJ", ""],
+            &[vec!["dj".to_string()]]
+        ));
     }
 
     #[test]
