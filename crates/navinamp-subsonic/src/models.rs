@@ -98,6 +98,11 @@ pub struct SongSummary {
     pub album: String,
     #[serde(default)]
     pub album_id: String,
+    /// The enclosing album's artist (`Various Artists` for compilations).
+    /// Empty when the server does not report it (`Child.albumArtist` is not
+    /// universal across Subsonic servers).
+    #[serde(default)]
+    pub album_artist: String,
     #[serde(default, rename = "track")]
     pub track_no: u32,
     #[serde(default, rename = "disc", alias = "discNumber")]
@@ -412,5 +417,16 @@ mod tests {
             song(r#"{"id":"a","title":"A","path":"Artist/Album/01 song.flac"}"#).path,
             "Artist/Album/01 song.flac"
         );
+    }
+
+    #[test]
+    fn album_artist_parses_the_camel_case_attribute() {
+        // `Child.albumArtist` (Navidrome/OpenSubsonic) — absent on lenient
+        // servers, where the field stays empty and callers fall back.
+        assert_eq!(
+            song(r#"{"id":"a","title":"A","albumArtist":"Various Artists"}"#).album_artist,
+            "Various Artists"
+        );
+        assert_eq!(song(r#"{"id":"a","title":"A"}"#).album_artist, "");
     }
 }
