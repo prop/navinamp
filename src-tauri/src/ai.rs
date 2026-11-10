@@ -55,9 +55,9 @@ pub struct AiConfig {
     pub embedding_model: String,
     pub api_key: String,
     pub timeout_secs: u64,
-    /// Discogs personal access token. Required for catalog lookups (the
-    /// `/database/search` endpoint authenticates); free from
-    /// discogs.com/settings/developers.
+    /// Discogs personal access token. Optional — catalog lookups work
+    /// without one (25 requests/min); a token raises the limit to 60/min.
+    /// Free from discogs.com/settings/developers.
     pub discogs_token: String,
 }
 
@@ -438,7 +438,7 @@ pub async fn ai_search(
     })?;
 
     let mut messages = vec![
-        ChatMessage::system(system_prompt(!config.discogs_token.is_empty())),
+        ChatMessage::system(system_prompt()),
         ChatMessage::user(user_prompt(clean, &context, base_def.as_ref())),
     ];
     let llm = config.llm();
@@ -880,14 +880,10 @@ fn trim_tool_messages(messages: &mut [ChatMessage], budget: usize) {
 // Prompt construction
 // ---------------------------------------------------------------------------
 
-fn system_prompt(discogs_ready: bool) -> String {
-    let availability = if discogs_ready {
-        "Discogs catalog lookup is configured. Use it for label, discography, pressing and release questions."
-    } else {
-        "Discogs catalog lookup is NOT configured (no personal access token). If the user asks for catalog data, do not call discogs_search; explain that a free Discogs token is needed in AI settings."
-    };
+fn system_prompt() -> String {
     format!(
-        "{availability}\n\n{}",
+        "{}\n\n{}",
+        "Discogs catalog lookup is available without a token (an optional personal access token raises the rate limit). Use it for label, discography, pressing and release questions.",
         r#"You translate music requests into NaVinaMP results. Output ONE JSON object
 and nothing else (no markdown, no code fences).
 
@@ -1228,15 +1224,24 @@ fn project_results(releases: &[DiscogsRelease], limit: usize) -> Vec<Value> {
 
 /// Search Discogs with structured filters. Full entries go to the UI catalog;
 /// the model gets a compact projection plus pagination.
+/// Map a Discogs HTTP failure to the user-facing message: 429 gets a
+/// rate-limit hint (tokenless lookups are limited to 25/min per IP) instead
+/// of the raw error body.
+fn discogs_http_error(status: u16, body: &str) -> String {
+    if status == 429 {
+        "Discogs rate limit reached — add a free token in AI settings (60 requests/min) or retry in a minute"
+            .into()
+    } else {
+        format!(
+            "discogs returned HTTP {status}: {}",
+            body.chars().take(300).collect::<String>()
+        )
+    }
+}
+
 async fn discogs_search(config: &AiConfig, query: &DiscogsQuery) -> Result<DiscogsLookup, String> {
     if query.is_empty() {
         return Err("discogs_search needs at least one filter".into());
-    }
-    if config.discogs_token.is_empty() {
-        return Err(
-            "Discogs catalog lookups require a personal access token; add one in AI settings (free at discogs.com/settings/developers)"
-                .into(),
-        );
     }
     let kind = normalized_kind(&query.kind);
     let client = reqwest::Client::builder()
@@ -1274,11 +1279,7 @@ async fn discogs_search(config: &AiConfig, query: &DiscogsQuery) -> Result<Disco
         .await
         .map_err(|e| format!("discogs body: {e}"))?;
     if !status.is_success() {
-        return Err(format!(
-            "discogs returned HTTP {}: {}",
-            status.as_u16(),
-            body.chars().take(300).collect::<String>()
-        ));
+        return Err(discogs_http_error(status.as_u16(), &body));
     }
     let parsed: DiscogsResponse =
         serde_json::from_str(&body).map_err(|e| format!("discogs response: {e}"))?;
@@ -1691,8 +1692,18 @@ mod tests {
 
     #[test]
     fn prompt_reports_discogs_availability() {
-        assert!(system_prompt(true).contains("Discogs catalog lookup is configured"));
-        assert!(system_prompt(false).contains("NOT configured"));
+        let prompt = system_prompt();
+        assert!(prompt.contains("Discogs catalog lookup is available without a token"));
+        assert!(!prompt.contains("NOT configured"));
+    }
+
+    #[test]
+    fn discogs_rate_limit_gets_a_friendly_message() {
+        let msg = discogs_http_error(429, r#"{"message":"too many requests"}"#);
+        assert!(msg.contains("rate limit"), "{msg}");
+        assert!(msg.contains("token"), "{msg}");
+        let msg = discogs_http_error(500, "boom");
+        assert!(msg.contains("HTTP 500") && msg.contains("boom"), "{msg}");
     }
 
     #[test]
@@ -1823,7 +1834,7 @@ mod tests {
 
     #[test]
     fn prompt_teaches_catalog_anchor_mode() {
-        let prompt = system_prompt(true);
+        let prompt = system_prompt();
         assert!(prompt.contains("catalogAnchor"), "{prompt}");
         assert!(prompt.contains("Do not set it for exploratory"), "{prompt}");
     }
@@ -1849,7 +1860,7 @@ mod tests {
 
     #[test]
     fn prompt_pairs_catalog_lookups_with_local_keyword_rules() {
-        let prompt = system_prompt(true);
+        let prompt = system_prompt();
         // A label/discogs lookup must ALSO produce local keyword rules, not a
         // catalog-only answer (regression: the prompt used to teach the model
         // to finish with "def": null for label questions).
