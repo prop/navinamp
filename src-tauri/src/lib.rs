@@ -24,6 +24,14 @@ const NOTIFY_SHORTCUT: &str = "Control+Command+O";
 #[cfg(all(desktop, not(target_os = "macos")))]
 const NOTIFY_SHORTCUT: &str = "Control+Alt+O";
 
+/// Global "next track" shortcut. macOS uses Control+Command+N (the
+/// Control+Command analogue of the now-playing shortcut); Windows/Linux use
+/// Control+Alt+N.
+#[cfg(all(desktop, target_os = "macos"))]
+const NEXT_SHORTCUT: &str = "Control+Command+N";
+#[cfg(all(desktop, not(target_os = "macos")))]
+const NEXT_SHORTCUT: &str = "Control+Alt+N";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
@@ -69,6 +77,26 @@ pub fn run() {
                     eprintln!(
                         "navinamp: cannot register notification shortcut {NOTIFY_SHORTCUT}: {e}"
                     );
+                }
+                // System-wide "next track" shortcut: rides the player's
+                // media-command transport, so it applies the exact executor
+                // semantics of the skin's NEXT button.
+                if let Err(e) =
+                    app.global_shortcut()
+                        .on_shortcut(NEXT_SHORTCUT, |app, _shortcut, event| {
+                            if event.state == ShortcutState::Pressed {
+                                let _ = app.emit_to(
+                                    "main",
+                                    "media-command",
+                                    media::MediaCommandPayload {
+                                        command: media::CMD_NEXT,
+                                        secs: None,
+                                    },
+                                );
+                            }
+                        })
+                {
+                    eprintln!("navinamp: cannot register next-track shortcut {NEXT_SHORTCUT}: {e}");
                 }
             }
             Ok(())
