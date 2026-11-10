@@ -34,7 +34,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { IS_PLAYER, LABEL, PLAYER_LABEL, type WindowLabel } from "./identity";
-import { persistQueue, queue } from "../player/queue.svelte";
+import { persistQueue, queue, queueReady } from "../player/queue.svelte";
 import type { QueueItem, QueueItemMeta, RepeatMode } from "../player/queue.svelte";
 import {
   DEFAULT_SKIN_THEME,
@@ -528,7 +528,11 @@ export function initWindowBus(): void {
     // tens of thousands of items and the effect deep-reads the whole queue,
     // so a burst of mutations must not serialize + broadcast it repeatedly.
     // 150ms is below perception; the snapshot of the latest run wins.
+    // Wait for restoreQueue(): its async disk load completes after this
+    // module graph initializes, and saving the empty state first would
+    // overwrite the file we are about to restore.
     $effect(() => {
+      if (!queueReady.value) return;
       const snapshot = readSnapshot();
       const timer = setTimeout(() => {
         void emit("queue-state", { from: "main", snapshot });
