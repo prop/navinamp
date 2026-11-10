@@ -249,14 +249,15 @@
         class="txt"
         type="password"
         bind:value={config.discogsToken}
-        placeholder="required for catalog lookups"
+        placeholder="optional — raises the Discogs rate limit"
         autocomplete="off"
         spellcheck="false"
         autocorrect="off"
         autocapitalize="off" />
       <div class="hint">
-        Required to list labels, discographies and pressings. Create a free token at
-        discogs.com/settings/developers. Leave it blank for local-only search.
+        Catalog lookups work without it. A free token at
+        discogs.com/settings/developers raises the Discogs rate limit (60 vs 25
+        requests/min).
       </div>
     </div>
     <div class="testrow">

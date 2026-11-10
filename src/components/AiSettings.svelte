@@ -2,7 +2,8 @@
   /**
    * AI search settings modal. Owns only configuration: provider shape,
    * endpoint/model/key, the optional embeddings model for SEMANTIC search,
-   * timeout, and the Discogs token (required for catalog lookups). The search
+   * timeout, and the optional Discogs token (catalog lookups work without
+   * one; a token raises Discogs' rate limit). The search
    * prompts live in the library bar; this panel never sends a search.
    *
    * Keys are stored plaintext in `<app_config>/ai.json` (same policy as
@@ -279,17 +280,16 @@
               class="txt wide"
               type="password"
               bind:value={config.discogsToken}
-              placeholder="required for catalog lookups — free token"
+              placeholder="optional — raises the Discogs rate limit"
               autocomplete="off"
               spellcheck="false"
               autocorrect="off"
               autocapitalize="off" />
           </label>
           <div class="hint">
-            required to list labels, discographies and pressings from Discogs.
-            create a free personal access token at discogs.com/settings/developers.
-            without it the AI can still build local-track rules, but no catalog is
-            returned.
+            catalog lookups work without a token; a free personal access token
+            (discogs.com/settings/developers) raises the Discogs rate limit from
+            25 to 60 requests/min.
           </div>
         </div>
 
