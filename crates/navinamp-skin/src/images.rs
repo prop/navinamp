@@ -342,11 +342,7 @@ fn encode_svg(rgba: &RgbaImage) -> String {
             b = color[2],
         );
         if color[3] != 255 {
-            let _ = write!(
-                svg,
-                " fill-opacity=\"{:.3}\"",
-                f32::from(color[3]) / 255.0
-            );
+            let _ = write!(svg, " fill-opacity=\"{:.3}\"", f32::from(color[3]) / 255.0);
         }
         let _ = write!(svg, " d=\"{d}\"/>");
     }

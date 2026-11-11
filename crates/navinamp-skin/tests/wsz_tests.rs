@@ -854,9 +854,7 @@ fn classic_bitmaps_materialize_into_payloads() {
     // materialized; bitmaps are
     assert_eq!(images.len(), skin.elements.bitmaps.len());
     assert!(
-        images
-            .values()
-            .all(|url| url.starts_with("data:image/")),
+        images.values().all(|url| url.starts_with("data:image/")),
         "payloads are image data URLs"
     );
     // and the transports' crops materialize at button size

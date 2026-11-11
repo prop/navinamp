@@ -94,9 +94,7 @@ fn fallback_skin_bitmaps_all_materialize() {
         "every file-backed bitmap gets a payload"
     );
     assert!(
-        images
-            .values()
-            .all(|v| v.starts_with("data:image/")),
+        images.values().all(|v| v.starts_with("data:image/")),
         "payloads are image data URLs"
     );
 }
