@@ -545,6 +545,9 @@
           : 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'
       }`,
       `--row-h:${rowHeight}px`,
+      // Text renders scale-native (the embedded slot is laid out in real
+      // pixels, not CSS-transformed), so the fixed design sizes multiply.
+      `--pl-text-scale:${scale}`,
     ].join(";");
   });
 </script>
@@ -613,14 +616,30 @@
 </div>
 
 {#if menu}
-  <ContextMenu
-    x={menu.x}
-    y={menu.y}
-    items={menuItems}
-    info={menuDetails}
-    {scale}
-    onselect={menuSelect}
-    onclose={() => (menu = null)} />
+  {#if embedded}
+    <!-- Scale-native list: the row menu re-creates the overlay's local
+         coordinate space (ContextMenu divides coordinates by scale), while
+         staying visually scaled like the skin around it. -->
+    <div class="menu-space" style="transform:scale({scale});">
+      <ContextMenu
+        x={menu.x}
+        y={menu.y}
+        items={menuItems}
+        info={menuDetails}
+        {scale}
+        onselect={menuSelect}
+        onclose={() => (menu = null)} />
+    </div>
+  {:else}
+    <ContextMenu
+      x={menu.x}
+      y={menu.y}
+      items={menuItems}
+      info={menuDetails}
+      {scale}
+      onselect={menuSelect}
+      onclose={() => (menu = null)} />
+  {/if}
 {/if}
 
 <style>
@@ -632,6 +651,18 @@
     border: 1px solid var(--pl-border, #3a3a3a);
     background: #161616;
     user-select: none;
+  }
+
+  /* Scale-native row menus: a full-viewport layer that re-creates the local
+     pixel space the ContextMenu positions in (it divides by scale), scaled
+     back up so the menu keeps the skin's visual size. Transparent to
+     pointers; the menu re-enables them. */
+  .menu-space {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    pointer-events: none;
+    transform-origin: top left;
   }
 
   /* Embedded in a skin frame: the caller owns the box, border and actions. */
@@ -686,9 +717,9 @@
     align-items: center;
     height: var(--row-h, 20px);
     line-height: var(--row-h, 20px);
-    padding: 0 6px;
+    padding: 0 calc(6px * var(--pl-text-scale, 1));
     font-family: var(--pl-font);
-    font-size: 11px;
+    font-size: calc(11px * var(--pl-text-scale, 1));
     color: var(--pl-normal); /* classic Winamp playlist green by default */
     cursor: default;
     touch-action: none;
@@ -709,9 +740,9 @@
 
   .marker {
     flex: none;
-    width: 14px;
+    width: calc(14px * var(--pl-text-scale, 1));
     color: var(--pl-marker);
-    font-size: 10px;
+    font-size: calc(10px * var(--pl-text-scale, 1));
   }
 
   .text {
@@ -730,9 +761,9 @@
   }
 
   .empty {
-    padding: 6px 8px;
+    padding: calc(6px * var(--pl-text-scale, 1)) calc(8px * var(--pl-text-scale, 1));
     font-family: var(--pl-font);
-    font-size: 11px;
+    font-size: calc(11px * var(--pl-text-scale, 1));
     color: var(--pl-normal);
     opacity: 0.55;
   }

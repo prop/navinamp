@@ -418,33 +418,39 @@
     style="width:{skinLayout.w * scale}px; height:{skinLayout.h * scale}px;">
       <SkinSurface layout={skinLayout} {scale} onaction={skinAction} />
 
+      <!-- The list renders SCALE-NATIVE (real pixels, outside the transformed
+           overlay): transform-scaled HTML text rasterizes before the scale
+           and comes out soft, which is exactly the "awkward fonts" report at
+           2x. Geometry and row height are multiplied by the scale here
+           instead, so the browser lays the text out at its final size. -->
+      <div
+        class="list-slot"
+        style="left:{listBox.x * scale}px; top:{listBox.y * scale}px; width:{listBox.w * scale}px; height:{listBox.h * scale}px;"
+      >
+        <PlaylistEditor
+          items={items}
+          {currentIndex}
+          {theme}
+          embedded
+          rowHeight={Math.round(listBox.rowHeight * scale)}
+          {scale}
+          {shuffle}
+          bind:selected
+          onplay={(i) => queueIntent({ type: "play", index: i })}
+          onremove={(i) => queueIntent({ type: "remove", index: i })}
+          onmove={(from, to) => queueIntent({ type: "move", from, to })}
+          onmovenext={(i) => queueIntent({ type: "moveNext", index: i })}
+          onadd={() => void addAfterCurrent()}
+          onadddir={() => void addDirAfterCurrent()}
+          onaddurl={() => (showAddUrl = true)}
+        />
+      </div>
+
       <!-- The overlay lives in skin-pixel space; the CSS scale matches
-           SkinSurface's bitmap scale. Only the list catches pointers. -->
+           SkinSurface's bitmap scale. Only its children catch pointers. -->
       <div
         class="overlay"
         style="width:{skinLayout.w}px; height:{skinLayout.h}px; transform:scale({scale});{chromeVars}">
-        <div
-          class="list-slot"
-          style="left:{listBox.x}px; top:{listBox.y}px; width:{listBox.w}px; height:{listBox.h}px;">
-          <PlaylistEditor
-            items={items}
-            {currentIndex}
-            {theme}
-            embedded
-            rowHeight={listBox.rowHeight}
-            {scale}
-            {shuffle}
-            bind:selected
-            onplay={(i) => queueIntent({ type: "play", index: i })}
-            onremove={(i) => queueIntent({ type: "remove", index: i })}
-            onmove={(from, to) => queueIntent({ type: "move", from, to })}
-            onmovenext={(i) => queueIntent({ type: "moveNext", index: i })}
-            onadd={() => void addAfterCurrent()}
-            onadddir={() => void addDirAfterCurrent()}
-            onaddurl={() => (showAddUrl = true)}
-          />
-        </div>
-
         {#if totalsSlot}
           <div
             class="skin-status"
