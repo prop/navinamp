@@ -510,15 +510,26 @@ function prev(): void {
 }
 
 // ── persistence (player window only): the queue survives restarts ───────────
-// Restored at module init; saved by the bus's broadcast effect after every
-// mutation. Durations come back null and refill on first play. Stored in the
-// player webview's localStorage — safe because ONLY the player window owns
-// (mutates) this module; other windows render bus snapshots.
+// File-backed via `state_save_queue` / `state_load_queue` in the app data dir,
+// so queue length is not bound to the webview's localStorage quota. Saves are
+// debounced by the bus's broadcast effect; the legacy localStorage key is
+// still read once for migration.
 
-const PERSIST_KEY = "navinamp.queue.v1";
-/** Above this, the JSON (~250 B/item) no longer fits webview localStorage. */
-const MAX_PERSISTED_ITEMS = 10_000;
+/** Legacy localStorage key (pre-file persistence); read once for migration. */
+const LEGACY_PERSIST_KEY = "navinamp.queue.v1";
+/**
+ * Refuse to write absurd snapshots. `.length` is UTF-16 code units, so this
+ * is ~25–50 MB on disk depending on the text; it is only a sanity ceiling,
+ * not a quota.
+ */
+const MAX_PERSIST_CHARS = 25_000_000;
 let persistSkipWarned = false;
+
+/**
+ * True once restoreQueue() has finished. The bus must not save before that:
+ * its first effect run would overwrite the file with the empty module state.
+ */
+export const queueReady = $state<{ value: boolean }>({ value: false });
 
 export function persistQueue(snapshot: {
   items: QueueItem[];
@@ -526,64 +537,97 @@ export function persistQueue(snapshot: {
   shuffle: boolean;
   repeat: RepeatMode;
 }): void {
-  if (!IS_PLAYER) return;
-  if (snapshot.items.length > MAX_PERSISTED_ITEMS) {
-    // A 50k-track queue is ~10 MB and exceeds the storage quota; skip the
-    // stringify cost. Leave the last good snapshot in place — a transient
-    // PLAY ALL burst must not destroy a previously saved queue.
-    // (Warn once per session; a later shrink below the cap saves normally.)
+  if (!IS_PLAYER || !queueReady.value) return;
+  const json = JSON.stringify(snapshot);
+  if (json.length > MAX_PERSIST_CHARS) {
+    // Leave the last good snapshot in place — a pathological PLAY ALL burst
+    // must not destroy a previously saved queue.
     if (!persistSkipWarned) {
       persistSkipWarned = true;
       console.warn(
-        `[navinamp] queue has ${snapshot.items.length} items; ` +
-          `persistence is limited to ${MAX_PERSISTED_ITEMS}`,
+        `[navinamp] queue snapshot is ${(json.length / 1_000_000).toFixed(1)} M characters; ` +
+          `persistence is limited to ${MAX_PERSIST_CHARS / 1_000_000} M`,
       );
     }
     return;
   }
+  void invoke("state_save_queue", { json }).catch(() => {
+    // write failed — the queue just lives for this session
+  });
+}
+
+interface SavedQueue {
+  items?: QueueItem[];
+  currentIndex?: number | null;
+  shuffle?: boolean;
+  repeat?: RepeatMode;
+}
+
+function applySavedQueue(saved: SavedQueue): void {
+  if (!Array.isArray(saved.items)) return;
+  items = saved.items.filter(
+    (it) =>
+      it &&
+      typeof it.id === "string" &&
+      typeof it.path === "string" &&
+      typeof it.title === "string",
+  );
+  currentIndex =
+    typeof saved.currentIndex === "number" &&
+    saved.currentIndex >= 0 &&
+    saved.currentIndex < items.length
+      ? saved.currentIndex
+      : items.length > 0
+        ? 0
+        : null;
+  shuffle = saved.shuffle === true;
+  if (saved.repeat === "all" || saved.repeat === "one") repeat = saved.repeat;
+}
+
+/**
+ * Restore the queue from disk (player only). Falls back to the legacy
+ * localStorage snapshot once and migrates it to the file store. Skipped when
+ * the user already mutated the queue while the load was in flight.
+ */
+export async function restoreQueue(): Promise<void> {
+  if (!IS_PLAYER || queueReady.value) return;
+  let raw: string | null = null;
+  let legacy = false;
   try {
-    localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
+    raw = await invoke<string | null>("state_load_queue");
   } catch {
-    // storage unavailable — the queue just lives for this session
+    raw = null;
   }
+  if (raw == null) {
+    try {
+      raw = localStorage.getItem(LEGACY_PERSIST_KEY);
+      legacy = raw != null;
+    } catch {
+      raw = null;
+    }
+  }
+  let applied = false;
+  if (raw != null && items.length === 0 && currentIndex == null) {
+    try {
+      applySavedQueue(JSON.parse(raw) as SavedQueue);
+      applied = true;
+    } catch {
+      // corrupt saved state — start fresh
+    }
+  }
+  queueReady.value = true;
+  if (legacy && applied) {
+    // Migrate only when the legacy snapshot was actually applied. If the
+    // user queued something during the load, writing now would replace the
+    // saved queue with that partial state and nothing would read the legacy
+    // key again.
+    persistQueue({ items, currentIndex, shuffle, repeat });
+  }
+  void repairRestoredText();
 }
 
 if (IS_PLAYER) {
-  try {
-    const raw = localStorage.getItem(PERSIST_KEY);
-    if (raw) {
-      const saved = JSON.parse(raw) as {
-        items?: QueueItem[];
-        currentIndex?: number | null;
-        shuffle?: boolean;
-        repeat?: RepeatMode;
-      };
-      // Loads accept any valid saved queue: the save cap only limits writes,
-      // so an older/larger snapshot is never truncated on restore.
-      if (Array.isArray(saved.items)) {
-        items = saved.items.filter(
-          (it) =>
-            it &&
-            typeof it.id === "string" &&
-            typeof it.path === "string" &&
-            typeof it.title === "string",
-        );
-        currentIndex =
-          typeof saved.currentIndex === "number" &&
-          saved.currentIndex >= 0 &&
-          saved.currentIndex < items.length
-            ? saved.currentIndex
-            : items.length > 0
-              ? 0
-              : null;
-        shuffle = saved.shuffle === true;
-        if (saved.repeat === "all" || saved.repeat === "one") repeat = saved.repeat;
-      }
-    }
-  } catch {
-    // corrupt saved state — start fresh
-  }
-  void repairRestoredText();
+  void restoreQueue();
 }
 
 /**

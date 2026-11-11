@@ -10,6 +10,7 @@ mod navidrome;
 mod semantic;
 mod skin;
 mod smart;
+mod state;
 mod streams;
 mod windows;
 
@@ -81,6 +82,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            state::state_save_queue,
+            state::state_load_queue,
             audio::audio_play,
             audio::audio_enqueue,
             audio::audio_set_upcoming,
