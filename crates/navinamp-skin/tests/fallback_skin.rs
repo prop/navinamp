@@ -96,7 +96,7 @@ fn fallback_skin_bitmaps_all_materialize() {
     assert!(
         images
             .values()
-            .all(|v| v.starts_with("data:image/png;base64,")),
-        "payloads are PNG data URLs"
+            .all(|v| v.starts_with("data:image/")),
+        "payloads are image data URLs"
     );
 }

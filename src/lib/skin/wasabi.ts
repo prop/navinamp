@@ -57,3 +57,14 @@ export function formatWarning(warning: Warning): string {
   const detail = keys.map((k) => `${k}=${String(v[k as keyof typeof v])}`).join(" ");
   return `${Object.keys(warning)[0]}(${detail})`;
 }
+
+/**
+ * Inline CSS override for image payloads. Bitmap payloads inherit the
+ * surface's `image-rendering: pixelated` (crisp integer upscaling); vector
+ * payloads (`data:image/svg…`, emitted by the Rust pipeline for artwork whose
+ * geometry is compact) must be left alone so the engine rasterizes them at
+ * the displayed size instead of nearest-neighbour-scaling a 1× bitmap.
+ */
+export function imageRenderingFor(url: string | undefined): string {
+  return url?.startsWith("data:image/svg") ? "image-rendering:auto;" : "";
+}

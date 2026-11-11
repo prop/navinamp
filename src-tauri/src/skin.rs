@@ -2,7 +2,7 @@
 //!
 //! [`skin_list`] scans `<app-config-dir>/skins` for `.wal`/`.wsz` archives;
 //! [`skin_load`] opens one, parses the model and materializes its bitmap
-//! payloads (PNG data-URLs) in a single round trip. The last-loaded payload
+//! payloads (SVG data-URLs) in a single round trip. The last-loaded payload
 //! is cached by path + mtime so repeated loads (window re-opens, UI reloads)
 //! are cheap — replacing the file or touching it on disk invalidates the
 //! cache.
@@ -60,7 +60,7 @@ pub struct SkinInfo {
 pub struct SkinPayload {
     /// The parsed model (`navinamp_skin::Skin`) as JSON.
     pub skin: serde_json::Value,
-    /// Bitmap id → PNG data-URL (`data:image/png;base64,...`).
+    /// Bitmap id → SVG data-URL (`data:image/svg+xml;base64,...`).
     pub images: HashMap<String, String>,
     /// Parse + payload warnings; non-fatal by design, the UI surfaces them.
     pub warnings: Vec<Warning>,

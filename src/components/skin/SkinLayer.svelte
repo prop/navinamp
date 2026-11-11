@@ -14,7 +14,7 @@
    * glyph).
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
-  import type { PlaybackStatus } from "../../lib/skin/wasabi";
+  import { imageRenderingFor, type PlaybackStatus } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
@@ -98,12 +98,17 @@
       class="img"
       style="left:{obj.x}px; top:{obj.y}px; width:{obj.w}px; height:{obj.h}px;
         background-image:url('{url}'); background-size:{frames * 100}% 100%;
-        background-position:{-frame * obj.w}px 0px;{tileStyle}"
+        background-position:{-frame * obj.w}px 0px;{tileStyle}{imageRenderingFor(url)}"
       title={o?.id ?? undefined}
     ></div>
   {:else}
     <!-- No explicit size: fall back to the bitmap's natural size. -->
-    <img class="img" src={url} style="left:{obj.x}px; top:{obj.y}px;" alt={o?.id ?? ""} />
+    <img
+      class="img"
+      src={url}
+      style="left:{obj.x}px; top:{obj.y}px;{imageRenderingFor(url)}"
+      alt={o?.id ?? ""}
+    />
   {/if}
 {/if}
 
