@@ -71,6 +71,16 @@ export function formatWarning(warning: Warning): string {
  *  - at fractional scales, `auto` lets the engine rasterize at display size,
  *    which is the anti-aliased smoothness the vector payloads exist for.
  *
+ * Engine note (review finding): Chromium rasterizes SVG at display size
+ * already and IGNORES `image-rendering` on SVG documents — this override is
+ * a measured no-op there. It targets WebKit (WKWebView, the shipping macOS
+ * build), whose intrinsic-size rasterization path it corrects.
+ *
+ * `Number.isInteger(scale)` is only meaningful because `normalizeUiScale`
+ * (lib/window/bus.svelte.ts) snaps values to the UI_SCALE_PRESETS list —
+ * a future free-form scale slider must snap too, or the integer path
+ * silently degrades to `auto`.
+ *
  * The call sites interpolate this into a `style` attribute that already
  * contains `url('…')` for the same payload. That stays safe because every
  * payload is base64 (no quotes, parentheses or backslashes); do not start
