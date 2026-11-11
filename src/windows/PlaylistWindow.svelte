@@ -540,7 +540,8 @@
 <style>
   /* Outer box reserves the scaled size; the inner .win keeps its natural
      layout (fixed 275px width) and is transformed from the top-left, like
-     the media library window. */
+     the media library window. The background matches .win's so the reserved
+     box never shows white at fractional scales. */
   .scaler {
     position: relative;
     overflow: hidden;
