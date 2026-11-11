@@ -35,7 +35,12 @@
      * (the skin frame owns the chrome and action buttons).
      */
     embedded?: boolean;
-    /** Row height in CSS pixels (classic PE rows are tighter than the panel). */
+    /**
+     * Row height in CSS pixels (classic PE rows are tighter than the panel).
+     * Accepts fractions: scale-native rendering multiplies by the UI scale,
+     * and fractional heights accumulate sub-pixel-accurately (rounding would
+     * drift against the exactly-multiplied slot box).
+     */
     rowHeight?: number;
     /**
      * Visual scale of the surrounding skin overlay (context-menu math).
@@ -547,6 +552,7 @@
       `--row-h:${rowHeight}px`,
       // Text renders scale-native (the embedded slot is laid out in real
       // pixels, not CSS-transformed), so the fixed design sizes multiply.
+      // Fallback 1 = unscaled design sizes, e.g. the unskinned panel.
       `--pl-text-scale:${scale}`,
     ].join(";");
   });
@@ -616,21 +622,7 @@
 </div>
 
 {#if menu}
-  {#if embedded}
-    <!-- Scale-native list: the row menu re-creates the overlay's local
-         coordinate space (ContextMenu divides coordinates by scale), while
-         staying visually scaled like the skin around it. -->
-    <div class="menu-space" style="transform:scale({scale});">
-      <ContextMenu
-        x={menu.x}
-        y={menu.y}
-        items={menuItems}
-        info={menuDetails}
-        {scale}
-        onselect={menuSelect}
-        onclose={() => (menu = null)} />
-    </div>
-  {:else}
+  {#snippet rowMenu()}
     <ContextMenu
       x={menu.x}
       y={menu.y}
@@ -639,6 +631,16 @@
       {scale}
       onselect={menuSelect}
       onclose={() => (menu = null)} />
+  {/snippet}
+  {#if embedded}
+    <!-- Scale-native list: the row menu re-creates the overlay's local
+         coordinate space (ContextMenu divides coordinates by scale), while
+         staying visually scaled like the skin around it. -->
+    <div class="menu-space" style="transform:scale({scale});">
+      {@render rowMenu()}
+    </div>
+  {:else}
+    {@render rowMenu()}
   {/if}
 {/if}
 

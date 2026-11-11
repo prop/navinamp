@@ -432,7 +432,7 @@
           {currentIndex}
           {theme}
           embedded
-          rowHeight={Math.round(listBox.rowHeight * scale)}
+          rowHeight={listBox.rowHeight * scale}
           {scale}
           {shuffle}
           bind:selected
