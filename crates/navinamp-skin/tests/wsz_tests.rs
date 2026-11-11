@@ -871,7 +871,6 @@ fn classic_bitmaps_materialize_into_payloads() {
     assert_eq!(decode("wsz.vol.thumb"), (14, 11));
 }
 
-/// Intrinsic dimensions of an SVG data-URL payload.
 /// Intrinsic dimensions of a payload data-URL (PNG or SVG).
 fn payload_dimensions(url: &str) -> (u32, u32) {
     use image::GenericImageView as _;
