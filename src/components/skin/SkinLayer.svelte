@@ -20,9 +20,11 @@
     obj: ResolvedObject;
     images: Record<string, string>;
     status?: PlaybackStatus;
+    /** Global UI scale; integer values rasterize vector payloads nearest-neighbour. */
+    scale?: number;
   }
 
-  let { obj, images, status = "stopped" }: Props = $props();
+  let { obj, images, status = "stopped", scale = 1 }: Props = $props();
 
   const isAnim = $derived(obj.object.kind === "animatedlayer");
 
@@ -98,7 +100,7 @@
       class="img"
       style="left:{obj.x}px; top:{obj.y}px; width:{obj.w}px; height:{obj.h}px;
         background-image:url('{url}'); background-size:{frames * 100}% 100%;
-        background-position:{-frame * obj.w}px 0px;{tileStyle}{imageRenderingFor(url)}"
+        background-position:{-frame * obj.w}px 0px;{tileStyle}{imageRenderingFor(url, scale)}"
       title={o?.id ?? undefined}
     ></div>
   {:else}
@@ -106,7 +108,7 @@
     <img
       class="img"
       src={url}
-      style="left:{obj.x}px; top:{obj.y}px;{imageRenderingFor(url)}"
+      style="left:{obj.x}px; top:{obj.y}px;{imageRenderingFor(url, scale)}"
       alt={o?.id ?? ""}
     />
   {/if}

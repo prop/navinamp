@@ -60,16 +60,33 @@ export function formatWarning(warning: Warning): string {
 
 /**
  * Inline CSS override for image payloads. Bitmap payloads inherit the
- * surface's `image-rendering: pixelated` (crisp integer upscaling); vector
- * payloads (`data:image/svg…`, emitted by the Rust pipeline for artwork whose
- * geometry is compact) must be left alone so the engine rasterizes them at
- * the displayed size instead of nearest-neighbour-scaling a 1× bitmap.
+ * surface's `image-rendering: pixelated` (crisp integer upscaling).
+ *
+ * Vector payloads (`data:image/svg…`) are scale-dependent:
+ *  - at integer scales, force `pixelated` too: exact-rect geometry rasterized
+ *    at an integer factor is identical to nearest-neighbour, and forcing it
+ *    guarantees the 1×/2× look stays bit-identical to the old bitmap pipeline
+ *    even if the engine rasterizes the SVG at intrinsic size instead of at
+ *    the displayed size;
+ *  - at fractional scales, `auto` lets the engine rasterize at display size,
+ *    which is the anti-aliased smoothness the vector payloads exist for.
+ *
+ * Engine note (review finding): Chromium rasterizes SVG at display size
+ * already and IGNORES `image-rendering` on SVG documents — this override is
+ * a measured no-op there. It targets WebKit (WKWebView, the shipping macOS
+ * build), whose intrinsic-size rasterization path it corrects.
+ *
+ * `Number.isInteger(scale)` is only meaningful because `normalizeUiScale`
+ * (lib/window/bus.svelte.ts) snaps values to the UI_SCALE_PRESETS list —
+ * a future free-form scale slider must snap too, or the integer path
+ * silently degrades to `auto`.
  *
  * The call sites interpolate this into a `style` attribute that already
  * contains `url('…')` for the same payload. That stays safe because every
  * payload is base64 (no quotes, parentheses or backslashes); do not start
  * emitting raw percent-encoded SVG URLs without re-escaping those sites.
  */
-export function imageRenderingFor(url: string | undefined): string {
-  return url?.startsWith("data:image/svg") ? "image-rendering:auto;" : "";
+export function imageRenderingFor(url: string | undefined, scale: number): string {
+  if (!url?.startsWith("data:image/svg")) return "";
+  return Number.isInteger(scale) ? "image-rendering:pixelated;" : "image-rendering:auto;";
 }
