@@ -43,6 +43,8 @@ pub struct Audio {
     volume: Mutex<f32>,
     /// Desktop "now playing" notification preference (menu + frontend gate).
     notify_track: Mutex<bool>,
+    /// "Resume playback on launch" preference (menu + player startup).
+    resume_on_launch: Mutex<bool>,
     /// User-saved EQ curves (name + bands), persisted in `audio.json`.
     presets: Mutex<Vec<StoredPreset>>,
     /// Debounced writer channel; `None` before [`init`] (and in tests).
@@ -56,6 +58,7 @@ impl Default for Audio {
             eq: Mutex::new(EqState::default()),
             volume: Mutex::new(1.0),
             notify_track: Mutex::new(true),
+            resume_on_launch: Mutex::new(false),
             presets: Mutex::new(Vec::new()),
             prefs_tx: Mutex::new(None),
         }
@@ -72,6 +75,8 @@ struct StoredPrefs {
     eq_presets: Vec<StoredPreset>,
     /// Desktop notifications on track change (absent in older files = on).
     notify_track: bool,
+    /// Resume playback at the saved position on launch (absent = off).
+    resume_on_launch: bool,
 }
 
 impl Default for StoredPrefs {
@@ -81,6 +86,7 @@ impl Default for StoredPrefs {
             eq: StoredEq::default(),
             eq_presets: Vec::new(),
             notify_track: true,
+            resume_on_launch: false,
         }
     }
 }
@@ -187,11 +193,13 @@ pub fn init(app: &AppHandle) {
     {
         let state = app.state::<Audio>();
         let notify_track = stored.notify_track;
+        let resume_on_launch = stored.resume_on_launch;
         let (volume, eq, presets) = stored.sanitized();
         *state.volume.lock().unwrap() = volume;
         *state.eq.lock().unwrap() = eq;
         *state.presets.lock().unwrap() = presets;
         *state.notify_track.lock().unwrap() = notify_track;
+        *state.resume_on_launch.lock().unwrap() = resume_on_launch;
     }
 
     let (tx, rx) = channel();
@@ -242,6 +250,7 @@ fn persist(state: &Audio) {
         eq: StoredEq::from(*state.eq.lock().unwrap()),
         eq_presets: state.presets.lock().unwrap().clone(),
         notify_track: *state.notify_track.lock().unwrap(),
+        resume_on_launch: *state.resume_on_launch.lock().unwrap(),
     };
     if let Some(tx) = state.prefs_tx.lock().unwrap().as_ref() {
         let _ = tx.send(prefs);
@@ -256,6 +265,17 @@ pub fn notify_track(state: &Audio) -> bool {
 /// Update + persist the desktop-notification preference (menu / IPC).
 pub fn set_notify_track(state: &Audio, on: bool) {
     *state.notify_track.lock().unwrap() = on;
+    persist(state);
+}
+
+/// Current "resume playback on launch" preference (also read by the menu).
+pub fn resume_on_launch(state: &Audio) -> bool {
+    *state.resume_on_launch.lock().unwrap()
+}
+
+/// Update + persist the "resume playback on launch" preference.
+pub fn set_resume_on_launch(state: &Audio, on: bool) {
+    *state.resume_on_launch.lock().unwrap() = on;
     persist(state);
 }
 
@@ -276,6 +296,8 @@ pub struct AudioStatePayload {
     pub channels: Option<u16>,
     /// Desktop "now playing" notifications enabled (player-side gate).
     pub notify_track: bool,
+    /// Resume at the saved position automatically on launch.
+    pub resume_on_launch: bool,
 }
 
 fn status_name(s: PlaybackStatus) -> &'static str {
@@ -487,6 +509,7 @@ pub fn audio_set_volume(state: State<'_, Audio>, volume: f32) -> Result<(), Stri
 pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
     let guard = state.engine.lock().unwrap();
     let notify = notify_track(&state);
+    let resume = resume_on_launch(&state);
     match guard.as_ref() {
         Some(engine) => {
             let meta = engine.metadata();
@@ -500,6 +523,7 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
                 sample_rate_hz: meta.map(|m| m.sample_rate_hz),
                 channels: meta.map(|m| m.channels),
                 notify_track: notify,
+                resume_on_launch: resume,
             }
         }
         None => AudioStatePayload {
@@ -513,6 +537,7 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
             sample_rate_hz: None,
             channels: None,
             notify_track: notify,
+            resume_on_launch: resume,
         },
     }
 }
@@ -758,6 +783,7 @@ mod tests {
             sample_rate_hz: Some(44_100),
             channels: Some(2),
             notify_track: true,
+            resume_on_launch: false,
         };
         let v = serde_json::to_value(&payload).expect("serialize");
         assert_eq!(v["bitrateKbps"], 192);
@@ -781,6 +807,7 @@ mod tests {
             sample_rate_hz: None,
             channels: None,
             notify_track: false,
+            resume_on_launch: false,
         };
         let v = serde_json::to_value(&payload).expect("serialize");
         assert!(v["bitrateKbps"].is_null());
@@ -824,6 +851,10 @@ mod tests {
     fn stored_prefs_defaults_and_round_trips_camel_case() {
         let stored: StoredPrefs = serde_json::from_str("{}").expect("empty object");
         assert!(stored.notify_track, "default desktop notifications: on");
+        assert!(
+            !stored.resume_on_launch,
+            "default resume-on-launch: off (policy C)"
+        );
         let (volume, eq, presets) = stored.sanitized();
         assert_eq!(volume, 1.0, "default volume is unity");
         assert_eq!(eq, EqState::default());
@@ -841,6 +872,7 @@ mod tests {
                 bands_db: vec![1.0; EQ_BAND_COUNT],
             }],
             notify_track: false,
+            resume_on_launch: true,
         })
         .expect("serialize");
         assert_eq!(value["volume"], 0.5);
@@ -849,6 +881,7 @@ mod tests {
         assert_eq!(value["eq"]["bandsDb"][0], 2.0);
         assert_eq!(value["eqPresets"][0]["name"], "Mine");
         assert_eq!(value["notifyTrack"], false);
+        assert_eq!(value["resumeOnLaunch"], true);
     }
 
     #[test]

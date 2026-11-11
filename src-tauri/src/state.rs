@@ -1,4 +1,5 @@
-//! Small on-disk state files that must survive restarts (the play queue).
+//! Small on-disk state files that must survive restarts (queue + playback
+//! position).
 //!
 //! Writes are atomic (temp file + rename) and the temp file is fsynced before
 //! the rename, so a crash mid-write cannot leave a truncated queue behind —
@@ -9,16 +10,18 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::{AppHandle, Manager};
 
-/// File name inside the app data dir.
+/// File names inside the app data dir.
 const QUEUE_FILE: &str = "queue.json";
+const PLAYBACK_FILE: &str = "playback.json";
 
-fn queue_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn state_path(app: &AppHandle, file: &str) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
-        .map(|dir| dir.join(QUEUE_FILE))
+        .map(|dir| dir.join(file))
         .map_err(|e| format!("no app data dir: {e}"))
 }
 
@@ -26,21 +29,41 @@ fn queue_path(app: &AppHandle) -> Result<PathBuf, String> {
 /// guarantees a durable, atomic write.
 #[tauri::command]
 pub fn state_save_queue(app: AppHandle, json: String) -> Result<(), String> {
-    let path = queue_path(&app)?;
+    let path = state_path(&app, QUEUE_FILE)?;
     save_at(&path, &json)
 }
 
 /// Read the saved queue JSON (`None` when nothing has been saved yet).
 #[tauri::command]
 pub fn state_load_queue(app: AppHandle) -> Result<Option<String>, String> {
-    let path = queue_path(&app)?;
+    let path = state_path(&app, QUEUE_FILE)?;
     load_at(&path)
 }
 
+/// Persist the playback position/state (small, written periodically).
+#[tauri::command]
+pub fn state_save_playback(app: AppHandle, json: String) -> Result<(), String> {
+    let path = state_path(&app, PLAYBACK_FILE)?;
+    save_at(&path, &json)
+}
+
+/// Read the saved playback position/state (`None` when absent).
+#[tauri::command]
+pub fn state_load_playback(app: AppHandle) -> Result<Option<String>, String> {
+    let path = state_path(&app, PLAYBACK_FILE)?;
+    load_at(&path)
+}
+
+/// Unique temp names: the 5 s playback heartbeat and the close flush can
+/// write concurrently, and sharing one tmp path would let one rename publish
+/// the other's partial file.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn save_at(path: &Path, json: &str) -> Result<(), String> {
-    let dir = path.parent().ok_or("queue path has no parent")?;
+    let dir = path.parent().ok_or("state path has no parent")?;
     fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let tmp = path.with_extension("json.tmp");
+    let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.tmp.{}.{seq}", std::process::id()));
     let mut file = fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
     file.write_all(json.as_bytes())
         .map_err(|e| format!("write {}: {e}", tmp.display()))?;
@@ -78,7 +101,15 @@ mod tests {
             load_at(&path).expect("load").as_deref(),
             Some("{\"items\":[]}")
         );
-        assert!(!path.with_extension("json.tmp").exists());
+        let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .expect("dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

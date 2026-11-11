@@ -84,6 +84,8 @@ pub fn run() {
             commands::app_version,
             state::state_save_queue,
             state::state_load_queue,
+            state::state_save_playback,
+            state::state_load_playback,
             audio::audio_play,
             audio::audio_enqueue,
             audio::audio_set_upcoming,
