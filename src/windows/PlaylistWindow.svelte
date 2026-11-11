@@ -372,55 +372,50 @@
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // Size the OS window directly from the skin layout (like the player
-  // window) so the drag strips and the OS window can never drift. The
-  // unskinned/shade panel instead observes its natural content size.
+  // ── window sizing ───────────────────────────────────────────────────────
+  // The skinned surface sizes its own OS window from the skin layout × scale.
+  // The folded (shade) strip and the unskinned panel keep their natural CSS
+  // layout and are CSS-transformed by the global scale (LibraryWindow's
+  // pattern): an outer `.scaler` reserves the scaled box, the OS window
+  // matches it, and measurement uses offset sizes — transforms change what is
+  // painted, never the layout size, so they cannot feed back into the math.
   let root: HTMLElement | null = $state(null);
-  let lastW = 0;
-  let lastH = 0;
-  $effect(() => {
-    if (useSkin && skinLayout) {
-      const w = Math.ceil(skinLayout.w * scale);
-      const h = Math.ceil(skinLayout.h * scale);
-      if (w !== lastW || h !== lastH) {
-        lastW = w;
-        lastH = h;
-        sizeWindowTo(LABEL, w, h);
-      }
-      return;
-    }
+  let naturalW = $state(275);
+  let naturalH = $state(14);
+  const scaledW = $derived(Math.ceil(naturalW * scale));
+  const scaledH = $derived(Math.ceil(naturalH * scale));
 
+  $effect(() => {
+    if (useSkin) return;
     const el = root;
     if (!el) return;
-    const apply = () => {
-      const r = el.getBoundingClientRect();
-      const w = Math.ceil(r.width);
-      const h = Math.ceil(r.height);
-      if (w === 0 || h === 0 || (w === lastW && h === lastH)) return;
-      lastW = w;
-      lastH = h;
-      sizeWindowTo(LABEL, w, h);
+    const measure = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (w > 0 && h > 0) {
+        naturalW = w;
+        naturalH = h;
+      }
     };
-    apply();
-    const ro = new ResizeObserver(apply);
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   });
+
+  $effect(() => {
+    if (useSkin && skinLayout) {
+      sizeWindowTo(LABEL, Math.ceil(skinLayout.w * scale), Math.ceil(skinLayout.h * scale));
+    } else if (scaledW > 0 && scaledH > 0) {
+      sizeWindowTo(LABEL, scaledW, scaledH);
+    }
+  });
 </script>
 
-<div class="win" class:shade={mode === "shade"} class:skinned={useSkin} bind:this={root}>
-  {#if mode === "shade"}
-    <!-- Classic windowshade: the strip is the playlist row itself. -->
-    <TitleStrip
-      title={stripTitle}
-      note={stripNote}
-      playlistTheme={theme}
-      onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
-    />
-  {:else if useSkin && skin && skinLayout && listBox}
-    <div
-      class="skin-window"
-      style="width:{skinLayout.w * scale}px; height:{skinLayout.h * scale}px;">
+{#if useSkin && skin && skinLayout && listBox}
+  <div
+    class="skin-window"
+    style="width:{skinLayout.w * scale}px; height:{skinLayout.h * scale}px;">
       <SkinSurface layout={skinLayout} {scale} onaction={skinAction} />
 
       <!-- The overlay lives in skin-pixel space; the CSS scale matches
@@ -483,49 +478,75 @@
         {/each}
       </div>
     </div>
-  {:else}
-    <!-- No playlist container in the loaded skin: the palette-themed panel. -->
-    <TitleStrip
-      title="PLAYLIST EDITOR"
-      playlistTheme={theme}
-      onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
-    />
-    <div class="qbar mono" style={chromeVars}>
-      <span
-        class="pos"
-        title={queueTotal}
-        aria-label={currentIndex == null
-          ? `queue empty; ${queueTotal}`
-          : `track ${currentIndex + 1} of ${items.length}; ${queueTotal}`}
-        >{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span
-      >
-      <button class:on={shuffle} onclick={() => queueIntent({ type: "toggleShuffle" })}>shuffle</button>
-      <button class:on={repeat !== "off"} onclick={() => queueIntent({ type: "cycleRepeat" })}>
-        repeat&nbsp;{repeat}
-      </button>
-      <button onclick={() => queueIntent({ type: "clear" })} disabled={items.length === 0}>clear</button>
+{:else}
+  <div class="scaler" style="width:{scaledW}px; height:{scaledH}px;">
+    <div
+      class="win"
+      class:shade={mode === "shade"}
+      bind:this={root}
+      style="transform:scale({scale});">
+      {#if mode === "shade"}
+        <!-- Classic windowshade: the strip is the playlist row itself. -->
+        <TitleStrip
+          title={stripTitle}
+          note={stripNote}
+          playlistTheme={theme}
+          onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
+        />
+      {:else}
+        <!-- No playlist container in the loaded skin: the palette-themed panel. -->
+        <TitleStrip
+          title="PLAYLIST EDITOR"
+          playlistTheme={theme}
+          onfold={() => windowToggleLayout(LABEL).catch(() => undefined)}
+        />
+        <div class="qbar mono" style={chromeVars}>
+          <span
+            class="pos"
+            title={queueTotal}
+            aria-label={currentIndex == null
+              ? `queue empty; ${queueTotal}`
+              : `track ${currentIndex + 1} of ${items.length}; ${queueTotal}`}
+            >{currentIndex == null ? "--" : currentIndex + 1}/{items.length}</span
+          >
+          <button class:on={shuffle} onclick={() => queueIntent({ type: "toggleShuffle" })}>shuffle</button>
+          <button class:on={repeat !== "off"} onclick={() => queueIntent({ type: "cycleRepeat" })}>
+            repeat&nbsp;{repeat}
+          </button>
+          <button onclick={() => queueIntent({ type: "clear" })} disabled={items.length === 0}>clear</button>
+        </div>
+
+        <PlaylistEditor
+          {items}
+          {currentIndex}
+          {theme}
+          bind:selected
+          onplay={(i) => queueIntent({ type: "play", index: i })}
+          onremove={(i) => queueIntent({ type: "remove", index: i })}
+          onmove={(from, to) => queueIntent({ type: "move", from, to })}
+          onadd={() => void addAfterCurrent()}
+          onadddir={() => void addDirAfterCurrent()}
+          onaddurl={() => (showAddUrl = true)}
+        />
+      {/if}
     </div>
+  </div>
+{/if}
 
-    <PlaylistEditor
-      {items}
-      {currentIndex}
-      {theme}
-      bind:selected
-      onplay={(i) => queueIntent({ type: "play", index: i })}
-      onremove={(i) => queueIntent({ type: "remove", index: i })}
-      onmove={(from, to) => queueIntent({ type: "move", from, to })}
-      onadd={() => void addAfterCurrent()}
-      onadddir={() => void addDirAfterCurrent()}
-      onaddurl={() => (showAddUrl = true)}
-    />
-  {/if}
-
-  {#if showAddUrl}
-    <AddUrlDialog onsubmit={addUrl} onclose={() => (showAddUrl = false)} />
-  {/if}
-</div>
+{#if showAddUrl}
+  <AddUrlDialog onsubmit={addUrl} onclose={() => (showAddUrl = false)} />
+{/if}
 
 <style>
+  /* Outer box reserves the scaled size; the inner .win keeps its natural
+     layout (fixed 275px width) and is transformed from the top-left, like
+     the media library window. */
+  .scaler {
+    position: relative;
+    overflow: hidden;
+    background: #000;
+  }
+
   .win {
     /* Match the 275px player/editor width. A fixed width keeps the OS window
        from growing to fit the folded strip's (long) current-track title. */
@@ -538,13 +559,7 @@
     box-sizing: border-box;
     background: #000;
     user-select: none;
-  }
-
-  /* Skinned mode: the skin bitmap owns the exact window box. */
-  .win.skinned {
-    width: max-content;
-    padding: 0;
-    gap: 0;
+    transform-origin: top left;
   }
 
   /* Classic windowshade is exactly the 14px strip; the normal-mode frame
