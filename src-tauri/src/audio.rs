@@ -288,6 +288,9 @@ pub struct AudioStatePayload {
     pub duration_secs: Option<f64>,
     pub volume: f32,
     pub underrun_frames: u64,
+    /// Of `underrun_frames`, the frames lost while a remote stream
+    /// (Navidrome/Subsonic) was active — network stalls vs local hiccups.
+    pub underrun_remote_frames: u64,
     /// Average bitrate of the current track in kbps (classic kbps readout).
     pub bitrate_kbps: Option<u32>,
     /// Source sample rate in Hz (classic kHz readout).
@@ -519,6 +522,7 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
                 duration_secs: engine.duration_secs(),
                 volume: engine.volume(),
                 underrun_frames: engine.underrun_frames(),
+                underrun_remote_frames: engine.underrun_remote_frames(),
                 bitrate_kbps: meta.and_then(|m| m.bitrate_kbps),
                 sample_rate_hz: meta.map(|m| m.sample_rate_hz),
                 channels: meta.map(|m| m.channels),
@@ -533,6 +537,7 @@ pub fn audio_state(state: State<'_, Audio>) -> AudioStatePayload {
             // The cached target before the engine boots (persisted value).
             volume: *state.volume.lock().unwrap(),
             underrun_frames: 0,
+            underrun_remote_frames: 0,
             bitrate_kbps: None,
             sample_rate_hz: None,
             channels: None,
@@ -779,6 +784,7 @@ mod tests {
             duration_secs: Some(210.0),
             volume: 0.8,
             underrun_frames: 0,
+            underrun_remote_frames: 0,
             bitrate_kbps: Some(192),
             sample_rate_hz: Some(44_100),
             channels: Some(2),
@@ -789,6 +795,7 @@ mod tests {
         assert_eq!(v["bitrateKbps"], 192);
         assert_eq!(v["sampleRateHz"], 44_100);
         assert_eq!(v["channels"], 2);
+        assert_eq!(v["underrunRemoteFrames"], 0);
         assert_eq!(
             v["notifyTrack"], true,
             "preference rides the camelCase poll"
@@ -803,6 +810,7 @@ mod tests {
             duration_secs: None,
             volume: 1.0,
             underrun_frames: 0,
+            underrun_remote_frames: 0,
             bitrate_kbps: None,
             sample_rate_hz: None,
             channels: None,

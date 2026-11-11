@@ -363,6 +363,12 @@ impl EngineHandle {
         self.shared.underrun_frames.load(Ordering::Relaxed)
     }
 
+    /// Of [`Self::underrun_frames`], the frames lost while a **remote**
+    /// source was active (network stalls vs local decode/device hiccups).
+    pub fn underrun_remote_frames(&self) -> u64 {
+        self.shared.underrun_remote()
+    }
+
     // ----- equaliser (see `eq.rs`; all reads/writes are lock-free) -----
 
     /// The current EQ state (atomic snapshot).

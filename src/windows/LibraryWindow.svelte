@@ -216,6 +216,8 @@
     durationSecs: number | null;
     volume: number;
     underrunFrames: number;
+    /** Of underrunFrames, frames lost while a remote stream was active. */
+    underrunRemoteFrames: number;
     bitrateKbps: number | null;
     sampleRateHz: number | null;
     channels: number | null;
@@ -226,6 +228,7 @@
     durationSecs: null,
     volume: 1,
     underrunFrames: 0,
+    underrunRemoteFrames: 0,
     bitrateKbps: null,
     sampleRateHz: null,
     channels: null,
@@ -484,7 +487,12 @@
               </span>
             {/if}
             {#if devState.underrunFrames > 0}
-              <span class="warn">(underruns: {devState.underrunFrames})</span>
+              <span class="warn">
+                (underruns: {devState.underrunFrames}
+                {#if devState.underrunRemoteFrames > 0}
+                  · {devState.underrunRemoteFrames} remote
+                {/if})
+              </span>
             {/if}
           </p>
 
