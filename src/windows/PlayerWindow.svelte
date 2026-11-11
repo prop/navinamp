@@ -26,7 +26,13 @@
 
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import OnboardingLauncher from "../components/OnboardingLauncher.svelte";
-  import { queue, isAudioPath } from "../lib/player/queue.svelte";
+  import {
+    queue,
+    isAudioPath,
+    notePlaybackState,
+    queueReady,
+    wasPlayingAtSave,
+  } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
   import {
     artForTrack,
@@ -64,6 +70,8 @@
     channels: number | null;
     /** Desktop "now playing" notifications enabled (menu preference). */
     notifyTrack: boolean;
+    /** Resume at the saved position automatically on launch. */
+    resumeOnLaunch: boolean;
   };
 
   let audio = $state<AudioState>({
@@ -76,6 +84,7 @@
     sampleRateHz: null,
     channels: null,
     notifyTrack: true,
+    resumeOnLaunch: false,
   });
   let seeking = $state<number | null>(null);
   /** Last playback/feed failure, surfaced in the existing warning bar. */
@@ -107,6 +116,8 @@
   async function refresh() {
     try {
       audio = await invoke<AudioState>("audio_state");
+      // Feed the queue's persistence heartbeat (resume position).
+      notePlaybackState(audio.positionSecs, audio.status === "playing");
     } catch {
       // backend without audio_state — keep the last state
     }
@@ -117,6 +128,21 @@
   $effect(() => {
     const timer = setInterval(refresh, 100);
     return () => clearInterval(timer);
+  });
+
+  // Auto-resume (preference "Resume Playback on Launch", off by default):
+  // once the queue restore and the first audio poll are in, start the
+  // restored current track if it was playing when the app last quit. The
+  // queue's pendingResume seek applies from TrackStarted.
+  let autoResumeTried = false;
+  $effect(() => {
+    if (autoResumeTried) return;
+    if (!queueReady.value || !audio.resumeOnLaunch) return;
+    autoResumeTried = true;
+    if (!wasPlayingAtSave()) return;
+    if (audio.status !== "stopped") return; // the user already pressed play
+    const idx = queue.currentIndex;
+    if (idx != null) queue.play(idx);
   });
 
   function rawEngineLine(e: EngineEvent): string {

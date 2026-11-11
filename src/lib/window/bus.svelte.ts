@@ -34,7 +34,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { IS_PLAYER, LABEL, PLAYER_LABEL, type WindowLabel } from "./identity";
-import { persistQueue, queue, queueReady } from "../player/queue.svelte";
+import { persistPlayback, persistQueue, queue, queueReady } from "../player/queue.svelte";
 import type { QueueItem, QueueItemMeta, RepeatMode } from "../player/queue.svelte";
 import {
   DEFAULT_SKIN_THEME,
@@ -542,10 +542,14 @@ export function initWindowBus(): void {
     });
     // Best-effort flush if the player window closes inside the debounce.
     // `beforeunload` is not reliable in the Tauri webview; the close path is.
-    window.addEventListener("beforeunload", () => persistQueue(readSnapshot()));
+    window.addEventListener("beforeunload", () => {
+      persistQueue(readSnapshot());
+      persistPlayback();
+    });
     void getCurrentWindow()
       .onCloseRequested(() => {
         persistQueue(readSnapshot());
+        persistPlayback();
       })
       .catch(() => undefined);
     return;

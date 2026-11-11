@@ -464,6 +464,7 @@ function insertItems(metas: QueueItemMeta[], at: number): number {
   else if (currentIndex >= first) currentIndex += metas.length;
   if (shuffle) rebuildShuffle();
   reconcileAhead();
+  dropStaleResume();
   return first;
 }
 
@@ -615,6 +616,41 @@ export async function restoreQueue(): Promise<void> {
       // corrupt saved state — start fresh
     }
   }
+  // Load the position before flipping queueReady: the player's auto-resume
+  // effect wakes on that flag and needs wasPlayingAtSave() to be accurate.
+  try {
+    const rawPlayback = await invoke<string | null>("state_load_playback");
+    if (rawPlayback != null) {
+      const saved = JSON.parse(rawPlayback) as SavedPlayback;
+      playbackWasPlaying = saved.playing === true;
+      const item = currentIndex == null ? null : items[currentIndex];
+      if (
+        item != null &&
+        saved.itemId === item.id &&
+        typeof saved.positionSecs === "number" &&
+        Number.isFinite(saved.positionSecs) &&
+        saved.positionSecs > 0
+      ) {
+        pendingResumeItemId = item.id;
+        pendingResumeSecs = saved.positionSecs;
+      }
+    }
+  } catch {
+    // no usable playback state — the next play starts from the top
+  }
+  // Reset `playing` for the new session. The position stays available for a
+  // manual resume (or the auto-resume decision above), but a session that
+  // never starts playback must not let a later launch autoplay the track
+  // from a previous session.
+  if (currentIndex != null) {
+    writePlayback({
+      itemId: items[currentIndex].id,
+      positionSecs: pendingResumeSecs ?? 0,
+      playing: false,
+    });
+  } else {
+    writePlayback({});
+  }
   queueReady.value = true;
   if (legacy && applied) {
     // Migrate only when the legacy snapshot was actually applied. If the
@@ -628,6 +664,122 @@ export async function restoreQueue(): Promise<void> {
 
 if (IS_PLAYER) {
   void restoreQueue();
+}
+
+// ── playback position (player window only) ─────────────────────────────────
+// The engine position is polled by the player window and noted here, then
+// written to playback.json every few seconds so a restart can resume the
+// current track where it stopped. The queue itself lives in queue.json.
+
+/** Minimal playback snapshot; the queue file stays position-free. */
+interface SavedPlayback {
+  itemId?: string;
+  positionSecs?: number;
+  playing?: boolean;
+}
+
+const PLAYBACK_HEARTBEAT_MS = 5_000;
+/** Last observed engine position/state (fed by the player's 10 Hz poll). */
+let playbackPositionSecs = 0;
+let playbackPlaying = false;
+/**
+ * True once the engine has actually played in this session. Until then a
+ * heartbeat must not overwrite the saved resume position with the initial
+ * (idle) engine state.
+ */
+let playbackObserved = false;
+/** Restored from playback.json; applied once the matching track starts. */
+let pendingResumeItemId: string | null = null;
+let pendingResumeSecs: number | null = null;
+/** Whether playback was running when the saved state was written. */
+let playbackWasPlaying = false;
+let lastSavedPlayback = "";
+
+/** Player-side hook: record the polled engine position for persistence. */
+export function notePlaybackState(positionSecs: number, playing: boolean): void {
+  if (!IS_PLAYER || !Number.isFinite(positionSecs)) return;
+  playbackPositionSecs = Math.max(0, positionSecs);
+  playbackPlaying = playing;
+  if (playing) playbackObserved = true;
+}
+
+/** True when the persisted state was written while audio was playing. */
+export function wasPlayingAtSave(): boolean {
+  return playbackWasPlaying;
+}
+
+/**
+ * Low-level writer, also used by the session-start snapshot; it bypasses the
+ * `playbackObserved` gate and remembers the payload for the heartbeat dedupe.
+ */
+function writePlayback(payload: SavedPlayback): void {
+  const json = JSON.stringify(payload);
+  lastSavedPlayback = json;
+  void invoke("state_save_playback", { json }).catch(() => {
+    // write failed — a resume just starts from the beginning
+  });
+}
+
+/**
+ * Persist the current position/state (5 s heartbeat + close flush).
+ * Identical payloads are skipped, so the heartbeat is free while paused or
+ * stopped; only a moving position rewrites the file.
+ */
+export function persistPlayback(): void {
+  if (!IS_PLAYER || !queueReady.value || !playbackObserved) return;
+  const item = currentIndex == null ? null : items[currentIndex];
+  if (item == null) return;
+  let secs = playbackPositionSecs;
+  if (item.durationSecs != null && item.durationSecs > 0) {
+    // Never resume at the very end — that would immediately finish.
+    secs = Math.min(secs, Math.max(0, item.durationSecs - 1));
+  }
+  const payload: SavedPlayback = {
+    itemId: item.id,
+    positionSecs: Math.round(secs * 10) / 10,
+    playing: playbackPlaying,
+  };
+  if (JSON.stringify(payload) === lastSavedPlayback) return;
+  writePlayback(payload);
+}
+
+if (IS_PLAYER) {
+  setInterval(persistPlayback, PLAYBACK_HEARTBEAT_MS);
+}
+
+/**
+ * Drop a pending resume once a queue edit makes another item current. The
+ * restored target is gone, so a later manual start must not seek it.
+ */
+function dropStaleResume(): void {
+  if (pendingResumeItemId == null) return;
+  const item = currentIndex == null ? null : items[currentIndex];
+  if (item?.id === pendingResumeItemId) return;
+  pendingResumeItemId = null;
+  pendingResumeSecs = null;
+}
+
+/**
+ * Seek to the position saved from the previous session, once the engine
+ * reports that the restored track actually started. Only the first start of
+ * that item applies; starting any other track discards the pending seek.
+ */
+function applyPendingResume(item: QueueItem): void {
+  if (pendingResumeItemId == null) return;
+  if (item.id !== pendingResumeItemId) {
+    pendingResumeItemId = null;
+    pendingResumeSecs = null;
+    return;
+  }
+  const secs = pendingResumeSecs;
+  pendingResumeItemId = null;
+  pendingResumeSecs = null;
+  if (secs == null || !(secs > 0) || isStreamUrl(item.path)) return;
+  playbackPositionSecs = secs;
+  logLine(`↺ resuming at ${formatTime(secs)}`);
+  void invoke("audio_seek", { secs }).catch((e) =>
+    logLine(`✖ resume seek: ${friendlyIpcError("audio_seek", e)}`),
+  );
 }
 
 /**
@@ -785,6 +937,7 @@ export const queue = {
     if (wasCurrent) playingItemId = null; // audible track is now an orphan
     if (shuffle) rebuildShuffle();
     reconcileAhead();
+    dropStaleResume();
   },
 
   /** Move an item to final index `to`, keeping currentIndex on the same item. */
@@ -831,6 +984,8 @@ export const queue = {
     startPending = false;
     playingItemId = null;
     shuffleOrder = [];
+    pendingResumeItemId = null;
+    pendingResumeSecs = null;
     windowSources.clear();
     if (engineLive) {
       feed(() => invoke("audio_set_upcoming", { tracks: [] }));
@@ -887,6 +1042,7 @@ export const queue = {
         if (idx >= 0) {
           currentIndex = idx;
           playingItemId = exp.id;
+          applyPendingResume(items[idx]); // seeks a restored session's position
           scrobbleStart(items[idx]); // now-playing on remote, closes the previous
           playedStart(items[idx]); // local twin: closes the previous, marks on leave
           if (e.durationSecs != null && items[idx].durationSecs == null) {
@@ -899,6 +1055,8 @@ export const queue = {
         // Its remoteId is unreachable by then, so an open listen is closed
         // (submitted) here rather than leaked.
         playingItemId = null;
+        pendingResumeItemId = null;
+        pendingResumeSecs = null;
         closeScrobble();
         closePlayed();
         reconcileAhead();
