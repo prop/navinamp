@@ -24,9 +24,31 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install Tauri Linux dependencies
+      - name: Prefer the upstream Ubuntu archive
+        # The ubuntu-24.04 image routes apt through
+        # mirror+file:/etc/apt/apt-mirrors.txt, which can point at an
+        # unreachable azure.archive.ubuntu.com host (blocking installs with
+        # "Unable to connect"). Rewrite that host to the upstream archive.
         run: |
-          sudo apt-get update
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$f" ] || continue
+            sudo sed -i \
+              -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              "$f" || true
+          done
+
+      - name: Install Tauri Linux dependencies
+        # Mirror hiccups have left this step hanging for 40+ minutes. Bound
+        # it and let apt retry, so a bad runner fails fast and can be rerun
+        # instead of blocking the whole workflow.
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=60 \
+            -o Acquire::https::Timeout=60
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             build-essential \
@@ -217,9 +239,31 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Tauri Linux dependencies
+      - name: Prefer the upstream Ubuntu archive
+        # The ubuntu-24.04 image routes apt through
+        # mirror+file:/etc/apt/apt-mirrors.txt, which can point at an
+        # unreachable azure.archive.ubuntu.com host (blocking installs with
+        # "Unable to connect"). Rewrite that host to the upstream archive.
         run: |
-          sudo apt-get update
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$f" ] || continue
+            sudo sed -i \
+              -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              "$f" || true
+          done
+
+      - name: Install Tauri Linux dependencies
+        # Mirror hiccups have left this step hanging for 40+ minutes. Bound
+        # it and let apt retry, so a bad runner fails fast and can be rerun
+        # instead of blocking the whole workflow.
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=60 \
+            -o Acquire::https::Timeout=60
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             build-essential \
