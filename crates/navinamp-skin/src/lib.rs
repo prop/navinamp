@@ -4,7 +4,7 @@
 //! classic Winamp 2 `.wsz` archives (ZIP of fixed-layout BMPs, synthesized
 //! into the same model — see [`synthesize_classic`]), parses them into a
 //! normalized, serde-serializable model that the UI renders with absolute
-//! positioning, and materializes `<bitmap>` elements into PNG data-URLs.
+//! positioning, and materializes `<bitmap>` elements into pixel-faithful SVG data-URLs.
 //! This crate deliberately does no rendering, no MAKI interpretation, and
 //! has no audio/tauri/symphonia dependencies or copyrighted assets.
 //!

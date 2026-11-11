@@ -501,9 +501,7 @@ fn font_strips_materialize_as_images() {
         let url = images
             .get(id)
             .unwrap_or_else(|| panic!("font strip payload `{id}`"));
-        let bytes = base64_decode(url.strip_prefix("data:image/png;base64,").unwrap());
-        let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
-        assert_eq!(decoded.dimensions(), (w, h), "`{id}`");
+        assert_eq!(svg_dimensions(url), (w, h), "`{id}`");
     }
 }
 
@@ -856,23 +854,31 @@ fn classic_bitmaps_materialize_into_payloads() {
     // materialized; bitmaps are
     assert_eq!(images.len(), skin.elements.bitmaps.len());
     assert!(
-        images
-            .values()
-            .all(|url| url.starts_with("data:image/png;base64,"))
+        images.values().all(|url| url.starts_with("data:image/")),
+        "payloads are image data URLs"
     );
-    // and the transports' crops decode at button size
-    let decode = |id: &str| -> (u32, u32) {
-        let url = &images[id];
-        let bytes = base64_decode(url.strip_prefix("data:image/png;base64,").unwrap());
-        image::load_from_memory(&bytes)
-            .unwrap()
-            .to_rgba8()
-            .dimensions()
-    };
+    // and the transports' crops materialize at button size
+    let decode = |id: &str| -> (u32, u32) { svg_dimensions(&images[id]) };
     assert_eq!(decode("wsz.btn.prev"), (23, 16));
     assert_eq!(decode("wsz.btn.next"), (22, 16));
     assert_eq!(decode("wsz.main"), (275, 116));
     assert_eq!(decode("wsz.vol.thumb"), (14, 11));
+}
+
+/// Intrinsic dimensions of an SVG data-URL payload.
+fn svg_dimensions(url: &str) -> (u32, u32) {
+    let svg = String::from_utf8(base64_decode(
+        url.strip_prefix("data:image/svg+xml;base64,")
+            .expect("svg data-url prefix"),
+    ))
+    .expect("utf8 svg");
+    let dimension = |name: &str| -> u32 {
+        let pat = format!("{name}=\"");
+        let start = svg.find(&pat).unwrap_or_else(|| panic!("svg `{name}`")) + pat.len();
+        let end = svg[start..].find('"').expect("attribute end") + start;
+        svg[start..end].parse().expect("numeric dimension")
+    };
+    (dimension("width"), dimension("height"))
 }
 
 fn base64_decode(data: &str) -> Vec<u8> {

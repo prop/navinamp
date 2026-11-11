@@ -61,17 +61,75 @@ fn encode(image: DynamicImage, format: ImageFormat) -> Vec<u8> {
     buf
 }
 
-/// Decodes a `data:image/png;base64,...` payload back into pixels.
+/// Reconstructs the pixels of a payload data-URL (SVG or PNG).
+///
+/// The SVG encoder only emits `<path>` elements whose `d` is a sequence of
+/// `M<x> <y>h<w>v<h>h-<w>z` rectangles, so a tiny parser is enough — and
+/// keeps the pixel assertions exact without pulling a rasterizer into the
+/// test dependencies.
 fn decode_payload(url: &str) -> RgbaImage {
+    if let Some(b64) = url.strip_prefix("data:image/png;base64,") {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("base64");
+        return image::load_from_memory(&bytes)
+            .expect("valid png payload")
+            .to_rgba8();
+    }
     let b64 = url
-        .strip_prefix("data:image/png;base64,")
-        .expect("data-url prefix");
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .expect("base64");
-    image::load_from_memory(&bytes)
-        .expect("valid png payload")
-        .to_rgba8()
+        .strip_prefix("data:image/svg+xml;base64,")
+        .expect("image data-url prefix");
+    let svg = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("base64"),
+    )
+    .expect("utf8 svg");
+
+    let dimension = |name: &str| -> u32 {
+        attr(&svg, name)
+            .unwrap_or_else(|| panic!("svg `{name}` attribute"))
+            .parse()
+            .expect("numeric dimension")
+    };
+    let (w, h) = (dimension("width"), dimension("height"));
+    let mut img = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 0]));
+
+    for path in svg.split("<path ").skip(1) {
+        let tag = path.split("/>").next().expect("closed path element");
+        let fill = attr(tag, "fill").expect("path fill");
+        let hex = fill.strip_prefix('#').expect("hex fill");
+        let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex channel");
+        let alpha = match attr(tag, "fill-opacity") {
+            Some(value) => (value.parse::<f32>().expect("opacity") * 255.0).round() as u8,
+            None => 255,
+        };
+        let color = Rgba([channel(0), channel(2), channel(4), alpha]);
+        let d = attr(tag, "d").expect("path d");
+
+        for sub in d.split('M').skip(1) {
+            let (xy, rest) = sub.split_once('h').expect("subpath h");
+            let (x, y) = xy.split_once(' ').expect("subpath coords");
+            let rest = rest.strip_suffix('z').expect("subpath z");
+            let (rw, rest) = rest.split_once('v').expect("subpath v");
+            let (rh, _) = rest.split_once('h').expect("subpath closing h");
+            let num = |value: &str| value.parse::<u32>().expect("numeric coordinate");
+            for yy in num(y)..num(y) + num(rh) {
+                for xx in num(x)..num(x) + num(rw) {
+                    img.put_pixel(xx, yy, color);
+                }
+            }
+        }
+    }
+    img
+}
+
+/// First `name="value"` attribute value inside `tag`.
+fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let pat = format!("{name}=\"");
+    let start = tag.find(&pat)? + pat.len();
+    let end = tag[start..].find('"')? + start;
+    Some(&tag[start..end])
 }
 
 // 1) whole-image payloads ------------------------------------------------------
@@ -85,7 +143,7 @@ fn whole_image_payload_matches_source_pixels() {
     ]);
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     assert_eq!(images.len(), 1);
-    assert!(images["bg"].starts_with("data:image/png;base64,"));
+    assert!(images["bg"].starts_with("data:image/"), "{}", images["bg"]);
 
     let rgba = decode_payload(&images["bg"]);
     assert_eq!(rgba.dimensions(), (4, 3));
@@ -154,21 +212,15 @@ fn transparent_magic_pink_bmp_gains_alpha() {
         let rgba = decode_payload(&images[id]);
         for x in 0..3 {
             let pixel = rgba.get_pixel(x, 0);
-            let expected_alpha = if x % 2 == 0 { 0 } else { 255 };
-            assert_eq!(pixel.0[3], expected_alpha, "alpha at ({x},0) of {id}");
-            // color bytes are kept, only the alpha changes
-            assert_eq!(
-                *pixel,
-                with_alpha(color(x, 0), expected_alpha),
-                "rgb at ({x},0) of {id}"
-            );
+            if x % 2 == 0 {
+                // Color-keyed pixels are omitted from the vector payload:
+                // they reconstruct as fully transparent (RGB unobservable).
+                assert_eq!(pixel.0[3], 0, "keyed alpha at ({x},0) of {id}");
+            } else {
+                assert_eq!(*pixel, color(x, 0), "opaque pixel at ({x},0) of {id}");
+            }
         }
     }
-}
-
-/// `color` with its alpha replaced (the color-key contract).
-fn with_alpha(color: Rgba<u8>, alpha: u8) -> Rgba<u8> {
-    Rgba([color.0[0], color.0[1], color.0[2], alpha])
 }
 
 #[test]
@@ -314,4 +366,48 @@ fn bitmap_without_file_is_skipped_silently() {
     let (images, warnings) = payloads(&[("skin.xml", xml.as_bytes())]);
     assert!(images.is_empty());
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+}
+
+// 9) encoding selection ---------------------------------------------------------------
+
+#[test]
+fn flat_art_prefers_vector_and_dither_stays_raster() {
+    let solid = Rgba([10, 20, 30, 255]);
+    let checker = |x: u32, y: u32| {
+        if (x + y).is_multiple_of(2) {
+            Rgba([0, 0, 0, 255])
+        } else {
+            Rgba([255, 255, 255, 255])
+        }
+    };
+    let xml = r#"
+<skin>
+  <elements>
+    <bitmap id="flat" file="flat.png"/>
+    <bitmap id="dither" file="dither.png"/>
+  </elements>
+</skin>"#;
+    let (images, warnings) = payloads(&[
+        ("skin.xml", xml.as_bytes()),
+        ("flat.png", &png_bytes(16, 16, |_, _| solid)),
+        ("dither.png", &png_bytes(32, 32, checker)),
+    ]);
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    // A solid block merges into one rectangle: vector wins.
+    assert!(
+        images["flat"].starts_with("data:image/svg+xml;base64,"),
+        "flat art should be vector"
+    );
+    assert_eq!(decode_payload(&images["flat"]).get_pixel(15, 15), &solid);
+
+    // A checkerboard has no runs at all: per-pixel geometry would dwarf the
+    // PNG (which compresses the pattern), so the raster payload wins.
+    assert!(
+        images["dither"].starts_with("data:image/png;base64,"),
+        "dithered art should stay raster"
+    );
+    let dither = decode_payload(&images["dither"]);
+    assert_eq!(dither.get_pixel(0, 0), &checker(0, 0));
+    assert_eq!(dither.get_pixel(1, 1), &checker(1, 1));
 }

@@ -2,7 +2,7 @@
 name = "navinamp-skin"
 version.workspace = true
 edition.workspace = true
-description = "NaVinaMP Wasabi skin engine: .wal archive loading, skin.xml parsing into a normalized model, and bitmap payloads (PNG data-URLs)"
+description = "NaVinaMP Wasabi skin engine: .wal archive loading, skin.xml parsing into a normalized model, and bitmap payloads (SVG data-URLs)"
 
 [dependencies]
 base64 = "0.23.1"

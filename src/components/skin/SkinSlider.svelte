@@ -12,6 +12,7 @@
    * dragging (volume sets it live), `oncommit` once on release.
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
+  import { imageRenderingFor } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
@@ -107,7 +108,7 @@
     tabindex="0"
     style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{trackImage
       ? `background-image:url('${trackImage}');`
-      : ''}"
+      : ''}{imageRenderingFor(trackImage)}"
     onpointerenter={() => (hover = true)}
     onpointerleave={() => (hover = false)}
     onpointerdown={down}
@@ -127,7 +128,7 @@
         : obj.y + ((obj.h ?? 0) - thumbSize) / 2}px;
       width:{thumbSize}px; height:{thumbSize}px;{thumbImage
         ? `background-image:url('${thumbImage}');`
-        : ''}"
+        : ''}{imageRenderingFor(thumbImage)}"
   ></div>
 {/if}
 

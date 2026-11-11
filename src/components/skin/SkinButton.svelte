@@ -20,6 +20,7 @@
   import { onDestroy } from "svelte";
 
   import type { ResolvedObject } from "../../lib/skin/resolver";
+  import { imageRenderingFor } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
@@ -165,7 +166,7 @@
     tabindex="0"
     style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{image
       ? `background-image:url('${image}');`
-      : ''}"
+      : ''}{imageRenderingFor(image)}"
     title={o.tooltip ?? o.id ?? undefined}
     onpointerenter={() => (hover = true)}
     onpointerleave={() => (hover = false)}
