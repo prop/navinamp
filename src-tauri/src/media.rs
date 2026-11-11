@@ -126,6 +126,10 @@ fn playback_dirty(old: Option<&Snapshot>, new: &Snapshot) -> bool {
     }
 }
 
+/// Transport command for "next track", shared by the OS media-key mapping
+/// and the global next-track shortcut so the two emit sites cannot drift.
+pub(crate) const CMD_NEXT: &str = "next";
+
 /// Map an OS media event to a contract command. `Toggle` (the play/pause
 /// key on many keyboards) resolves against the last-known playing state.
 /// Seek / SeekBy / SetPosition become relative or absolute seeks; events
@@ -143,7 +147,7 @@ fn map_event(event: &MediaControlEvent, playing: Option<bool>) -> Option<MappedC
         MediaControlEvent::Play => Some(command("play")),
         MediaControlEvent::Pause => Some(command("pause")),
         MediaControlEvent::Stop => Some(command("stop")),
-        MediaControlEvent::Next => Some(command("next")),
+        MediaControlEvent::Next => Some(command(CMD_NEXT)),
         MediaControlEvent::Previous => Some(command("prev")),
         MediaControlEvent::Toggle => match playing {
             Some(true) => Some(command("pause")),
@@ -275,10 +279,10 @@ fn push_playback(inner: &mut MediaInner) {
 // -- IPC commands ---------------------------------------------------------------
 
 #[derive(Serialize, Clone)]
-struct MediaCommandPayload {
-    command: &'static str,
+pub(crate) struct MediaCommandPayload {
+    pub(crate) command: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    secs: Option<f64>,
+    pub(crate) secs: Option<f64>,
 }
 
 /// Show a desktop "now playing" notification (issue #34), optionally with
