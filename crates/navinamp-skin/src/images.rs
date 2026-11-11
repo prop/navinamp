@@ -10,12 +10,19 @@
 //! Two encodings compete per bitmap and the smaller one wins:
 //!
 //! - **SVG** (pixel-faithful): every maximal same-colour rectangle becomes a
-//!   `<rect>`. Classic skins are pixel art and the renderer scales the whole
-//!   surface with a CSS transform; nearest-neighbour upscaling is only
-//!   faithful at integer factors, while 1.25×/1.5× produce alternating
-//!   1px/2px steps. Exact geometry scales cleanly at *any* factor —
+//!   subpath in that colour's `<path>`. Classic skins are pixel art and the
+//!   renderer scales the whole surface with a CSS transform; nearest-neighbour
+//!   upscaling is only faithful at integer factors, while 1.25×/1.5× produce
+//!   alternating 1px/2px steps. Exact geometry scales cleanly at *any* factor —
 //!   pixel-identical at 1×/2× and properly anti-aliased in between. Flat art
 //!   (buttons, sliders, titlebars, borders) compresses well this way.
+//!
+//!   Corollary: adjacent *different-coloured* rectangles share an edge, and at
+//!   fractional scales that edge is anti-aliased (blended). One-pixel outlines
+//!   therefore read slightly softer than a hard-edged render — that AA is
+//!   precisely what replaces nearest-neighbour's uneven pixel steps, not a
+//!   regression. (`shape-rendering="crispEdges"` would restore hard edges at
+//!   the cost of the smooth fractional scaling.)
 //! - **PNG**: dithered/gradient artwork has almost no same-colour runs, so
 //!   per-pixel geometry explodes (base-2-91's main window is ~20x larger as
 //!   SVG); those bitmaps keep the raster payload.

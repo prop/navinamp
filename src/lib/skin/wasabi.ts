@@ -64,6 +64,11 @@ export function formatWarning(warning: Warning): string {
  * payloads (`data:image/svg…`, emitted by the Rust pipeline for artwork whose
  * geometry is compact) must be left alone so the engine rasterizes them at
  * the displayed size instead of nearest-neighbour-scaling a 1× bitmap.
+ *
+ * The call sites interpolate this into a `style` attribute that already
+ * contains `url('…')` for the same payload. That stays safe because every
+ * payload is base64 (no quotes, parentheses or backslashes); do not start
+ * emitting raw percent-encoded SVG URLs without re-escaping those sites.
  */
 export function imageRenderingFor(url: string | undefined): string {
   return url?.startsWith("data:image/svg") ? "image-rendering:auto;" : "";
