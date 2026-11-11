@@ -64,7 +64,6 @@ struct ActiveTrack {
 
 struct QueuedTrack {
     id: u64,
-    #[allow(dead_code)] // used for diagnostics in future milestones
     source: TrackSource,
     src: PcmSource,
 }
@@ -162,6 +161,10 @@ pub(crate) struct Producer {
     /// Output frames ever pushed into the ring (engine timeline).
     pushed: u64,
     next_track_id: u64,
+    /// Deferred underrun-attribution flip: `(timeline frame, is_remote)`.
+    /// Armed by `start_track`, applied by `tick` once playback crosses the
+    /// frame — the predecessor's buffered tail keeps its own attribution.
+    source_flip: Option<(u64, bool)>,
     draining: bool,
     drain_started: Option<Instant>,
     shutdown: bool,
@@ -196,6 +199,7 @@ impl Producer {
             prefetch_generation: 0,
             pushed: 0,
             next_track_id: 0,
+            source_flip: None,
             draining: false,
             drain_started: None,
             shutdown: false,
@@ -254,6 +258,15 @@ impl Producer {
         let mut worked = self.poll_prefetch();
 
         self.flush_pending();
+
+        // Flip underrun attribution once playback has crossed into the new
+        // track (see `start_track`).
+        if let Some((frame, remote)) = self.source_flip
+            && self.shared.played() >= frame
+        {
+            self.shared.set_remote_active(remote);
+            self.source_flip = None;
+        }
 
         // Current track finished producing and its tail is fully buffered:
         // announce the (producer-side) end of the track.
@@ -762,6 +775,7 @@ impl Producer {
         self.autoplay = false;
         self.draining = false;
         self.drain_started = None;
+        self.source_flip = None;
         self.shared.set_remote_active(false);
         self.shared.set_metadata(None);
         self.hard_reset();
@@ -1018,8 +1032,12 @@ impl Producer {
         });
         // Underrun attribution: the callback splits the counter by whether a
         // remote stream is active (network stalls vs local decode hiccups).
-        let remote = matches!(source, TrackSource::Remote { .. });
-        self.shared.set_remote_active(remote);
+        // The flip is DEFERRED until playback crosses into this track
+        // (`source_flip` + the tick check): on a gapless hand-off the ring
+        // still holds the predecessor's tail, and underruns there belong to
+        // it, not to the new source.
+        let remote = source.is_remote();
+        self.source_flip = Some((self.pushed, remote));
         self.current = Some(ActiveTrack {
             id,
             src,
@@ -1036,6 +1054,7 @@ impl Producer {
         self.window.clear();
         self.pending_play = None;
         self.autoplay = false;
+        self.source_flip = None;
         self.shared.set_remote_active(false);
         self.shared.set_metadata(None);
         self.shared.set_status(PlaybackStatus::Stopped);

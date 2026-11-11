@@ -194,6 +194,20 @@ pub enum TrackSource {
     },
 }
 
+impl TrackSource {
+    /// Whether this source decodes over the network. Exhaustive on purpose:
+    /// a new variant must be classified here or underrun attribution and the
+    /// remote decode-ahead silently miss it.
+    pub fn is_remote(&self) -> bool {
+        matches!(
+            self,
+            TrackSource::Remote { .. }
+                | TrackSource::RemoteInsecure { .. }
+                | TrackSource::RemoteWithHeaders { .. }
+        )
+    }
+}
+
 /// One entry in the engine's prefetch window (see [`Command::SetUpcoming`]).
 ///
 /// The key is a stable caller-side identity (the UI's queue-item id). Window
@@ -366,7 +380,7 @@ impl EngineHandle {
     /// Of [`Self::underrun_frames`], the frames lost while a **remote**
     /// source was active (network stalls vs local decode/device hiccups).
     pub fn underrun_remote_frames(&self) -> u64 {
-        self.shared.underrun_remote()
+        self.shared.underrun_remote_frames()
     }
 
     // ----- equaliser (see `eq.rs`; all reads/writes are lock-free) -----

@@ -235,6 +235,13 @@
   });
   let seeking = $state<number | null>(null);
 
+  /** "underruns: N" plus the remote split when network stalls contributed. */
+  function underrunLabel(frames: number, remote: number): string {
+    return remote > 0
+      ? `underruns: ${frames} · ${remote} remote`
+      : `underruns: ${frames}`;
+  }
+
   // The 10 Hz audio poll runs only while the DEV tab is visible (#16).
   $effect(() => {
     if (tab !== "dev") return;
@@ -488,10 +495,7 @@
             {/if}
             {#if devState.underrunFrames > 0}
               <span class="warn">
-                (underruns: {devState.underrunFrames}
-                {#if devState.underrunRemoteFrames > 0}
-                  · {devState.underrunRemoteFrames} remote
-                {/if})
+                ({underrunLabel(devState.underrunFrames, devState.underrunRemoteFrames)})
               </span>
             {/if}
           </p>

@@ -155,7 +155,7 @@ impl Shared {
     pub(crate) fn remote_active(&self) -> bool {
         self.remote_active.load(Ordering::Relaxed)
     }
-    pub(crate) fn underrun_remote(&self) -> u64 {
+    pub(crate) fn underrun_remote_frames(&self) -> u64 {
         self.underrun_frames_remote.load(Ordering::Relaxed)
     }
 
@@ -353,7 +353,7 @@ mod tests {
     fn remote_active_flag_and_split_counter() {
         let shared = Shared::new(1.0);
         assert!(!shared.remote_active());
-        assert_eq!(shared.underrun_remote(), 0);
+        assert_eq!(shared.underrun_remote_frames(), 0);
 
         shared.set_remote_active(true);
         assert!(shared.remote_active());
@@ -361,13 +361,13 @@ mod tests {
         shared
             .underrun_frames_remote
             .fetch_add(5, Ordering::Relaxed);
-        assert_eq!(shared.underrun_remote(), 5);
+        assert_eq!(shared.underrun_remote_frames(), 5);
 
         // A local track after a remote one stops attributing new underruns
         // to the network, but keeps the historical split intact.
         shared.set_remote_active(false);
         assert!(!shared.remote_active());
-        assert_eq!(shared.underrun_remote(), 5);
+        assert_eq!(shared.underrun_remote_frames(), 5);
     }
 
     #[test]
