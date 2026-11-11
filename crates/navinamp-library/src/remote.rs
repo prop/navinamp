@@ -148,7 +148,7 @@ pub(super) fn remote_albums(
 ) -> rusqlite::Result<HashMap<String, RemoteAlbum>> {
     let mut stmt = conn.prepare(
         "SELECT album_id, song_count, duration_secs, name, artist, year,
-                cover_art_id, created
+                cover_art_id, created, label, catalog_num
            FROM remote_albums WHERE server_id = ?1",
     )?;
     let rows = stmt.query_map([server_id], |row| {
@@ -162,6 +162,8 @@ pub(super) fn remote_albums(
             year: row.get(5)?,
             cover_art_id: row.get(6)?,
             created: row.get(7)?,
+            label: row.get(8)?,
+            catalog_num: row.get(9)?,
         })
     })?;
     let mut albums = HashMap::new();
@@ -207,8 +209,8 @@ pub(super) fn upsert_remote_albums(
         let mut upsert = tx.prepare(
             "INSERT INTO remote_albums (
                 server_id, album_id, song_count, duration_secs, name, artist,
-                year, cover_art_id, created
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                year, cover_art_id, created, label, catalog_num
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(server_id, album_id) DO UPDATE SET
                 song_count    = excluded.song_count,
                 duration_secs = excluded.duration_secs,
@@ -216,7 +218,9 @@ pub(super) fn upsert_remote_albums(
                 artist        = excluded.artist,
                 year          = excluded.year,
                 cover_art_id  = excluded.cover_art_id,
-                created       = excluded.created",
+                created       = excluded.created,
+                label         = excluded.label,
+                catalog_num   = excluded.catalog_num",
         )?;
         for album in albums {
             upsert.execute(rusqlite::params![
@@ -229,6 +233,8 @@ pub(super) fn upsert_remote_albums(
                 album.year,
                 album.cover_art_id,
                 album.created,
+                album.label,
+                album.catalog_num,
             ])?;
         }
     }

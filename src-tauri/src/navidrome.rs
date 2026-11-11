@@ -40,7 +40,7 @@ use navinamp_library::{
 };
 use navinamp_subsonic::{
     AlbumDetail, AlbumSummary, MusicFolder, PlaylistSummary, SongSummary, StreamFormat,
-    SubsonicClient,
+    SubsonicClient, join_record_labels,
 };
 
 use crate::library::{LibraryState, db_file, with_library};
@@ -1640,7 +1640,9 @@ async fn sync_album_index(
                 } else {
                     detail.songs.len() as u64
                 };
-                album_updates.push(remote_album_from_summary(server_id, &album));
+                let mut update = remote_album_from_summary(server_id, &album);
+                apply_album_detail(&mut update, &detail);
+                album_updates.push(update);
             }
             Some(Err(e)) => {
                 report.errors.push(format!(
@@ -1745,6 +1747,9 @@ async fn sync_by_artist(job: SyncJob<'_>, report: &mut SyncReport) -> Result<(),
                         tracks.push(map_song(&detail, song, server_id));
                     }
                     scanned_tracks += detail.songs.len() as u64;
+                    let mut update = remote_album_from_summary(server_id, &album);
+                    apply_album_detail(&mut update, &detail);
+                    album_updates.push(update);
                 }
                 Err(e) => report.errors.push(format!(
                     "album `{}`: {}",
@@ -1793,6 +1798,13 @@ fn album_matches(stored: Option<&RemoteAlbum>, album: &AlbumSummary, known: &[St
         && stored.year == year
         && stored.cover_art_id == album.cover_art_id
         && stored.created == album.created
+        // Labels are stored exactly as the cheap album index reports them
+        // (never overwritten from getAlbum), so this term converges: a label
+        // appearing or disappearing forces one detail fetch, which then
+        // stores the summary value and matches on the next rescan. Navidrome
+        // maps getAlbumList2 through the same buildAlbumID3 as getAlbum, so
+        // the index carries the same labels.
+        && stored.label == join_record_labels(&album.record_labels)
         && known.len() as u32 == album.song_count
 }
 
@@ -1807,6 +1819,18 @@ fn remote_album_from_summary(server_id: &str, album: &AlbumSummary) -> RemoteAlb
         year: (album.year > 0).then_some(i64::from(album.year)),
         cover_art_id: album.cover_art_id.clone(),
         created: album.created.clone(),
+        label: join_record_labels(&album.record_labels),
+        catalog_num: album.catalog_number.clone(),
+    }
+}
+
+/// Fill the catalog number from the `getAlbum` detail when present. The
+/// label deliberately stays summary-sourced: `album_matches` compares the
+/// stored label against the album index, and a detail override could never
+/// converge when the two sources disagree.
+fn apply_album_detail(album: &mut RemoteAlbum, detail: &AlbumDetail) {
+    if detail.catalog_number.is_some() {
+        album.catalog_num = detail.catalog_number.clone();
     }
 }
 
@@ -2221,6 +2245,8 @@ mod tests {
             song_count: 1,
             duration_secs: 293,
             cover_art_id: Some("al-1".into()),
+            record_labels: Vec::new(),
+            catalog_number: None,
             songs: vec![],
         };
 
@@ -2248,6 +2274,8 @@ mod tests {
             cover_art_id: Some("al-1".into()),
             year: 1993,
             created: Some("2024-01-01T00:00:00Z".into()),
+            record_labels: Vec::new(),
+            catalog_number: None,
         }
     }
 
@@ -2262,6 +2290,28 @@ mod tests {
         let mut changed = summary.clone();
         changed.name = "Debut (Deluxe)".into();
         assert!(!album_matches(Some(&stored), &changed, &known));
+
+        // Labels ride on the album index: a label appearing (backfill) or
+        // changing forces one detail fetch, then the new value is stored.
+        let mut labeled = summary.clone();
+        labeled.record_labels = vec![navinamp_subsonic::RecordLabel {
+            name: "Bloody Fist Records".into(),
+        }];
+        assert!(!album_matches(Some(&stored), &labeled, &known));
+        let stored_labeled = remote_album_from_summary("p1", &labeled);
+        assert_eq!(
+            stored_labeled.label.as_deref(),
+            Some("Bloody Fist Records"),
+            "fingerprint rows keep the joined label"
+        );
+        assert!(album_matches(Some(&stored_labeled), &labeled, &known));
+
+        // A label removed server-side costs one fetch, then converges to
+        // None — the stored label is always the summary's value, never an
+        // override from getAlbum, so this term can never churn.
+        assert!(!album_matches(Some(&stored_labeled), &summary, &known));
+        let stored_after_removal = remote_album_from_summary("p1", &summary);
+        assert!(album_matches(Some(&stored_after_removal), &summary, &known));
 
         // A partial/legacy track set must be re-fetched even if metadata
         // matches: pruning needs every remote id for the album.

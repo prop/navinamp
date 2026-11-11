@@ -500,6 +500,8 @@ fn album_fingerprints_round_trip_and_prune() {
         year: Some(1993),
         cover_art_id: Some("al-1".into()),
         created: Some("2024-01-01T00:00:00Z".into()),
+        label: Some("Bloody Fist Records".into()),
+        catalog_num: Some("BF-012".into()),
     };
     let second = RemoteAlbum {
         server_id: S.into(),
@@ -511,6 +513,8 @@ fn album_fingerprints_round_trip_and_prune() {
         year: Some(1995),
         cover_art_id: None,
         created: None,
+        label: None,
+        catalog_num: None,
     };
     library
         .upsert_remote_albums(&[first.clone(), second])
@@ -519,6 +523,15 @@ fn album_fingerprints_round_trip_and_prune() {
     let albums = library.remote_albums(S).unwrap();
     assert_eq!(albums.len(), 2);
     assert_eq!(albums.get("al-1"), Some(&first));
+    assert_eq!(
+        albums.get("al-1").unwrap().label.as_deref(),
+        Some("Bloody Fist Records"),
+        "labels round-trip through the fingerprint table"
+    );
+    assert_eq!(
+        albums.get("al-1").unwrap().catalog_num.as_deref(),
+        Some("BF-012")
+    );
 
     let seen: HashSet<String> = ["al-1".to_string()].into_iter().collect();
     assert_eq!(library.prune_remote_albums(S, &seen).unwrap(), 1);
@@ -526,4 +539,56 @@ fn album_fingerprints_round_trip_and_prune() {
 
     library.delete_remote_server(S).unwrap();
     assert!(library.remote_albums(S).unwrap().is_empty());
+}
+
+#[test]
+fn albums_surface_remote_label_and_catalog_number() {
+    let (_s, library) = db("remote-album-label-join");
+    // Two fingerprint rows share one album_key (server-side duplicate
+    // album ids). The view must pick ONE row's pair, never stitch a label
+    // from one release with a catalog number from the other.
+    let mut other = rt("t2", "Venus as a Boy");
+    other.remote_album_id = "al-2".into();
+    library
+        .sync_remote(S, vec![rt("t1", "Human Behaviour"), other])
+        .unwrap();
+    library
+        .upsert_remote_albums(&[
+            RemoteAlbum {
+                server_id: S.into(),
+                album_id: "al-1".into(),
+                song_count: 1,
+                duration_secs: 250,
+                name: "Debut".into(),
+                artist: "Björk".into(),
+                year: Some(1993),
+                cover_art_id: Some("al-1".into()),
+                created: None,
+                label: Some("Bloody Fist Records".into()),
+                catalog_num: Some("BF-012".into()),
+            },
+            RemoteAlbum {
+                server_id: S.into(),
+                album_id: "al-2".into(),
+                song_count: 1,
+                duration_secs: 250,
+                name: "Debut".into(),
+                artist: "Björk".into(),
+                year: Some(1993),
+                cover_art_id: Some("al-1".into()),
+                created: None,
+                label: Some("Alpha Records".into()),
+                catalog_num: None,
+            },
+        ])
+        .unwrap();
+
+    let albums = library.albums(Some("navidrome")).unwrap();
+    assert_eq!(albums.len(), 1, "one album_key");
+    let album = &albums[0];
+    assert_eq!(album.track_count, 2);
+    // "Bloody Fist Records" sorts after "Alpha Records": the same-row pair
+    // wins, so its catalog number comes with it.
+    assert_eq!(album.label.as_deref(), Some("Bloody Fist Records"));
+    assert_eq!(album.catalog_number.as_deref(), Some("BF-012"));
 }

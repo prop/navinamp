@@ -1914,6 +1914,25 @@
     return null;
   }
 
+  /**
+   * Album leaf suffix for remote metadata: ` — Label [CAT#]`, omitting
+   * whichever half the server did not provide.
+   */
+  function albumMeta(a: Album): string {
+    const label = a.label?.trim() ?? "";
+    const catalog = a.catalogNumber?.trim() ?? "";
+    const parts = [label, catalog ? `[${catalog}]` : ""].filter(Boolean);
+    return parts.length > 0 ? ` — ${parts.join(" ")}` : "";
+  }
+
+  /** Full leaf tooltip: artist plus the label/catalog suffix. */
+  function albumTitle(a: Album): string {
+    const label = a.label?.trim() ?? "";
+    const catalog = a.catalogNumber?.trim() ?? "";
+    const meta = [label, catalog].filter(Boolean).join(" · ");
+    return meta ? `${a.artist} · ${meta}` : a.artist;
+  }
+
   function failArt(serverId: string | null, id: string): void {
     const key = artKey(serverId, id);
     if (failedArtIds.has(key)) return;
@@ -2527,7 +2546,7 @@
                 <button
                   class="leaf album"
                   class:on={selKey(selection) === `album:${a.albumKey}`}
-                  title={a.artist}
+                  title={albumTitle(a)}
                   onclick={() => select({ kind: "album", value: a.albumKey })}>
                   {#if albumCoverSrc(a)}
                     <img
@@ -2540,7 +2559,9 @@
                   {:else}
                     <span class="alb-art none" aria-hidden="true">♪</span>
                   {/if}
-                  <span class="alb-name">{a.name}{a.year != null ? ` (${a.year})` : ""}</span>
+                  <span class="alb-name"
+                    >{a.name}{a.year != null ? ` (${a.year})` : ""}{albumMeta(a)}</span
+                  >
                 </button>
               {/each}
             </div>
