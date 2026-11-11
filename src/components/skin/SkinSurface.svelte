@@ -212,7 +212,7 @@
       {#if !isPainted(obj)}
         <!-- skipped -->
       {:else if obj.object.kind === "layer" || obj.object.kind === "animatedlayer"}
-        <SkinLayer {obj} images={layout.images} {status} />
+        <SkinLayer {obj} images={layout.images} {status} {scale} />
         {#if obj.object.kind === "layer" && obj.object.id === "eq.graph"}
           <!-- Live curve over the skin's EQ graph well. -->
           <SkinEqCurve {obj} {eq} />
@@ -226,11 +226,13 @@
           holdable={holdable(obj.object)}
           {onholdstart}
           {onholdend}
+          {scale}
         />
       {:else if obj.object.kind === "slider"}
         <SkinSlider
           {obj}
           images={layout.images}
+          {scale}
           value={sliderValue(obj.object)}
           disabled={sliderDisabled(obj.object)}
           onlive={(v) => sliderLive(obj.object, v)}
@@ -247,7 +249,7 @@
           images={layout.images}
         />
       {:else if obj.object.kind === "status"}
-        <SkinStatus {obj} images={layout.images} {status} {channels} />
+        <SkinStatus {obj} images={layout.images} {status} {channels} {scale} />
       {:else if obj.object.kind === "vis"}
         <SkinVis {obj} {status} />
       {:else}
