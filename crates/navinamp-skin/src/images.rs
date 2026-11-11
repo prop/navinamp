@@ -27,6 +27,11 @@
 //!   per-pixel geometry explodes (base-2-91's main window is ~20x larger as
 //!   SVG); those bitmaps keep the raster payload.
 //!
+//! Exception to the contest: bitmaps whose file backs a `<bitmapfont>` glyph
+//! strip always stay raster. The renderer blits them 1:1 into a canvas and
+//! upscales the result chunky by design, so a vector strip buys no crispness
+//! while adding an SVG rasterisation step to every glyph draw.
+//!
 //! Both encodings are 1:1 with the skin's own pixels; every scale factor is
 //! the renderer's job (plan §3).
 //!
@@ -88,6 +93,17 @@ pub fn bitmap_payloads(
     archive: &SkinArchive,
     skin: &Skin,
 ) -> (HashMap<String, String>, Vec<Warning>) {
+    // Glyph strips are blitted 1:1 into a canvas by the renderer's bitmap
+    // font code and then upscaled chunky by design — vectorising them buys
+    // no crispness and adds an SVG rasterisation step to every glyph draw.
+    // Keep every bitmap whose file backs a <bitmapfont> raster (file names
+    // are compared case-insensitively, like the archive lookup).
+    let font_files: Vec<&str> = skin
+        .elements
+        .bitmap_fonts
+        .iter()
+        .filter_map(|font| font.file.as_deref())
+        .collect();
     let mut images = HashMap::new();
     let mut warnings = Vec::new();
 
@@ -148,8 +164,19 @@ pub fn bitmap_payloads(
             // warning variant for the impossible case.
             Err(_) => svg_url.clone(),
         };
-        let use_svg = svg_url.len() as f64 <= png_url.len() as f64 * SVG_SIZE_BUDGET;
-        let url = if use_svg { svg_url } else { png_url };
+        // Glyph strips stay raster regardless of the size comparison.
+        let raster_only = bitmap.file.as_deref().is_some_and(|file| {
+            font_files
+                .iter()
+                .any(|font_file| font_file.eq_ignore_ascii_case(file))
+        });
+        let url = if raster_only {
+            png_url
+        } else if svg_url.len() as f64 <= png_url.len() as f64 * SVG_SIZE_BUDGET {
+            svg_url
+        } else {
+            png_url
+        };
         images.insert(bitmap.id.clone(), url);
     }
 

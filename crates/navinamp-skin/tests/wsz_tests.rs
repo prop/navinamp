@@ -493,7 +493,9 @@ fn font_strips_materialize_as_images() {
     let (images, payload_warnings) = bitmap_payloads(&archive, &skin);
     assert!(payload_warnings.is_empty());
     // The renderer blits glyphs from images["{font}.image"]; both strips
-    // must be present and decode at their classic dimensions.
+    // must be present, decode at their classic dimensions, and stay RASTER:
+    // glyph cells are blitted 1:1 into a canvas, so a vector strip buys no
+    // crispness (and the classic chunky look is intended).
     for (id, w, h) in [
         ("wsz.font.text.image", 155, 74),
         ("wsz.font.numbers.image", 99, 13),
@@ -501,7 +503,11 @@ fn font_strips_materialize_as_images() {
         let url = images
             .get(id)
             .unwrap_or_else(|| panic!("font strip payload `{id}`"));
-        assert_eq!(svg_dimensions(url), (w, h), "`{id}`");
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "`{id}` must stay raster: {url}"
+        );
+        assert_eq!(payload_dimensions(url), (w, h), "`{id}`");
     }
 }
 
@@ -858,7 +864,7 @@ fn classic_bitmaps_materialize_into_payloads() {
         "payloads are image data URLs"
     );
     // and the transports' crops materialize at button size
-    let decode = |id: &str| -> (u32, u32) { svg_dimensions(&images[id]) };
+    let decode = |id: &str| -> (u32, u32) { payload_dimensions(&images[id]) };
     assert_eq!(decode("wsz.btn.prev"), (23, 16));
     assert_eq!(decode("wsz.btn.next"), (22, 16));
     assert_eq!(decode("wsz.main"), (275, 116));
@@ -866,10 +872,17 @@ fn classic_bitmaps_materialize_into_payloads() {
 }
 
 /// Intrinsic dimensions of an SVG data-URL payload.
-fn svg_dimensions(url: &str) -> (u32, u32) {
+/// Intrinsic dimensions of a payload data-URL (PNG or SVG).
+fn payload_dimensions(url: &str) -> (u32, u32) {
+    use image::GenericImageView as _;
+    if let Some(b64) = url.strip_prefix("data:image/png;base64,") {
+        return image::load_from_memory(&base64_decode(b64))
+            .expect("png payload")
+            .dimensions();
+    }
     let svg = String::from_utf8(base64_decode(
         url.strip_prefix("data:image/svg+xml;base64,")
-            .expect("svg data-url prefix"),
+            .expect("image data-url prefix"),
     ))
     .expect("utf8 svg");
     let dimension = |name: &str| -> u32 {
