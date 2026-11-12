@@ -299,9 +299,14 @@
   // `transform`. A transform rasterizes text at 1× and then scales the
   // bitmap, which makes the Silkscreen chrome (title strip, tabs, EQ panel)
   // soft and uneven at 1.25×/1.5×; `zoom` re-lays-out and rasterizes at the
-  // real size, so text is scale-native. `getBoundingClientRect` includes
-  // zoom in every engine, so the natural size is the rect divided by the
-  // scale (works unchanged if the root ever uses a transform again).
+  // real size, so text is scale-native. Engines (and WebKit configurations
+  // — `GetBoundingClientRectZoomedEnabled` is a platform/embedder-dependent
+  // preference whose CSS-spec default is zoomed) disagree on whether
+  // `getBoundingClientRect` includes an ancestor's CSS `zoom`, so a 100px
+  // ruler inside the root measures the convention at runtime rather than
+  // assuming one. Getting it wrong sizes the OS window to the unscaled
+  // width and truncates the content (observed on macOS at 1.5×). The probe
+  // result is logged once per scale change for field diagnosis.
 
   let root: HTMLElement | null = $state(null);
   // Start at the window's default natural size (640px pane + 12px padding)
@@ -314,10 +319,30 @@
   $effect(() => {
     const el = root;
     if (!el) return;
+    // Do this engine's box metrics include the ancestor `zoom`? A hidden
+    // 100 px ruler inside the zoomed root answers it empirically (Chromium:
+    // ~100·scale, WebKit: 100). The probe is removed synchronously and is
+    // absolutely positioned, so the observer below never sees it.
+    const zoomInclusive = (() => {
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:absolute;left:0;top:0;width:100px;height:0;visibility:hidden;pointer-events:none;";
+      el.appendChild(probe);
+      const width = probe.getBoundingClientRect().width;
+      probe.remove();
+      // The 0.5px threshold is tied to the 100px ruler: the smallest non-1
+      // preset (1.25) gives 125px, far clear of it.
+      const inclusive = width > 100.5;
+      console.info(
+        `[navinamp] library zoom metrics: ${inclusive ? "include" : "exclude"} ` +
+          `zoom (probe ${width.toFixed(1)}px at scale ${scale})`,
+      );
+      return inclusive;
+    })();
     const measure = () => {
       const rect = el.getBoundingClientRect();
-      const w = Math.round(rect.width / scale);
-      const h = Math.round(rect.height / scale);
+      const w = Math.round(zoomInclusive ? rect.width / scale : rect.width);
+      const h = Math.round(zoomInclusive ? rect.height / scale : rect.height);
       if (w > 0 && h > 0) {
         naturalW = w;
         naturalH = h;
