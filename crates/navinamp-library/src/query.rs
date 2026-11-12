@@ -86,6 +86,8 @@ pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
         server_id: row.get(25)?,
         remote_path: row.get(26)?,
         art_id: row.get(27)?,
+        label: None,
+        catalog_number: None,
     })
 }
 
@@ -422,12 +424,27 @@ pub(super) fn set_starred(
 /// One track by its stored `path` (local path or `navidrome://server/id`), if it
 /// exists. Used by the context menus to show the current star/rating state.
 pub(super) fn track_by_path(conn: &Connection, path: &str) -> rusqlite::Result<Option<Track>> {
-    conn.query_row(
-        &format!("SELECT {} FROM tracks WHERE path = ?1", track_columns("")),
-        [path],
-        track_from_row,
-    )
-    .optional()
+    let mut track = conn
+        .query_row(
+            &format!("SELECT {} FROM tracks WHERE path = ?1", track_columns("")),
+            [path],
+            track_from_row,
+        )
+        .optional()?;
+    // The row menu shows release metadata; bulk track queries stay join-free.
+    if let Some(track) = track.as_mut() {
+        let pair: Option<String> = conn.query_row(
+            "SELECT MAX(COALESCE(ra.label, '') || char(31) || COALESCE(ra.catalog_num, ''))
+               FROM tracks t
+               LEFT JOIN remote_albums ra
+                 ON ra.server_id = t.server_id AND ra.album_id = t.remote_album_id
+              WHERE t.path = ?1",
+            [path],
+            |row| row.get(0),
+        )?;
+        (track.label, track.catalog_number) = split_label_pair(pair);
+    }
+    Ok(track)
 }
 
 /// The stored art id of the track at `path`, if any (local content hash

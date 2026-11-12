@@ -49,6 +49,8 @@
     scale?: number;
     /** Shuffle is on (the "play next" disable test is order-aware). */
     shuffle?: boolean;
+    /** Scroll the playing row into view whenever the current track changes. */
+    followCurrent?: boolean;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
@@ -68,6 +70,7 @@
     rowHeight = 20,
     scale = 1,
     shuffle = false,
+    followCurrent = false,
     onplay,
     onremove,
     onmove,
@@ -146,10 +149,37 @@
     }
   }
 
-  // A selection set from OUTSIDE the list (the skinned SEL action selects
-  // the playing row) must also scroll into view; clicks are already visible.
+  /**
+   * Scroll ownership, one writer at a time: while "follow current" is on, a
+   * track change owns the viewport; otherwise selection changes scroll the
+   * list (the skinned SEL action, queue-shrink healing). Explicit keyboard
+   * navigation calls ensureVisible itself either way.
+   *
+   * The previous shape had selection and follow in separate effects, so a
+   * healed `selected` could drag the view away from the playing row right
+   * after follow had scrolled to it.
+   */
+  let lastSelected: number | null = null;
+  let lastCurrent: number | null = null;
+  let lastFollow = followCurrent;
+
   $effect(() => {
-    if (selected != null) ensureVisible(selected);
+    const sel = selected;
+    const cur = currentIndex;
+    const follow = followCurrent;
+    const trackChanged = cur !== lastCurrent;
+    const selectionChanged = sel !== lastSelected;
+    const followTurnedOn = follow && !lastFollow;
+
+    if (follow) {
+      if ((followTurnedOn || trackChanged) && cur != null) ensureVisible(cur);
+    } else if (selectionChanged && sel != null) {
+      ensureVisible(sel);
+    }
+
+    lastSelected = sel;
+    lastCurrent = cur;
+    lastFollow = follow;
   });
 
   /** Jump to the playing row (the queue can be tens of thousands of rows). */
@@ -294,6 +324,8 @@
         ? [t.album, t.year != null ? `(${t.year})` : ""].filter(Boolean).join(" ")
         : null,
     );
+    add("label", t?.label);
+    add("catno", t?.catalogNumber);
     add("genre", t?.genre);
 
     const secs = t?.durationSecs ?? item.durationSecs;

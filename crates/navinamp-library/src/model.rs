@@ -61,6 +61,14 @@ pub struct Track {
     /// `coverArt` id (feed it to the Subsonic `getCoverArt` URL builder).
     /// `None` = no art found.
     pub art_id: Option<String>,
+    /// Remote album record label(s), joined for display. Point lookups
+    /// (`track_by_path`, for the row context menu) fill it; bulk queries
+    /// leave it `None`.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Remote album catalog number, same population rules as [`Self::label`].
+    #[serde(default)]
+    pub catalog_number: Option<String>,
 }
 
 /// An album as a grouped view over `tracks.album_key`.

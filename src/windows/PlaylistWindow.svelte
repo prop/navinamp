@@ -63,6 +63,28 @@
   let selected = $state<number | null>(null);
   let menu = $state<{ kind: "add" | "misc"; x: number; y: number } | null>(null);
 
+  // Auto-scroll the editor to the playing row on every track change
+  // (MISC menu toggle; on by default, session-persisted like the UI scale).
+  const FOLLOW_KEY = "navinamp.playlist.follow";
+  function storedFollow(): boolean {
+    try {
+      const raw = localStorage.getItem(FOLLOW_KEY);
+      return raw == null ? true : raw === "1";
+    } catch {
+      return true; // storage-less webview: session default
+    }
+  }
+  let followCurrent = $state(storedFollow());
+  function toggleFollow(): void {
+    const next = !followCurrent;
+    followCurrent = next;
+    try {
+      localStorage.setItem(FOLLOW_KEY, next ? "1" : "0");
+    } catch {
+      // storage-less webview: session-only
+    }
+  }
+
   function addUrl(meta: QueueItemMeta): void {
     queueIntent({ type: "addUrl", meta });
     showAddUrl = false;
@@ -282,6 +304,10 @@
   const miscMenuItems = $derived.by((): ContextMenuItem[] => {
     return [
       { id: "now", label: "Jump to playing track", disabled: currentIndex == null },
+      {
+        id: "follow",
+        label: followCurrent ? "Follow current track: on" : "Follow current track: off",
+      },
       { id: "shuffle", label: shuffle ? "Shuffle: on" : "Shuffle: off" },
       { id: "repeat", label: `Repeat: ${repeat}` },
       { id: "sep", label: "", separator: true },
@@ -306,6 +332,9 @@
         break;
       case "now":
         if (currentIndex != null) selected = currentIndex;
+        break;
+      case "follow":
+        toggleFollow();
         break;
       case "shuffle":
         queueIntent({ type: "toggleShuffle" });
@@ -435,6 +464,7 @@
           rowHeight={listBox.rowHeight * scale}
           {scale}
           {shuffle}
+          {followCurrent}
           bind:selected
           onplay={(i) => queueIntent({ type: "play", index: i })}
           onremove={(i) => queueIntent({ type: "remove", index: i })}
@@ -526,10 +556,13 @@
           {items}
           {currentIndex}
           {theme}
+          {shuffle}
+          {followCurrent}
           bind:selected
           onplay={(i) => queueIntent({ type: "play", index: i })}
           onremove={(i) => queueIntent({ type: "remove", index: i })}
           onmove={(from, to) => queueIntent({ type: "move", from, to })}
+          onmovenext={(i) => queueIntent({ type: "moveNext", index: i })}
           onadd={() => void addAfterCurrent()}
           onadddir={() => void addDirAfterCurrent()}
           onaddurl={() => (showAddUrl = true)}

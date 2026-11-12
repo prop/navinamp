@@ -592,3 +592,50 @@ fn albums_surface_remote_label_and_catalog_number() {
     assert_eq!(album.label.as_deref(), Some("Bloody Fist Records"));
     assert_eq!(album.catalog_number.as_deref(), Some("BF-012"));
 }
+
+#[test]
+fn track_point_lookup_carries_album_label_and_catalog() {
+    let (_s, library) = db("remote-track-release-meta");
+    library
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")])
+        .unwrap();
+    library
+        .upsert_remote_albums(&[RemoteAlbum {
+            server_id: S.into(),
+            album_id: "al-1".into(),
+            song_count: 1,
+            duration_secs: 250,
+            name: "Debut".into(),
+            artist: "Björk".into(),
+            year: Some(1993),
+            cover_art_id: Some("al-1".into()),
+            created: None,
+            label: Some("Bloody Fist Records".into()),
+            catalog_num: Some("BF-012".into()),
+        }])
+        .unwrap();
+
+    let track = library
+        .track_by_path("navidrome://s1/t1")
+        .unwrap()
+        .expect("remote track");
+    assert_eq!(track.label.as_deref(), Some("Bloody Fist Records"));
+    assert_eq!(track.catalog_number.as_deref(), Some("BF-012"));
+
+    // Bulk listings stay join-free and omit the release metadata.
+    let listed = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    assert_eq!(listed[0].label, None);
+
+    // Unknown paths have no row at all.
+    assert!(
+        library
+            .track_by_path("navidrome://s1/nope")
+            .unwrap()
+            .is_none()
+    );
+}
