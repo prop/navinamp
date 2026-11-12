@@ -28,7 +28,7 @@ pub const SCHEME: &str = "navinamp-art";
 
 /// (extension, MIME) pairs probed in this order when serving an id. Only
 /// formats the scanner caches (see `navinamp-library`'s `art::sniff_ext`).
-const ART_TYPES: &[(&str, &str)] = &[
+pub(crate) const ART_TYPES: &[(&str, &str)] = &[
     ("png", "image/png"),
     ("jpg", "image/jpeg"),
     ("jpeg", "image/jpeg"),

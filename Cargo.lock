@@ -2705,7 +2705,6 @@ name = "navinamp"
 version = "0.16.0"
 dependencies = [
  "any_ascii",
- "base64 0.22.1",
  "futures",
  "navinamp-audio",
  "navinamp-library",

@@ -94,6 +94,29 @@ pub(crate) fn art_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Pa
     Ok(dir.join(navinamp_library::ART_CACHE_DIR))
 }
 
+/// The on-disk cache file for a local track's album art id (see
+/// `crate::art`), for consumers that need the file itself — e.g. the
+/// desktop notification attachment. `None` when the track has no cached
+/// art.
+pub(crate) fn notify_art_file(
+    app: &AppHandle,
+    state: &LibraryState,
+    track_path: &str,
+) -> Option<PathBuf> {
+    let lookup = with_library(app, state, |library| {
+        library.art_for_track(track_path).map_err(|e| e.to_string())
+    });
+    let id = match lookup {
+        Ok(Some(id)) => id,
+        _ => return None,
+    };
+    let dir = art_dir(app).ok()?;
+    crate::art::ART_TYPES
+        .iter()
+        .map(|(ext, _)| dir.join(format!("{id}.{ext}")))
+        .find(|path| path.is_file())
+}
+
 /// `<app_data_dir>/library-roots.json`.
 fn roots_file(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app

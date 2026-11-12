@@ -27,7 +27,7 @@
 //! every error string that crosses IPC is scrubbed of URLs (`<url>`).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -837,6 +837,33 @@ pub async fn navidrome_art_url(
     let server = resolve_server(&state, server_id)?;
     let client = ensure_client_for(&state, &server).await?;
     Ok(client.cover_art_url(&remote_id, size).to_string())
+}
+
+/// Writes the active server's cover art for the given `navidrome://…`
+/// queue path to a temp file for the desktop notification (see
+/// `media::notify_track_started`). `None` when the track/server has no
+/// cover or the fetch fails — notifications degrade to text-only. The
+/// file name is stable per process and overwritten per track; Linux's
+/// lazy D-Bus read can theoretically show the previous cover on a very
+/// fast skip (accepted).
+pub(crate) async fn notify_art_file(
+    state: &NavidromeState,
+    track_path: &str,
+) -> Option<std::path::PathBuf> {
+    use navinamp_library::sniff_ext;
+
+    let rest = track_path.strip_prefix("navidrome://")?;
+    let (server_id, remote_id) = rest.split_once('/')?;
+    let server = resolve_server(state, Some(server_id.to_owned())).ok()?;
+    let client = ensure_client_for(state, &server).await.ok()?;
+    let bytes = client.cover_art_data(remote_id, Some(300)).await.ok()?;
+    let ext = sniff_ext(&bytes)?;
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("navinamp-notify-art-{seq}.{ext}"));
+    std::fs::write(&path, &bytes).ok()?;
+    Some(path)
 }
 
 /// Scrobble a track: `submission=false` → "now playing", `true` → played.

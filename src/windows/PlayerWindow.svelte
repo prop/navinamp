@@ -34,11 +34,6 @@
     wasPlayingAtSave,
   } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
-  import {
-    artForTrack,
-    localArtUrl,
-    navidromeArtUrl,
-  } from "../lib/library/ipc";
   import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
   import { resolveLayout } from "../lib/skin/resolver";
@@ -171,33 +166,6 @@
   // unbundled `tauri dev` runs too.
   let notifyWarned = false;
 
-  /** Album art as base64 for the notification attachment; null = no art. */
-  async function fetchNotifyArt(): Promise<string | null> {
-    const item = queue.currentItem;
-    if (!item) return null;
-    // Navidrome tracks use the server's scaled getCoverArt; local tracks the
-    // embedded-art cache. Any failure just means no art on the toast.
-    let url: string | null;
-    if (item.remoteId != null) {
-      url = await navidromeArtUrl(item.serverId, item.remoteId, 300);
-    } else {
-      // A null art id is a track with no embedded art: stop before building
-      // a `navinamp-art:` URL for an empty id (the fetch would 404).
-      const artId = await artForTrack(item.path);
-      url = artId ? localArtUrl(artId) : null;
-    }
-    if (!url) return null;
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
-    const bytes = new Uint8Array(await resp.arrayBuffer());
-    let binary = "";
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-    }
-    return btoa(binary);
-  }
-
   async function showNowPlaying(manual = false): Promise<void> {
     // Automatic notifications obey the menu preference and suppress while
     // the app is focused. The global shortcut is an explicit request, so it
@@ -209,10 +177,12 @@
       return;
     }
     try {
-      const artBase64 = await fetchNotifyArt().catch(() => null);
+      // Art resolution is backend-side (library art cache / Navidrome
+      // getCoverArt — no webview fetch) and best-effort: failures notify
+      // without art.
       await invoke("notify_track_started", {
         title: item.artist ? `${item.artist} — ${item.title}` : item.title,
-        artBase64,
+        trackPath: item.path,
       });
     } catch (e) {
       if (!notifyWarned) {

@@ -38,10 +38,7 @@
 
 use std::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-
-use navinamp_library::sniff_ext;
 
 use serde::Serialize;
 use souvlaki::{
@@ -49,6 +46,9 @@ use souvlaki::{
     SeekDirection,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::library::LibraryState;
+use crate::navidrome::NavidromeState;
 
 /// Position pushes are coarsened to whole-ish seconds.
 const POSITION_PUSH_SECS: f64 = 1.0;
@@ -299,61 +299,47 @@ pub(crate) struct MediaCommandPayload {
 /// backend — and note the observable failure mode: while Do Not Disturb /
 /// Focus is on, toasts are silently dropped.
 ///
-/// Art is best-effort: undecodable/absent bytes notify WITHOUT art rather
-/// than failing the notification. The temp file is intentionally left in
-/// place — Linux's D-Bus daemon reads it lazily after `show()` returns, so
-/// deleting it immediately would race the toast; `/tmp` is OS-cleaned.
+/// Art resolution is backend-side (library art cache / Navidrome
+/// getCoverArt — no webview fetch) and best-effort: failures notify
+/// WITHOUT art rather than failing the notification. The Navidrome temp
+/// file is intentionally left in place — Linux's D-Bus daemon reads it
+/// lazily after `show()` returns, so deleting it immediately would race
+/// the toast; `/tmp` is OS-cleaned. Local art points at the permanent
+/// art-cache store and is never deleted.
 #[tauri::command]
-pub fn notify_track_started(title: String, art_base64: Option<String>) -> Result<(), String> {
-    use base64::Engine as _;
-
-    static NOTIFY_ART_SEQ: AtomicU64 = AtomicU64::new(0);
-
+pub async fn notify_track_started(
+    app: AppHandle,
+    library: State<'_, LibraryState>,
+    navidrome: State<'_, NavidromeState>,
+    title: String,
+    track_path: Option<String>,
+) -> Result<(), String> {
+    let (art_path, is_temp) = match track_path.as_deref() {
+        Some(p) if p.starts_with("navidrome://") => {
+            (crate::navidrome::notify_art_file(&navidrome, p).await, true)
+        }
+        Some(p) => (crate::library::notify_art_file(&app, &library, p), false),
+        _ => (None, false),
+    };
     let mut note = notify_rust::Notification::new();
     note.summary(&title);
-    let mut art_path: Option<std::path::PathBuf> = None;
-    if let Some(encoded) = art_base64.as_deref().filter(|s| !s.trim().is_empty()) {
-        // Any art failure (undecodable, unknown format, unwritable) degrades
-        // to a text-only toast instead of losing the notification.
-        let art = base64::engine::general_purpose::STANDARD
-            .decode(encoded.trim())
-            .ok()
-            .and_then(|bytes| sniff_ext(&bytes).map(|ext| (ext, bytes)));
-        match art {
-            Some((ext, bytes)) => {
-                let seq = NOTIFY_ART_SEQ.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "navinamp-notify-art-{}-{seq}.{ext}",
-                    std::process::id()
-                ));
-                if std::fs::write(&path, &bytes).is_ok() {
-                    note.image_path(path.to_string_lossy().as_ref());
-                    art_path = Some(path);
-                }
-            }
-            None => eprintln!("navinamp notify: art skipped (undecodable or unknown format)"),
-        }
+    if let Some(path) = &art_path {
+        note.image_path(path.to_string_lossy().as_ref());
     }
     note.show().map_err(|e| format!("notify: {e}"))?;
-    cleanup_notify_art(art_path);
-    Ok(())
-}
-
-/// The notify art temp file's post-`show()` lifecycle. macOS reads the
-/// content image eagerly inside `show()`, so the file can be removed right
-/// away. Linux's D-Bus daemon reads it lazily after `show()` returns —
-/// deleting there would race the toast, so the file is left for the OS's
-/// temp cleanup instead.
-#[cfg(target_os = "macos")]
-fn cleanup_notify_art(path: Option<std::path::PathBuf>) {
-    if let Some(path) = path {
-        std::fs::remove_file(path).ok();
+    // Only the fetched Navidrome cover (a temp file) is removed after
+    // show(): macOS reads it eagerly so this is safe there, while Linux's
+    // D-Bus daemon reads lazily and deleting would race the toast. Local
+    // cache files are the permanent store and always stay.
+    if is_temp {
+        #[cfg(target_os = "macos")]
+        if let Some(path) = art_path {
+            std::fs::remove_file(path).ok();
+        }
+        #[cfg(not(target_os = "macos"))]
+        drop(art_path);
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn cleanup_notify_art(path: Option<std::path::PathBuf>) {
-    drop(path); // kept: the daemon may still be reading it
+    Ok(())
 }
 
 /// Push track metadata + position from the player window. Position updates
