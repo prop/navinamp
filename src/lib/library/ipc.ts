@@ -64,6 +64,13 @@ export interface Track {
    * the server's `coverArt` id (see `navidromeArtUrl`). `null` = no art.
    */
   artId: string | null;
+  /**
+   * Remote album record label(s), joined for display. Filled by the row
+   * context menu's point lookup; `null` in bulk track listings.
+   */
+  label: string | null;
+  /** Remote album catalog number; same population rules as `label`. */
+  catalogNumber: string | null;
 }
 
 /** An album as a grouped view over `tracks.albumKey`. */

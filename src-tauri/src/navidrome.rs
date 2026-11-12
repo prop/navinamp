@@ -1073,6 +1073,8 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
                 server_id: Some(server_id.to_owned()),
                 remote_path: (!song.path.is_empty()).then(|| song.path.clone()),
                 art_id: song.cover_art_id.clone(),
+                label: None,
+                catalog_number: None,
             }
         })
         .collect()
