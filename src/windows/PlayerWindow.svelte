@@ -164,31 +164,45 @@
   // images and cannot be granted permission in WKWebView, while the Rust
   // path carries album art as a native content image and works from
   // unbundled `tauri dev` runs too.
-  let notifyWarned = false;
-
+  //
+  // Every decision is logged (`[navinamp] notify: …`) so a host where the
+  // banner never appears can name the gate/backend failure from the console.
   async function showNowPlaying(manual = false): Promise<void> {
     // Automatic notifications obey the menu preference and suppress while
     // the app is focused. The global shortcut is an explicit request, so it
     // raises the toast even then.
-    if (!manual && (!audio.notifyTrack || appFocused())) return;
+    if (!manual) {
+      if (!audio.notifyTrack) {
+        console.info("[navinamp] notify: skipped — Notify on Track Change is off");
+        return;
+      }
+      if (appFocused()) {
+        console.info("[navinamp] notify: skipped — a NaVinaMP window is focused");
+        return;
+      }
+    }
     const item = queue.currentItem;
     if (!item) {
       if (manual) console.warn("[navinamp] notify shortcut: nothing is playing");
       return;
     }
+    const title = item.artist ? `${item.artist} — ${item.title}` : item.title;
+    console.info(
+      `[navinamp] notify: sending (${manual ? "shortcut" : "track change"}) "${title}"`,
+    );
     try {
       // Art resolution is backend-side (library art cache / Navidrome
       // getCoverArt — no webview fetch) and best-effort: failures notify
       // without art.
       await invoke("notify_track_started", {
-        title: item.artist ? `${item.artist} — ${item.title}` : item.title,
+        title,
         trackPath: item.path,
       });
+      console.info("[navinamp] notify: command completed");
     } catch (e) {
-      if (!notifyWarned) {
-        notifyWarned = true;
-        console.warn(`[navinamp] notifications unavailable: ${e}`);
-      }
+      // Log every failure while diagnosing delivery; notification attempts
+      // are per-track, so this cannot spam a loop.
+      console.warn(`[navinamp] notifications unavailable: ${e}`);
     }
   }
 
