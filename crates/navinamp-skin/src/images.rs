@@ -64,6 +64,27 @@ const PNG_PREFIX: &str = "data:image/png;base64,";
 /// which alone would add ~230 KiB each — stay raster.
 const SVG_SIZE_BUDGET: f64 = 7.0;
 
+/// Bitmaps that always ship as SVG even when over [`SVG_SIZE_BUDGET`].
+///
+/// The player titlebar band (`wsz.main.titlebar`, emitted by the classic
+/// synthesizer only — this list is keyed on its generated id) is a 275×14
+/// dithered strip carrying the Winamp wordmark. Its vector form is 2.6× the
+/// PNG on clean bands and ~7–9× on noisy ones — the budget's target case —
+/// but the absolute cost is bounded at ~75 KiB for a worst-case band (the
+/// bundled base skin measures 34 KiB), and vectorizing it is what keeps the
+/// wordmark crisp at fractional UI scales.
+const VECTOR_FORCED: &[&str] = &["wsz.main.titlebar"];
+
+/// Decoded pixel dimensions of one archive file (case-insensitive lookup),
+/// when it decodes. The synthesizer clamps crops it emits with this — a
+/// `bitmap()` rect is only validated later, in [`bitmap_payloads`], and an
+/// out-of-range crop would otherwise warn on every skin load.
+pub(crate) fn file_dimensions(archive: &SkinArchive, file: &str) -> Option<(u32, u32)> {
+    let bytes = archive.read_file(file).ok()?;
+    let decoded = image::load_from_memory(&bytes).ok()?;
+    Some((decoded.width(), decoded.height()))
+}
+
 /// Materializes every `<bitmap>` that references a file into an image
 /// data-URL (SVG or PNG, whichever is smaller — see the module docs).
 ///
@@ -170,9 +191,10 @@ pub fn bitmap_payloads(
                 .iter()
                 .any(|font_file| font_file.eq_ignore_ascii_case(file))
         });
+        let vector_forced = VECTOR_FORCED.contains(&bitmap.id.as_str());
         let url = if raster_only {
             png_url
-        } else if svg_url.len() as f64 <= png_url.len() as f64 * SVG_SIZE_BUDGET {
+        } else if vector_forced || svg_url.len() as f64 <= png_url.len() as f64 * SVG_SIZE_BUDGET {
             svg_url
         } else {
             png_url

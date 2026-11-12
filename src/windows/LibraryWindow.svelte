@@ -294,9 +294,14 @@
   );
 
   // ── window sizing: natural panel size × global scale ────────────────────
-  // The inner .win keeps the unscaled layout (so the library's virtualized
-  // math and 640px panes stay intact); the outer .scaler reserves the scaled
-  // box and the OS window matches it.
+  // The .win root keeps its natural layout (so the library's virtualized
+  // math and 640px panes stay intact) and uses CSS `zoom` rather than a
+  // `transform`. A transform rasterizes text at 1× and then scales the
+  // bitmap, which makes the Silkscreen chrome (title strip, tabs, EQ panel)
+  // soft and uneven at 1.25×/1.5×; `zoom` re-lays-out and rasterizes at the
+  // real size, so text is scale-native. `getBoundingClientRect` includes
+  // zoom in every engine, so the natural size is the rect divided by the
+  // scale (works unchanged if the root ever uses a transform again).
 
   let root: HTMLElement | null = $state(null);
   // Start at the window's default natural size (640px pane + 12px padding)
@@ -310,8 +315,9 @@
     const el = root;
     if (!el) return;
     const measure = () => {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
+      const rect = el.getBoundingClientRect();
+      const w = Math.round(rect.width / scale);
+      const h = Math.round(rect.height / scale);
       if (w > 0 && h > 0) {
         naturalW = w;
         naturalH = h;
@@ -331,8 +337,7 @@
 
 </script>
 
-<div class="scaler" style="width:{scaledW}px; height:{scaledH}px;">
-  <div class="win" bind:this={root} style="transform:scale({scale});">
+<div class="win" bind:this={root} style="zoom:{scale};">
     <TitleStrip title="MEDIA LIBRARY" note={queueNote} />
 
     <TabStrip tabs={TABS} active={tab} onselect={(id) => (tab = id as TabId)} />
@@ -511,20 +516,12 @@
       </section>
     {/if}
 
-  </div>
-  <!-- Outside the scaled surface: the tour's spotlight uses screen-space
-       DOMRect coordinates and would be scaled/misplaced inside it. -->
-  <TourHost onensurelibrary={() => (tab = "library")} />
 </div>
+<!-- Outside the zoomed root: the tour's spotlight uses screen-space
+     DOMRect coordinates and would be scaled/misplaced inside it. -->
+<TourHost onensurelibrary={() => (tab = "library")} />
 
 <style>
-  /* Outer box reserves the scaled size; the inner .win keeps its natural
-     layout and is transformed from the top-left. */
-  .scaler {
-    position: relative;
-    overflow: hidden;
-    background: #000;
-  }
 
   .win {
     width: max-content; /* widest pane (640px) + padding */
@@ -538,7 +535,6 @@
     color: #c8c8c8;
     font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     user-select: none;
-    transform-origin: top left;
   }
 
   /* One pane per tab; the OS window is sized to the active pane's natural

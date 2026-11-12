@@ -661,4 +661,29 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn base_skin_titlebar_band_ships_as_vector() {
+        // The flat 275×14 titlebar band must vectorize so the Winamp
+        // wordmark stays crisp at 1.25×/1.5× — regardless of whether the
+        // skin's whole main.bmp stayed raster under the size budget.
+        let archive = SkinArchive::from_bytes(BASE_291_WSZ.to_vec()).expect("archive");
+        let payload = load_archive(archive).expect("load");
+        let band = payload
+            .images
+            .get("wsz.main.titlebar")
+            .expect("titlebar band payload");
+        assert!(
+            band.starts_with("data:image/svg+xml"),
+            "titlebar band must vectorize for fractional scales"
+        );
+        // Forced override of the 7× ratio budget: worst realistic bands
+        // measure ~75 KiB (the bundled skin's is 34 KiB) — 200 KiB leaves
+        // headroom for noisier artwork without hiding a runaway payload.
+        assert!(
+            band.len() < 200_000,
+            "titlebar band payload unexpectedly large: {} bytes",
+            band.len()
+        );
+    }
 }
