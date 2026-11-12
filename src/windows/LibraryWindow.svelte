@@ -535,7 +535,6 @@
     color: #c8c8c8;
     font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     user-select: none;
-    transform-origin: top left;
   }
 
   /* One pane per tab; the OS window is sized to the active pane's natural
