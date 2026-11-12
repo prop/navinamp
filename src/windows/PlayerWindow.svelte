@@ -177,10 +177,15 @@
     if (!item) return null;
     // Navidrome tracks use the server's scaled getCoverArt; local tracks the
     // embedded-art cache. Any failure just means no art on the toast.
-    const url =
-      item.remoteId != null
-        ? await navidromeArtUrl(item.serverId, item.remoteId, 300)
-        : localArtUrl(await artForTrack(item.path) ?? "");
+    let url: string | null;
+    if (item.remoteId != null) {
+      url = await navidromeArtUrl(item.serverId, item.remoteId, 300);
+    } else {
+      // A null art id is a track with no embedded art: stop before building
+      // a `navinamp-art:` URL for an empty id (the fetch would 404).
+      const artId = await artForTrack(item.path);
+      url = artId ? localArtUrl(artId) : null;
+    }
     if (!url) return null;
     const resp = await fetch(url);
     if (!resp.ok) return null;
