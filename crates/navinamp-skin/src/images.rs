@@ -170,9 +170,16 @@ pub fn bitmap_payloads(
                 .iter()
                 .any(|font_file| font_file.eq_ignore_ascii_case(file))
         });
+        // The player titlebar band (275×14) is a dithered strip with the
+        // Winamp wordmark on it: its vector form can exceed the global ratio
+        // budget, but the absolute size is small and vectorizing it is what
+        // keeps the wordmark crisp at fractional UI scales (1.25×/1.5×).
+        // The synthesizer emits exactly this id for every classic skin.
+        const VECTOR_FORCED: &[&str] = &["wsz.main.titlebar"];
+        let vector_forced = VECTOR_FORCED.contains(&bitmap.id.as_str());
         let url = if raster_only {
             png_url
-        } else if svg_url.len() as f64 <= png_url.len() as f64 * SVG_SIZE_BUDGET {
+        } else if vector_forced || svg_url.len() as f64 <= png_url.len() as f64 * SVG_SIZE_BUDGET {
             svg_url
         } else {
             png_url

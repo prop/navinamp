@@ -246,9 +246,10 @@ fn full_classic_skin_synthesizes_three_containers() {
     assert_eq!((playlist.rect.w, playlist.rect.h), (Some(275), Some(232)));
 
     // object census (see the coordinate table in wsz.rs):
-    // main: bg + clutterbar layers, 6 transports, 4 toggles, 3 sliders,
+    // main: bg + titlebar (the vectorized wordmark band) + clutterbar
+    // layers, 6 transports, 4 toggles, 3 sliders,
     // 4 texts (songticker/time/bitrate/khz), 3 statuses, 1 vis, 4 sysbuttons
-    assert_eq!(of_kind(main, "layer").len(), 2);
+    assert_eq!(of_kind(main, "layer").len(), 3);
     assert_eq!(of_kind(main, "button").len(), 6 + 4); // transport + sysbuttons
     assert_eq!(of_kind(main, "togglebutton").len(), 4);
     assert_eq!(of_kind(main, "slider").len(), 3);

@@ -528,6 +528,16 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     if let Some(bg) = out.whole_bitmap("main", "main.bmp") {
         objects.push(layer("main.bg", bg, 0, 0, WINDOW_W, WINDOW_H));
     }
+    // The player's titlebar graphic lives in main.bmp's top 14 rows and
+    // carries the Winamp wordmark (see the layout table above). main.bmp as
+    // a whole stays a raster payload — its dithered body is huge as vector
+    // geometry — so re-emit the flat band as its OWN bitmap: the payload
+    // pipeline can then ship it as SVG and keep the wordmark crisp at
+    // fractional UI scales (1.25×/1.5×). At 1× it is a pixel-identical
+    // overlay of the band underneath.
+    if let Some(band) = out.bitmap("main.titlebar", "main.bmp", 0, 0, WINDOW_W as u32, 14) {
+        objects.push(layer("main.titlebar", band, 0, 0, WINDOW_W, 14));
+    }
 
     // Songticker + time-display fonts. numbers.bmp is the modern form;
     // num0.bmp..num9.bmp whole-digit files are the older alternative. Each
