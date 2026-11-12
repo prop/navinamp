@@ -195,14 +195,55 @@
   const glyphContent = $derived((o?.display === "time" ? glyphTime : content));
 
   /**
+   * Unicode typography → classic charmap equivalents. text.bmp is a 1997
+   * ASCII strip (dashes, straight quotes only), so a single en dash or curly
+   * quote otherwise pushes the whole ticker onto the HTML fallback font.
+   */
+  const CLASSIC_GLYPH_SUBSTITUTIONS: Record<string, string> = {
+    "\u2010": "-", // hyphen
+    "\u2011": "-", // non-breaking hyphen
+    "\u2012": "-", // figure dash
+    "\u2013": "-", // en dash
+    "\u2014": "-", // em dash
+    "\u2015": "-", // horizontal bar
+    "\u2018": "'", // left single quote
+    "\u2019": "'", // right single quote
+    "\u201a": "'", // single low quote
+    "\u201b": "'",
+    "\u201c": '"', // left double quote
+    "\u201d": '"', // right double quote
+    "\u201e": '"',
+    "\u201f": '"',
+    "\u2022": "*", // bullet
+    "\u00a0": " ", // non-breaking space
+    "\u2009": " ", // thin space
+    "\u200a": " ",
+    "\u202f": " ", // narrow no-break space
+  };
+
+  /**
+   * Downgrade Unicode typography to the classic charmap's ASCII cells before
+   * glyph rendering, so fancy punctuation keeps the pixel font. Scripts with
+   * no mapping (Cyrillic, CJK, emoji) still fall back to HTML below.
+   */
+  function classicGlyphText(text: string): string {
+    let out = "";
+    for (const ch of text) out += CLASSIC_GLYPH_SUBSTITUTIONS[ch] ?? ch;
+    return out;
+  }
+
+  /** What the bitmap path actually draws (typography downgraded). */
+  const glyphText = $derived(classicGlyphText(glyphContent));
+
+  /**
    * Text the glyph renderer actually blits: the numbers charmap has no
    * colon cell (the classic time skips it), so coverage is checked against
    * the drawn characters.
    */
   const coverageText = $derived(
     o?.display === "time" && charset !== "classic-text"
-      ? glyphContent.replace(":", "")
-      : glyphContent,
+      ? glyphText.replace(":", "")
+      : glyphText,
   );
 
   /**
@@ -249,7 +290,7 @@
     if (!f || !el || !o) return;
     const w = obj.w ?? 0;
     const h = obj.h ?? 0;
-    const text = glyphContent; // redraw when the live value changes
+    const text = glyphText; // redraw when the live value changes
 
     const ctx = el.getContext("2d");
     if (!ctx) return;
