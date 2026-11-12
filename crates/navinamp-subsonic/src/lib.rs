@@ -42,6 +42,6 @@ pub mod models;
 pub use client::{SubsonicClient, normalize_base_url};
 pub use error::SubsonicError;
 pub use models::{
-    AlbumDetail, AlbumSummary, ArtistSummary, MusicFolder, PingInfo, PlaylistSummary,
-    SearchResults, SongSummary, StreamFormat,
+    AlbumDetail, AlbumSummary, ArtistSummary, MusicFolder, PingInfo, PlaylistSummary, RecordLabel,
+    SearchResults, SongSummary, StreamFormat, join_record_labels,
 };

@@ -246,9 +246,10 @@ fn full_classic_skin_synthesizes_three_containers() {
     assert_eq!((playlist.rect.w, playlist.rect.h), (Some(275), Some(232)));
 
     // object census (see the coordinate table in wsz.rs):
-    // main: bg + clutterbar layers, 6 transports, 4 toggles, 3 sliders,
+    // main: bg + titlebar (the vectorized wordmark band) + clutterbar
+    // layers, 6 transports, 4 toggles, 3 sliders,
     // 4 texts (songticker/time/bitrate/khz), 3 statuses, 1 vis, 4 sysbuttons
-    assert_eq!(of_kind(main, "layer").len(), 2);
+    assert_eq!(of_kind(main, "layer").len(), 3);
     assert_eq!(of_kind(main, "button").len(), 6 + 4); // transport + sysbuttons
     assert_eq!(of_kind(main, "togglebutton").len(), 4);
     assert_eq!(of_kind(main, "slider").len(), 3);
@@ -493,7 +494,9 @@ fn font_strips_materialize_as_images() {
     let (images, payload_warnings) = bitmap_payloads(&archive, &skin);
     assert!(payload_warnings.is_empty());
     // The renderer blits glyphs from images["{font}.image"]; both strips
-    // must be present and decode at their classic dimensions.
+    // must be present, decode at their classic dimensions, and stay RASTER:
+    // glyph cells are blitted 1:1 into a canvas, so a vector strip buys no
+    // crispness (and the classic chunky look is intended).
     for (id, w, h) in [
         ("wsz.font.text.image", 155, 74),
         ("wsz.font.numbers.image", 99, 13),
@@ -501,9 +504,11 @@ fn font_strips_materialize_as_images() {
         let url = images
             .get(id)
             .unwrap_or_else(|| panic!("font strip payload `{id}`"));
-        let bytes = base64_decode(url.strip_prefix("data:image/png;base64,").unwrap());
-        let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
-        assert_eq!(decoded.dimensions(), (w, h), "`{id}`");
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "`{id}` must stay raster: {url}"
+        );
+        assert_eq!(payload_dimensions(url), (w, h), "`{id}`");
     }
 }
 
@@ -856,23 +861,37 @@ fn classic_bitmaps_materialize_into_payloads() {
     // materialized; bitmaps are
     assert_eq!(images.len(), skin.elements.bitmaps.len());
     assert!(
-        images
-            .values()
-            .all(|url| url.starts_with("data:image/png;base64,"))
+        images.values().all(|url| url.starts_with("data:image/")),
+        "payloads are image data URLs"
     );
-    // and the transports' crops decode at button size
-    let decode = |id: &str| -> (u32, u32) {
-        let url = &images[id];
-        let bytes = base64_decode(url.strip_prefix("data:image/png;base64,").unwrap());
-        image::load_from_memory(&bytes)
-            .unwrap()
-            .to_rgba8()
-            .dimensions()
-    };
+    // and the transports' crops materialize at button size
+    let decode = |id: &str| -> (u32, u32) { payload_dimensions(&images[id]) };
     assert_eq!(decode("wsz.btn.prev"), (23, 16));
     assert_eq!(decode("wsz.btn.next"), (22, 16));
     assert_eq!(decode("wsz.main"), (275, 116));
     assert_eq!(decode("wsz.vol.thumb"), (14, 11));
+}
+
+/// Intrinsic dimensions of a payload data-URL (PNG or SVG).
+fn payload_dimensions(url: &str) -> (u32, u32) {
+    use image::GenericImageView as _;
+    if let Some(b64) = url.strip_prefix("data:image/png;base64,") {
+        return image::load_from_memory(&base64_decode(b64))
+            .expect("png payload")
+            .dimensions();
+    }
+    let svg = String::from_utf8(base64_decode(
+        url.strip_prefix("data:image/svg+xml;base64,")
+            .expect("image data-url prefix"),
+    ))
+    .expect("utf8 svg");
+    let dimension = |name: &str| -> u32 {
+        let pat = format!("{name}=\"");
+        let start = svg.find(&pat).unwrap_or_else(|| panic!("svg `{name}`")) + pat.len();
+        let end = svg[start..].find('"').expect("attribute end") + start;
+        svg[start..end].parse().expect("numeric dimension")
+    };
+    (dimension("width"), dimension("height"))
 }
 
 fn base64_decode(data: &str) -> Vec<u8> {

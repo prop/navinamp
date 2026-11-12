@@ -35,16 +35,25 @@
      * (the skin frame owns the chrome and action buttons).
      */
     embedded?: boolean;
-    /** Row height in CSS pixels (classic PE rows are tighter than the panel). */
+    /**
+     * Row height in CSS pixels (classic PE rows are tighter than the panel).
+     * Accepts fractions: scale-native rendering multiplies by the UI scale,
+     * and fractional heights accumulate sub-pixel-accurately (rounding would
+     * drift against the exactly-multiplied slot box).
+     */
     rowHeight?: number;
     /**
      * Visual scale of the surrounding skin overlay (context-menu math).
      * Pointer-to-row math measures the actual rendered scale instead.
      */
     scale?: number;
+    /** Shuffle is on (the "play next" disable test is order-aware). */
+    shuffle?: boolean;
     onplay: (index: number) => void;
     onremove: (index: number) => void;
     onmove: (from: number, to: number) => void;
+    /** Move a row to just after the current item ("play next"). */
+    onmovenext: (index: number) => void;
     onadd: () => void;
     onadddir: () => void;
     onaddurl: () => void;
@@ -58,9 +67,11 @@
     embedded = false,
     rowHeight = 20,
     scale = 1,
+    shuffle = false,
     onplay,
     onremove,
     onmove,
+    onmovenext,
     onadd,
     onadddir,
     onaddurl,
@@ -329,8 +340,19 @@
     const item = items[m.index];
     if (!item) return [];
     const stream = isStreamUrl(item.path);
+    // "Play next" reorders this row to just after the current item. The
+    // move target is a post-removal index, so convert the insertion gap
+    // with the same helper as drag & drop. Under shuffle the positional
+    // successor is not the playing successor, so only the current row is a
+    // no-op there (PlaylistWindow owns the shuffle flag).
+    const gap = currentIndex == null ? 0 : currentIndex + 1;
+    const at = dropIndex(m.index, gap);
+    const alreadyNext =
+      (currentIndex != null && m.index === currentIndex) ||
+      ((!shuffle || currentIndex == null) && at === m.index);
     const list: ContextMenuItem[] = [
       { id: "play", label: "Play" },
+      { id: "play-next", label: "Play next", disabled: alreadyNext },
       { id: "remove", label: "Remove from queue", danger: true },
       { id: "copy", label: stream ? "Copy URL" : "Copy path" },
     ];
@@ -447,6 +469,9 @@
     if (!item) return;
     if (id === "play") {
       onplay(m.index);
+    } else if (id === "play-next") {
+      // The queue computes the post-removal slot (and the shuffle successor).
+      onmovenext(m.index);
     } else if (id === "remove") {
       onremove(m.index);
     } else if (id === "copy") {
@@ -525,6 +550,10 @@
           : 'Tahoma, "Segoe UI", Geneva, Verdana, sans-serif'
       }`,
       `--row-h:${rowHeight}px`,
+      // Text renders scale-native (the embedded slot is laid out in real
+      // pixels, not CSS-transformed), so the fixed design sizes multiply.
+      // Fallback 1 = unscaled design sizes, e.g. the unskinned panel.
+      `--pl-text-scale:${scale}`,
     ].join(";");
   });
 </script>
@@ -593,14 +622,26 @@
 </div>
 
 {#if menu}
-  <ContextMenu
-    x={menu.x}
-    y={menu.y}
-    items={menuItems}
-    info={menuDetails}
-    {scale}
-    onselect={menuSelect}
-    onclose={() => (menu = null)} />
+  {#snippet rowMenu()}
+    <ContextMenu
+      x={menu.x}
+      y={menu.y}
+      items={menuItems}
+      info={menuDetails}
+      {scale}
+      onselect={menuSelect}
+      onclose={() => (menu = null)} />
+  {/snippet}
+  {#if embedded}
+    <!-- Scale-native list: the row menu re-creates the overlay's local
+         coordinate space (ContextMenu divides coordinates by scale), while
+         staying visually scaled like the skin around it. -->
+    <div class="menu-space" style="transform:scale({scale});">
+      {@render rowMenu()}
+    </div>
+  {:else}
+    {@render rowMenu()}
+  {/if}
 {/if}
 
 <style>
@@ -612,6 +653,18 @@
     border: 1px solid var(--pl-border, #3a3a3a);
     background: #161616;
     user-select: none;
+  }
+
+  /* Scale-native row menus: a full-viewport layer that re-creates the local
+     pixel space the ContextMenu positions in (it divides by scale), scaled
+     back up so the menu keeps the skin's visual size. Transparent to
+     pointers; the menu re-enables them. */
+  .menu-space {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    pointer-events: none;
+    transform-origin: top left;
   }
 
   /* Embedded in a skin frame: the caller owns the box, border and actions. */
@@ -666,9 +719,9 @@
     align-items: center;
     height: var(--row-h, 20px);
     line-height: var(--row-h, 20px);
-    padding: 0 6px;
+    padding: 0 calc(6px * var(--pl-text-scale, 1));
     font-family: var(--pl-font);
-    font-size: 11px;
+    font-size: calc(11px * var(--pl-text-scale, 1));
     color: var(--pl-normal); /* classic Winamp playlist green by default */
     cursor: default;
     touch-action: none;
@@ -689,9 +742,9 @@
 
   .marker {
     flex: none;
-    width: 14px;
+    width: calc(14px * var(--pl-text-scale, 1));
     color: var(--pl-marker);
-    font-size: 10px;
+    font-size: calc(10px * var(--pl-text-scale, 1));
   }
 
   .text {
@@ -710,9 +763,9 @@
   }
 
   .empty {
-    padding: 6px 8px;
+    padding: calc(6px * var(--pl-text-scale, 1)) calc(8px * var(--pl-text-scale, 1));
     font-family: var(--pl-font);
-    font-size: 11px;
+    font-size: calc(11px * var(--pl-text-scale, 1));
     color: var(--pl-normal);
     opacity: 0.55;
   }

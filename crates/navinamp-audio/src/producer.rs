@@ -34,6 +34,11 @@ const RING_SECS: f64 = 2.0;
 const PREFILL_SECS: f64 = 0.125;
 /// Keep the ring at least this full while decoding.
 const HIGH_WATER_SECS: f64 = 1.0;
+/// Remote streams decode straight off the network — no read-ahead beyond the
+/// ring cushions a stalled read — so keep a deeper cushion to ride out
+/// jitter. The ~2.7 s ring (2 s hint rounded up to a power-of-two sample
+/// count) still leaves headroom above this.
+const HIGH_WATER_REMOTE_SECS: f64 = 1.8;
 /// How long a reset (seek/stop) waits for the consumer to observe it.
 const RESET_WAIT: Duration = Duration::from_millis(250);
 /// Safety valve for waiting on the consumer to drain the queue.
@@ -59,7 +64,6 @@ struct ActiveTrack {
 
 struct QueuedTrack {
     id: u64,
-    #[allow(dead_code)] // used for diagnostics in future milestones
     source: TrackSource,
     src: PcmSource,
 }
@@ -157,6 +161,10 @@ pub(crate) struct Producer {
     /// Output frames ever pushed into the ring (engine timeline).
     pushed: u64,
     next_track_id: u64,
+    /// Deferred underrun-attribution flip: `(timeline frame, is_remote)`.
+    /// Armed by `start_track`, applied by `tick` once playback crosses the
+    /// frame — the predecessor's buffered tail keeps its own attribution.
+    source_flip: Option<(u64, bool)>,
     draining: bool,
     drain_started: Option<Instant>,
     shutdown: bool,
@@ -191,6 +199,7 @@ impl Producer {
             prefetch_generation: 0,
             pushed: 0,
             next_track_id: 0,
+            source_flip: None,
             draining: false,
             drain_started: None,
             shutdown: false,
@@ -249,6 +258,15 @@ impl Producer {
         let mut worked = self.poll_prefetch();
 
         self.flush_pending();
+
+        // Flip underrun attribution once playback has crossed into the new
+        // track (see `start_track`).
+        if let Some((frame, remote)) = self.source_flip
+            && self.shared.played() >= frame
+        {
+            self.shared.set_remote_active(remote);
+            self.source_flip = None;
+        }
 
         // Current track finished producing and its tail is fully buffered:
         // announce the (producer-side) end of the track.
@@ -757,6 +775,8 @@ impl Producer {
         self.autoplay = false;
         self.draining = false;
         self.drain_started = None;
+        self.source_flip = None;
+        self.shared.set_remote_active(false);
         self.shared.set_metadata(None);
         self.hard_reset();
         self.shared.set_status(PlaybackStatus::Stopped);
@@ -1010,8 +1030,14 @@ impl Producer {
             id,
             duration_secs: duration,
         });
-        // Keep `source` around for future diagnostics (stream URLs in M5).
-        let _ = source;
+        // Underrun attribution: the callback splits the counter by whether a
+        // remote stream is active (network stalls vs local decode hiccups).
+        // The flip is DEFERRED until playback crosses into this track
+        // (`source_flip` + the tick check): on a gapless hand-off the ring
+        // still holds the predecessor's tail, and underruns there belong to
+        // it, not to the new source.
+        let remote = source.is_remote();
+        self.source_flip = Some((self.pushed, remote));
         self.current = Some(ActiveTrack {
             id,
             src,
@@ -1028,6 +1054,8 @@ impl Producer {
         self.window.clear();
         self.pending_play = None;
         self.autoplay = false;
+        self.source_flip = None;
+        self.shared.set_remote_active(false);
         self.shared.set_metadata(None);
         self.shared.set_status(PlaybackStatus::Stopped);
         self.events.emit(Event::EndOfQueue);
@@ -1092,7 +1120,14 @@ impl Producer {
     }
 
     fn high_water_frames(&self) -> u64 {
-        (f64::from(self.sink_cfg.sample_rate) * HIGH_WATER_SECS) as u64
+        // Network jitter needs a deeper cushion than local decode; the flag
+        // is kept current by `start_track`/stop paths.
+        let secs = if self.shared.remote_active() {
+            HIGH_WATER_REMOTE_SECS
+        } else {
+            HIGH_WATER_SECS
+        };
+        (f64::from(self.sink_cfg.sample_rate) * secs) as u64
     }
 
     fn alloc_id(&mut self) -> u64 {

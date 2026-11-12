@@ -16,7 +16,7 @@
 
 use std::cell::UnsafeCell;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use crate::eq::EqParams;
 use crate::spectrum::SpectrumTap;
@@ -87,6 +87,14 @@ pub(crate) struct Shared {
     pub frames_played: AtomicU64,
     /// Frames of silence emitted while Playing because the ring ran dry.
     pub underrun_frames: AtomicU64,
+    /// Of [`Self::underrun_frames`], the frames lost while a **remote**
+    /// source (Navidrome/Subsonic stream) was active — network stalls, as
+    /// opposed to local decode/device hiccups. The producer keeps this flag
+    /// current via [`Self::set_remote_active`].
+    pub underrun_frames_remote: AtomicU64,
+    /// Whether the active track is a remote stream (see
+    /// [`Self::underrun_frames_remote`]).
+    remote_active: AtomicBool,
     /// Append-only session log (pruned occasionally by the producer).
     pub sessions: Mutex<Vec<Session>>,
     /// Properties of the current track (producer-writes, UI-reads).
@@ -112,6 +120,8 @@ impl Shared {
             volume_bits: AtomicU32::new(initial_volume.to_bits()),
             frames_played: AtomicU64::new(0),
             underrun_frames: AtomicU64::new(0),
+            underrun_frames_remote: AtomicU64::new(0),
+            remote_active: AtomicBool::new(false),
             sessions: Mutex::new(Vec::new()),
             metadata: Mutex::new(None),
             eq: std::sync::Arc::new(EqParams::new()),
@@ -136,6 +146,17 @@ impl Shared {
     }
     pub(crate) fn played(&self) -> u64 {
         self.frames_played.load(Ordering::Relaxed)
+    }
+    /// Producer: mark whether the active track is a remote stream, so the
+    /// callback can split underruns into network vs local causes.
+    pub(crate) fn set_remote_active(&self, remote: bool) {
+        self.remote_active.store(remote, Ordering::Relaxed);
+    }
+    pub(crate) fn remote_active(&self) -> bool {
+        self.remote_active.load(Ordering::Relaxed)
+    }
+    pub(crate) fn underrun_remote_frames(&self) -> u64 {
+        self.underrun_frames_remote.load(Ordering::Relaxed)
     }
 
     /// Append a session (producer side).
@@ -327,6 +348,27 @@ impl RgMarkers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_active_flag_and_split_counter() {
+        let shared = Shared::new(1.0);
+        assert!(!shared.remote_active());
+        assert_eq!(shared.underrun_remote_frames(), 0);
+
+        shared.set_remote_active(true);
+        assert!(shared.remote_active());
+        shared.underrun_frames.fetch_add(5, Ordering::Relaxed);
+        shared
+            .underrun_frames_remote
+            .fetch_add(5, Ordering::Relaxed);
+        assert_eq!(shared.underrun_remote_frames(), 5);
+
+        // A local track after a remote one stops attributing new underruns
+        // to the network, but keeps the historical split intact.
+        shared.set_remote_active(false);
+        assert!(!shared.remote_active());
+        assert_eq!(shared.underrun_remote_frames(), 5);
+    }
 
     #[test]
     fn markers_deliver_in_order() {

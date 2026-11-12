@@ -1,0 +1,41 @@
+name: Stamp release version
+description: >
+  Stamp package.json and the workspace Cargo.toml from the v* tag, verify both
+  took the version (fail fast on a mis-stamped release PR), and sync the
+  workspace member versions in Cargo.lock. Shared by every platform release
+  job so the three copies cannot drift.
+runs:
+  using: composite
+  steps:
+    - name: Set version from tag
+      shell: bash
+      run: |
+        VER="${GITHUB_REF_NAME#v}"
+        if [ -z "$VER" ] || [ "$VER" = "$GITHUB_REF_NAME" ]; then
+          echo "not a v* tag ref: GITHUB_REF_NAME=$GITHUB_REF_NAME"
+          exit 1
+        fi
+        echo "building version $VER"
+
+        # The release PR already stamps package.json; npm errors on a
+        # same-version bump unless explicitly allowed.
+        npm version "$VER" --no-git-tag-version --allow-same-version
+        # `npm version --allow-same-version` exits 0 either way — assert that
+        # package.json really holds the tag version, or a mis-stamped release
+        # PR would ship bundles labelled with the old version.
+        PKG_VER="$(node -p "require('./package.json').version")"
+        if [ "$PKG_VER" != "$VER" ]; then
+          echo "package.json is $PKG_VER after stamping, expected $VER"
+          exit 1
+        fi
+
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          sed -i '' 's/^version = ".*"/version = "'"$VER"'"/' Cargo.toml
+        else
+          sed -i 's/^version = ".*"/version = "'"$VER"'"/' Cargo.toml
+        fi
+        grep -q "^version = \"$VER\"" Cargo.toml \
+          || { echo "Cargo.toml version stamp failed"; exit 1; }
+
+        # sync Cargo.lock member versions (no dependency upgrades)
+        cargo metadata --format-version 1 > /dev/null

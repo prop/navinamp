@@ -135,6 +135,7 @@ mod sink;
 mod sink_cpal;
 mod sink_test;
 mod spectrum;
+mod wav_repair;
 
 pub use dsp::auto_headroom_db;
 pub use eq::{EQ_BAND_COUNT, EQ_BAND_FREQUENCIES_HZ, EQ_RANGE_DB, EqPreset, EqState, eq_presets};
@@ -191,6 +192,20 @@ pub enum TrackSource {
         /// Extra request headers (`(name, value)`).
         headers: Vec<(String, String)>,
     },
+}
+
+impl TrackSource {
+    /// Whether this source decodes over the network. Exhaustive on purpose:
+    /// a new variant must be classified here or underrun attribution and the
+    /// remote decode-ahead silently miss it.
+    pub fn is_remote(&self) -> bool {
+        matches!(
+            self,
+            TrackSource::Remote { .. }
+                | TrackSource::RemoteInsecure { .. }
+                | TrackSource::RemoteWithHeaders { .. }
+        )
+    }
 }
 
 /// One entry in the engine's prefetch window (see [`Command::SetUpcoming`]).
@@ -360,6 +375,12 @@ impl EngineHandle {
     /// (diagnostics; should stay 0 in normal operation).
     pub fn underrun_frames(&self) -> u64 {
         self.shared.underrun_frames.load(Ordering::Relaxed)
+    }
+
+    /// Of [`Self::underrun_frames`], the frames lost while a **remote**
+    /// source was active (network stalls vs local decode/device hiccups).
+    pub fn underrun_remote_frames(&self) -> u64 {
+        self.shared.underrun_remote_frames()
     }
 
     // ----- equaliser (see `eq.rs`; all reads/writes are lock-free) -----

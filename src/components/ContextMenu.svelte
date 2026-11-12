@@ -22,7 +22,8 @@
   /**
    * In-app context menu (replaces the webview's Reload/Inspect menu on rows).
    *
-   * Rendered at the pointer's client coordinates and clamped to the
+   * Rendered at the pointer's coordinates (mapped into the containing
+   * window root's local pixels when the root is scaled) and clamped to the
    * viewport. Closes on outside click, Escape, scroll, resize or focus loss.
    * Items are data-driven; a `rating` item renders a 5-star picker and emits
    * `rate:<n>` (or `rate:0` when the current star is clicked again).
@@ -36,9 +37,16 @@
     /** Optional track details (artist, album, quality, …) above the actions. */
     info?: ContextMenuInfoRow[];
     /**
-     * Scale of the containing skin overlay. The menu is usually fixed to the
-     * viewport, but inside a CSS-transformed overlay it is positioned in the
-     * overlay's local pixels; cancel both the position and the size scale.
+     * UI scale of the containing window root (CSS `zoom` in the library,
+     * `transform: scale()` in skinned windows). The menu is `position:
+     * fixed`, so inside a scaled root it lives in that root's local pixels:
+     * divide the client coordinates (and viewport caps) by this to land
+     * under the pointer.
+     *
+     * The menu's SIZE deliberately follows the UI scale. It is part of the
+     * scale-native chrome: counter-scaling would leave an 11 px menu beside
+     * ~16 px rows at 1.5×, and would need inverse `zoom` in the library vs
+     * inverse `transform` in skinned windows. Settled in #106.
      */
     scale?: number;
     onselect: (id: string) => void;

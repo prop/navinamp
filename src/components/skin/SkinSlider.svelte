@@ -12,6 +12,7 @@
    * dragging (volume sets it live), `oncommit` once on release.
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
+  import { imageRenderingFor } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
@@ -23,9 +24,19 @@
     onlive?: (v: number) => void;
     /** Called once on release (and on keyboard nudges) with the final value. */
     oncommit: (v: number) => void;
+    /** Global UI scale; integer values rasterize vector payloads nearest-neighbour. */
+    scale?: number;
   }
 
-  let { obj, images, value, disabled = false, onlive, oncommit }: Props = $props();
+  let {
+    obj,
+    images,
+    value,
+    disabled = false,
+    onlive,
+    oncommit,
+    scale = 1,
+  }: Props = $props();
 
   const o = $derived(obj.object.kind === "slider" ? obj.object : null);
   const vertical = $derived(o?.params?.["orientation"] === "vertical");
@@ -107,7 +118,7 @@
     tabindex="0"
     style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{trackImage
       ? `background-image:url('${trackImage}');`
-      : ''}"
+      : ''}{imageRenderingFor(trackImage, scale)}"
     onpointerenter={() => (hover = true)}
     onpointerleave={() => (hover = false)}
     onpointerdown={down}
@@ -127,7 +138,7 @@
         : obj.y + ((obj.h ?? 0) - thumbSize) / 2}px;
       width:{thumbSize}px; height:{thumbSize}px;{thumbImage
         ? `background-image:url('${thumbImage}');`
-        : ''}"
+        : ''}{imageRenderingFor(thumbImage, scale)}"
   ></div>
 {/if}
 

@@ -71,6 +71,13 @@ impl Callback {
             self.shared
                 .underrun_frames
                 .fetch_add(missing as u64, Ordering::Relaxed);
+            // Split by cause: a remote source means network stalls; a local
+            // one means decode/device hiccups.
+            if self.shared.remote_active() {
+                self.shared
+                    .underrun_frames_remote
+                    .fetch_add(missing as u64, Ordering::Relaxed);
+            }
             out[got..].fill(0.0);
         }
 

@@ -118,6 +118,8 @@
     scale?: number;
     /** Append tracks to the play queue. */
     onenqueue: (metas: QueueItemMeta[]) => void;
+    /** Enqueue tracks right after the current item ("play next"). */
+    onplaynext: (metas: QueueItemMeta[]) => void;
     /** Append tracks and start playing the first of them. */
     onplaynow: (metas: QueueItemMeta[]) => void;
     /** Replace the playlist editor/queue with these tracks. */
@@ -125,7 +127,7 @@
     onlog: (line: string) => void;
   }
 
-  let { scale = 1, onenqueue, onplaynow, onreplace, onlog }: Props = $props();
+  let { scale = 1, onenqueue, onplaynext, onplaynow, onreplace, onlog }: Props = $props();
 
   // Must match the .trow height for content-visibility sizing.
   const ROW_H = 20;
@@ -480,7 +482,8 @@
       if (seq !== searchSeq) return;
       aiReport = report;
       searchDef = report.def;
-      const rows = report.def ? await smartViewQuery(report.def, 5000) : [];
+      const rows =
+        report.tracks ?? (report.def ? await smartViewQuery(report.def, 5000) : []);
       if (seq !== searchSeq) return;
       searchResults = rows;
       aiUsedPrompt = prompt;
@@ -785,6 +788,16 @@
       selection.kind === "remote" ||
       selection.kind === "remoteServer",
   );
+
+  /**
+   * Whether the footer/bulk actions should read counts and durations from
+   * `stats`. Search results are client-side and override the pane even when
+   * the underlying selection is a paged view, so they are not stats-backed:
+   * borrowing the stats made an empty search over ALL TRACKS read
+   * "0 tracks · 8216:46:34" (the whole library's duration), and PLAY ALL
+   * would have queued the entire library instead of the matches.
+   */
+  const statsBackedView = $derived(pagedView && searchResults == null);
 
   const displayedTotal = $derived.by(() => {
     if (searchResults != null) return searchResults.length;
@@ -1223,7 +1236,7 @@
   });
 
   const footerText = $derived.by(() => {
-    const paged = pagedView;
+    const paged = statsBackedView;
     const n = paged ? displayedTotal : displayed.length;
     let secs = 0;
     if (paged) {
@@ -1689,6 +1702,10 @@
         id: "enqueue",
         label: bulk ? `Enqueue ${m.count.toLocaleString()} selected` : "Enqueue",
       },
+      {
+        id: "play-next",
+        label: bulk ? `Play ${m.count.toLocaleString()} selected next` : "Play next",
+      },
       { id: "copy", label: "Copy path" },
       { id: "sep", label: "", separator: true },
     ];
@@ -1769,6 +1786,14 @@
         });
       } else {
         onenqueue([toMeta(t)]);
+      }
+    } else if (id === "play-next") {
+      if (m.scope === "selection") {
+        void menuSelectionRows().then((rows) => {
+          if (rows.length > 0) onplaynext(toMetas(rows));
+        });
+      } else {
+        onplaynext([toMeta(t)]);
       }
     } else if (id === "copy") {
       // Remote rows: prefer the server's real file path over the
@@ -1899,6 +1924,25 @@
     return null;
   }
 
+  /**
+   * Album leaf suffix for remote metadata: ` — Label [CAT#]`, omitting
+   * whichever half the server did not provide.
+   */
+  function albumMeta(a: Album): string {
+    const label = a.label?.trim() ?? "";
+    const catalog = a.catalogNumber?.trim() ?? "";
+    const parts = [label, catalog ? `[${catalog}]` : ""].filter(Boolean);
+    return parts.length > 0 ? ` — ${parts.join(" ")}` : "";
+  }
+
+  /** Full leaf tooltip: artist plus the label/catalog suffix. */
+  function albumTitle(a: Album): string {
+    const label = a.label?.trim() ?? "";
+    const catalog = a.catalogNumber?.trim() ?? "";
+    const meta = [label, catalog].filter(Boolean).join(" · ");
+    return meta ? `${a.artist} · ${meta}` : a.artist;
+  }
+
   function failArt(serverId: string | null, id: string): void {
     const key = artKey(serverId, id);
     if (failedArtIds.has(key)) return;
@@ -1988,9 +2032,15 @@
 
   let actionBusy = $state(false);
 
-  /** Load every row of the current paged view for an ENQUEUE/PLAY ALL. */
+  /**
+   * Rows behind a bulk action (PLAY/ENQUEUE ALL, bulk context menu): either
+   * the fully-materialized `displayed` view (search results, a loaded tree
+   * node) or every page of a stats-backed view.
+   */
   async function allRowsForAction(): Promise<Track[]> {
-    if (!pagedView) return displayed;
+    // Search results are client-side and fully materialized; act on those
+    // rather than paging the underlying stats-backed view.
+    if (!statsBackedView) return displayed;
     const total = displayedTotal;
     if (pagedRows.length >= total) return pagedRows;
     actionBusy = true;
@@ -2304,6 +2354,18 @@
             catalog-only answer — no local-track rules for this prompt
           </div>
         {/if}
+        {#if aiReport.catalogAnchor}
+          {#if aiReport.catalogAnchor.matched === 0}
+            <div class="anchornote empty">
+              no local tracks match the catalog — showing the catalog only
+            </div>
+          {:else}
+            <div class="anchornote">
+              local tracks filtered to {aiReport.catalogAnchor.matched} of
+              {aiReport.catalogAnchor.total} — matched against the Discogs results
+            </div>
+          {/if}
+        {/if}
         {#if aiReport.catalog.length > 0}
           <div class="catalog">
             <div class="cathead">
@@ -2500,7 +2562,7 @@
                 <button
                   class="leaf album"
                   class:on={selKey(selection) === `album:${a.albumKey}`}
-                  title={a.artist}
+                  title={albumTitle(a)}
                   onclick={() => select({ kind: "album", value: a.albumKey })}>
                   {#if albumCoverSrc(a)}
                     <img
@@ -2513,7 +2575,9 @@
                   {:else}
                     <span class="alb-art none" aria-hidden="true">♪</span>
                   {/if}
-                  <span class="alb-name">{a.name}{a.year != null ? ` (${a.year})` : ""}</span>
+                  <span class="alb-name"
+                    >{a.name}{a.year != null ? ` (${a.year})` : ""}{albumMeta(a)}</span
+                  >
                 </button>
               {/each}
             </div>
@@ -3102,6 +3166,16 @@
     text-overflow: clip;
     color: #d8a63c;
     line-height: 1.35;
+  }
+
+  .anchornote {
+    font-size: 10px;
+    color: #3ccb4e;
+    line-height: 1.35;
+  }
+
+  .anchornote.empty {
+    color: #808080;
   }
 
   .catalog {

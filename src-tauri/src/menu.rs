@@ -28,6 +28,7 @@ const MENU_EQ: &str = "window_toggle_eq";
 const MENU_PLAYLIST: &str = "window_toggle_playlist";
 const MENU_ALWAYS_ON_TOP: &str = "window_always_on_top";
 const MENU_NOTIFY_TRACK: &str = "playback_notify_track";
+const MENU_RESUME_ON_LAUNCH: &str = "playback_resume_on_launch";
 
 /// Handles for the checkable Window-menu items.
 pub struct WindowMenu {
@@ -36,6 +37,7 @@ pub struct WindowMenu {
     playlist: CheckMenuItem<Wry>,
     always_on_top: CheckMenuItem<Wry>,
     notify_track: CheckMenuItem<Wry>,
+    resume_on_launch: CheckMenuItem<Wry>,
 }
 
 /// Installs the native menu. Must run after [`WindowManager::init`] so the
@@ -88,6 +90,14 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         audio::notify_track(&app.state::<audio::Audio>()),
         None::<&str>,
     )?;
+    let resume_on_launch = CheckMenuItem::with_id(
+        app,
+        MENU_RESUME_ON_LAUNCH,
+        "Resume Playback on Launch",
+        true,
+        audio::resume_on_launch(&app.state::<audio::Audio>()),
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     window_menu.prepend_items(&[
@@ -98,6 +108,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         &always_on_top,
         &separator2,
         &notify_track,
+        &resume_on_launch,
     ])?;
 
     app.set_menu(menu)?;
@@ -121,6 +132,17 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
             }
             return;
         }
+        if event.id().as_ref() == MENU_RESUME_ON_LAUNCH {
+            // The player applies this on its next launch (state is polled;
+            // toggling mid-session does not start playback by itself).
+            let state = app.state::<audio::Audio>();
+            let on = !audio::resume_on_launch(&state);
+            audio::set_resume_on_launch(&state, on);
+            if let Some(menu) = app.try_state::<WindowMenu>() {
+                let _ = menu.resume_on_launch.set_checked(on);
+            }
+            return;
+        }
         let Some(label) = label_for(event.id().as_ref()) else {
             return; // predefined items (minimize/zoom/close) handle themselves
         };
@@ -139,6 +161,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         playlist,
         always_on_top,
         notify_track,
+        resume_on_launch,
     });
     Ok(())
 }

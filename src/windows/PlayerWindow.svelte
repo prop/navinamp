@@ -26,7 +26,13 @@
 
   import SkinSurface from "../components/skin/SkinSurface.svelte";
   import OnboardingLauncher from "../components/OnboardingLauncher.svelte";
-  import { queue, isAudioPath } from "../lib/player/queue.svelte";
+  import {
+    queue,
+    isAudioPath,
+    notePlaybackState,
+    queueReady,
+    wasPlayingAtSave,
+  } from "../lib/player/queue.svelte";
   import type { EngineEvent } from "../lib/player/queue.svelte";
   import { loadDefaultSkin, onSkinChanged } from "../lib/skin/load";
   import { mockSkinPayload } from "../lib/skin/mock";
@@ -59,6 +65,8 @@
     channels: number | null;
     /** Desktop "now playing" notifications enabled (menu preference). */
     notifyTrack: boolean;
+    /** Resume at the saved position automatically on launch. */
+    resumeOnLaunch: boolean;
   };
 
   let audio = $state<AudioState>({
@@ -71,6 +79,7 @@
     sampleRateHz: null,
     channels: null,
     notifyTrack: true,
+    resumeOnLaunch: false,
   });
   let seeking = $state<number | null>(null);
   /** Last playback/feed failure, surfaced in the existing warning bar. */
@@ -102,6 +111,8 @@
   async function refresh() {
     try {
       audio = await invoke<AudioState>("audio_state");
+      // Feed the queue's persistence heartbeat (resume position).
+      notePlaybackState(audio.positionSecs, audio.status === "playing");
     } catch {
       // backend without audio_state — keep the last state
     }
@@ -112,6 +123,21 @@
   $effect(() => {
     const timer = setInterval(refresh, 100);
     return () => clearInterval(timer);
+  });
+
+  // Auto-resume (preference "Resume Playback on Launch", off by default):
+  // once the queue restore and the first audio poll are in, start the
+  // restored current track if it was playing when the app last quit. The
+  // queue's pendingResume seek applies from TrackStarted.
+  let autoResumeTried = false;
+  $effect(() => {
+    if (autoResumeTried) return;
+    if (!queueReady.value || !audio.resumeOnLaunch) return;
+    autoResumeTried = true;
+    if (!wasPlayingAtSave()) return;
+    if (audio.status !== "stopped") return; // the user already pressed play
+    const idx = queue.currentIndex;
+    if (idx != null) queue.play(idx);
   });
 
   function rawEngineLine(e: EngineEvent): string {
@@ -598,7 +624,13 @@
           {/each}
         </div>
       {/if}
-      <button class="warnbadge" onclick={() => (warningsOpen = !warningsOpen)}>
+      <button
+        class="warnbadge"
+        title={warningsOpen ? "hide warnings" : "show warnings"}
+        aria-label="warnings"
+        aria-expanded={warningsOpen}
+        onclick={() => (warningsOpen = !warningsOpen)}
+      >
         ⚠ {allWarnings.length}
       </button>
     </div>
@@ -628,7 +660,12 @@
     cursor: default;
   }
 
-  /* Acceptance-run diagnostics: skin warnings must be visible in-app. */
+  /* Acceptance-run diagnostics: skin warnings must be visible in-app.
+     The bar's bounding box (which grows with the expanded list) sits above
+     the skin's transport buttons, so an interactive container would swallow
+     every pointer press while an error is shown. The container is therefore
+     click-through; the painted panel and the badge opt back into hit testing
+     so the list still scrolls and absorbs clicks over its own area. */
   .warnbar {
     position: absolute;
     left: 4px;
@@ -637,7 +674,9 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-width: calc(100% - 8px);
+    /* Keep the painted list off the skin's right-hand readouts. */
+    max-width: 70%;
+    pointer-events: none;
   }
 
   .warnbadge {
@@ -649,6 +688,7 @@
     padding: 1px 6px;
     font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     cursor: pointer;
+    pointer-events: auto;
   }
 
   .warnlist {
@@ -657,6 +697,7 @@
     max-height: 140px;
     overflow-y: auto;
     padding: 4px 6px;
+    pointer-events: auto;
   }
 
   .warnline {

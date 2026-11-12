@@ -818,6 +818,22 @@ pub(super) fn query(conn: &Connection, def: &SmartViewDef, cap: u32) -> Result<V
     execute(conn, compiled).map_err(Error::from)
 }
 
+/// Total number of tracks matching `def`, ignoring the def's own LIMIT (and
+/// any caller cap) — for honest "N of M" reporting (AI catalog anchoring).
+pub(super) fn count(conn: &Connection, def: &SmartViewDef) -> Result<u32> {
+    let compiled = compile_def(def, Purpose::Run)?;
+    let mut sql = String::from("SELECT COUNT(*) FROM tracks");
+    if let Some(where_sql) = &compiled.where_sql {
+        sql.push_str(" WHERE ");
+        sql.push_str(where_sql);
+    }
+    let mut stmt = conn.prepare(&sql)?;
+    let total: i64 = stmt.query_row(rusqlite::params_from_iter(compiled.params.iter()), |row| {
+        row.get(0)
+    })?;
+    Ok(u32::try_from(total).unwrap_or(u32::MAX))
+}
+
 // ---------------------------------------------------------------------------
 // Date parsing: strict `YYYY-MM-DD` → unix seconds (UTC midnight)
 // ---------------------------------------------------------------------------

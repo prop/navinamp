@@ -2,7 +2,7 @@
 //!
 //! [`skin_list`] scans `<app-config-dir>/skins` for `.wal`/`.wsz` archives;
 //! [`skin_load`] opens one, parses the model and materializes its bitmap
-//! payloads (PNG data-URLs) in a single round trip. The last-loaded payload
+//! payloads (SVG data-URLs) in a single round trip. The last-loaded payload
 //! is cached by path + mtime so repeated loads (window re-opens, UI reloads)
 //! are cheap — replacing the file or touching it on disk invalidates the
 //! cache.
@@ -25,6 +25,14 @@ const FALLBACK_WAL: &[u8] = include_bytes!("../../assets/fallback-skin/out/fallb
 
 /// Skin id under which the embedded fallback is served.
 pub const FALLBACK_ID: &str = "fallback";
+
+/// The original Winamp 2.91 base skin, bundled for offline availability.
+/// The bytes are pinned against the curated-pack checksum by a test.
+const BASE_291_WSZ: &[u8] = include_bytes!("../resources/skins/base-2-91.wsz");
+
+/// Skin id under which the bundled base skin is served. This matches the
+/// curated-pack id so `popular_skins` can report it as already installed.
+pub const BASE_291_ID: &str = "base-2-91";
 
 /// Last successfully loaded payload, invalidated by path or mtime change.
 #[derive(Default)]
@@ -52,7 +60,7 @@ pub struct SkinInfo {
 pub struct SkinPayload {
     /// The parsed model (`navinamp_skin::Skin`) as JSON.
     pub skin: serde_json::Value,
-    /// Bitmap id → PNG data-URL (`data:image/png;base64,...`).
+    /// Bitmap id → SVG data-URL (`data:image/svg+xml;base64,...`).
     pub images: HashMap<String, String>,
     /// Parse + payload warnings; non-fatal by design, the UI surfaces them.
     pub warnings: Vec<Warning>,
@@ -64,11 +72,23 @@ pub struct SkinPayload {
 #[tauri::command]
 pub fn skin_list(app: AppHandle) -> Result<Vec<SkinInfo>, String> {
     let dir = skins_dir(&app)?;
-    let mut skins = vec![SkinInfo {
-        id: FALLBACK_ID.to_owned(),
-        file_name: "fallback.wal (built-in)".to_owned(),
-    }];
-    skins.extend(list_skins(&dir)?);
+    let mut skins = vec![
+        SkinInfo {
+            id: FALLBACK_ID.to_owned(),
+            file_name: "fallback.wal (built-in)".to_owned(),
+        },
+        SkinInfo {
+            id: BASE_291_ID.to_owned(),
+            file_name: "base-2-91.wsz (built-in)".to_owned(),
+        },
+    ];
+    // If a user saved their own file under the bundled id, serve the bundled
+    // bytes rather than exposing two entries with the same id.
+    skins.extend(
+        list_skins(&dir)?
+            .into_iter()
+            .filter(|skin| skin.id != BASE_291_ID),
+    );
     Ok(skins)
 }
 
@@ -87,6 +107,12 @@ pub fn skin_load(
         // Tiny archive (~70 KB): parse per call, skip the disk cache.
         let archive = SkinArchive::from_bytes(FALLBACK_WAL.to_vec())
             .map_err(|e| format!("embedded fallback skin is corrupt: {e}"))?;
+        return load_archive(archive);
+    }
+    if id == BASE_291_ID {
+        // Bundled classic base skin: parse per call, like the fallback.
+        let archive = SkinArchive::from_bytes(BASE_291_WSZ.to_vec())
+            .map_err(|e| format!("bundled base skin is corrupt: {e}"))?;
         return load_archive(archive);
     }
     let dir = skins_dir(&app)?;
@@ -311,7 +337,9 @@ pub fn popular_skins(app: AppHandle) -> Result<PopularPackStatus, String> {
             .skins
             .into_iter()
             .map(|skin| {
-                let installed = pack_file_ok(&dir, &skin);
+                // The bundled Winamp 2.91 base skin does not live in the
+                // user's skins directory, but must not be downloaded again.
+                let installed = skin.id == BASE_291_ID || pack_file_ok(&dir, &skin);
                 PopularSkinStatus { skin, installed }
             })
             .collect(),
@@ -346,6 +374,11 @@ pub async fn skin_install_popular(app: AppHandle) -> Result<PopularInstallReport
     for (index, skin) in pack.skins.iter().enumerate() {
         if consecutive_failures >= 3 {
             break;
+        }
+        // The bundled base skin is always present; never download over it.
+        if skin.id == BASE_291_ID {
+            report.skipped += 1;
+            continue;
         }
         let _ = app.emit(
             POPULAR_PROGRESS_EVENT,
@@ -550,12 +583,17 @@ mod tests {
             );
             assert_eq!(skin.file_name, format!("{}.wsz", skin.id));
             assert!(
-                skin.url.starts_with("https://archive.org/download/"),
-                "`{}` must download from the archive",
+                skin.url.starts_with("https://")
+                    && (skin.url.starts_with("https://archive.org/download/")
+                        || skin.url.starts_with("https://r2.webampskins.org/skins/")),
+                "`{}` must download over https from a curated host",
                 skin.id
             );
             assert!(
-                skin.source_url.starts_with("https://archive.org/details/"),
+                skin.source_url.starts_with("https://archive.org/details/")
+                    || skin
+                        .source_url
+                        .starts_with("https://skins.webamp.org/skin/"),
                 "`{}` needs an attribution URL",
                 skin.id
             );
@@ -568,6 +606,27 @@ mod tests {
             );
             assert!(skin.size > 10_000, "`{}` size looks wrong", skin.id);
         }
+    }
+
+    #[test]
+    fn bundled_base_291_matches_the_curated_pack() {
+        let skin = popular_pack()
+            .expect("manifest")
+            .skins
+            .into_iter()
+            .find(|skin| skin.id == BASE_291_ID)
+            .expect("base 2.91 is in the curated pack");
+
+        assert_eq!(BASE_291_WSZ.len() as u64, skin.size);
+        assert_eq!(sha256_hex(BASE_291_WSZ), skin.sha256);
+
+        // A smoke parse also proves the bundled archive remains usable.
+        // (Fatal problems surface as `Err`; anything the classic synthesis
+        // skips merely warns, like it does for every .wsz.)
+        let archive =
+            SkinArchive::from_bytes(BASE_291_WSZ.to_vec()).expect("open base skin archive");
+        let (skin_model, _warnings) = Skin::from_archive(&archive).expect("model base skin");
+        assert!(!skin_model.containers.is_empty());
     }
 
     #[test]
@@ -601,5 +660,30 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn base_skin_titlebar_band_ships_as_vector() {
+        // The flat 275×14 titlebar band must vectorize so the Winamp
+        // wordmark stays crisp at 1.25×/1.5× — regardless of whether the
+        // skin's whole main.bmp stayed raster under the size budget.
+        let archive = SkinArchive::from_bytes(BASE_291_WSZ.to_vec()).expect("archive");
+        let payload = load_archive(archive).expect("load");
+        let band = payload
+            .images
+            .get("wsz.main.titlebar")
+            .expect("titlebar band payload");
+        assert!(
+            band.starts_with("data:image/svg+xml"),
+            "titlebar band must vectorize for fractional scales"
+        );
+        // Forced override of the 7× ratio budget: worst realistic bands
+        // measure ~75 KiB (the bundled skin's is 34 KiB) — 200 KiB leaves
+        // headroom for noisier artwork without hiding a runaway payload.
+        assert!(
+            band.len() < 200_000,
+            "titlebar band payload unexpectedly large: {} bytes",
+            band.len()
+        );
     }
 }

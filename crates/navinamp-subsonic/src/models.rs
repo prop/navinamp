@@ -28,6 +28,25 @@ pub struct ArtistSummary {
     pub album_count: u32,
 }
 
+/// One OpenSubsonic `recordLabels` entry (`{ "name": "..." }`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordLabel {
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Join OpenSubsonic record labels into one display string (`"A, B"`).
+/// Empty labels are dropped; `None` means the server provided no label.
+pub fn join_record_labels(labels: &[RecordLabel]) -> Option<String> {
+    let names: Vec<&str> = labels
+        .iter()
+        .map(|label| label.name.trim())
+        .filter(|name| !name.is_empty())
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
 /// Minimal album shape used in search results.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +70,15 @@ pub struct AlbumSummary {
     /// Creation timestamp (ISO string) for quick-rescan fingerprinting.
     #[serde(default)]
     pub created: Option<String>,
+    /// Record labels (OpenSubsonic extension; Navidrome 0.61+). Also part of
+    /// the quick-rescan fingerprint — Navidrome's `getAlbumList2` uses the
+    /// same `buildAlbumID3` mapping as `getAlbum`, so labels ride along.
+    #[serde(default, rename = "recordLabels")]
+    pub record_labels: Vec<RecordLabel>,
+    /// Catalog number. Navidrome does not expose it over Subsonic yet; the
+    /// field is parsed so a future server-side extension works unchanged.
+    #[serde(default, rename = "catalogNumber")]
+    pub catalog_number: Option<String>,
 }
 
 /// Full album from `getAlbum`, songs inline. This is the leaf of the
@@ -75,6 +103,12 @@ pub struct AlbumDetail {
     pub duration_secs: u64,
     #[serde(default, rename = "coverArt")]
     pub cover_art_id: Option<String>,
+    /// Record labels (OpenSubsonic extension; authoritative when present).
+    #[serde(default, rename = "recordLabels")]
+    pub record_labels: Vec<RecordLabel>,
+    /// Catalog number (not sent by Navidrome yet; see [`AlbumSummary`]).
+    #[serde(default, rename = "catalogNumber")]
+    pub catalog_number: Option<String>,
     /// The album's tracks. Deserialized from the `song` array (the spec
     /// name); `songs` is accepted as an alias for lenient servers.
     #[serde(default, rename = "song", alias = "songs")]
@@ -98,6 +132,11 @@ pub struct SongSummary {
     pub album: String,
     #[serde(default)]
     pub album_id: String,
+    /// The enclosing album's artist as a display string
+    /// (`displayAlbumArtist`, OpenSubsonic — `Various Artists` for
+    /// compilations). Empty when the server omits it.
+    #[serde(default)]
+    pub display_album_artist: String,
     #[serde(default, rename = "track")]
     pub track_no: u32,
     #[serde(default, rename = "disc", alias = "discNumber")]
@@ -385,7 +424,7 @@ pub(crate) struct PlaylistEntries {
 
 #[cfg(test)]
 mod tests {
-    use super::SongSummary;
+    use super::{AlbumDetail, AlbumSummary, SongSummary, join_record_labels};
 
     fn song(json: &str) -> SongSummary {
         serde_json::from_str(json).expect("song parses")
@@ -412,5 +451,53 @@ mod tests {
             song(r#"{"id":"a","title":"A","path":"Artist/Album/01 song.flac"}"#).path,
             "Artist/Album/01 song.flac"
         );
+    }
+
+    #[test]
+    fn album_record_labels_and_catalog_number_parse_leniently() {
+        let summary: AlbumSummary = serde_json::from_str(
+            r#"{"id":"al-1","name":"Debut",
+                "recordLabels":[{"name":" Bloody Fist "},{"name":""}]}"#,
+        )
+        .expect("album summary parses");
+        assert_eq!(summary.record_labels.len(), 2);
+        assert_eq!(
+            join_record_labels(&summary.record_labels).as_deref(),
+            Some("Bloody Fist"),
+            "blank labels are dropped and names trimmed"
+        );
+        assert_eq!(summary.catalog_number, None);
+
+        let detail: AlbumDetail = serde_json::from_str(
+            r#"{"id":"al-1","name":"Debut",
+                "recordLabels":[{"name":"A"},{"name":"B"}],
+                "catalogNumber":"BF-012"}"#,
+        )
+        .expect("album detail parses");
+        assert_eq!(
+            join_record_labels(&detail.record_labels).as_deref(),
+            Some("A, B")
+        );
+        assert_eq!(detail.catalog_number.as_deref(), Some("BF-012"));
+
+        // Older/lenient servers omit both fields entirely.
+        let bare: AlbumSummary =
+            serde_json::from_str(r#"{"id":"al-2","name":"Post"}"#).expect("bare album parses");
+        assert!(bare.record_labels.is_empty());
+        assert_eq!(bare.catalog_number, None);
+        assert_eq!(join_record_labels(&[]), None);
+    }
+
+    #[test]
+    fn display_album_artist_parses_the_open_subsonic_attribute() {
+        // Navidrome's playlist `Child` carries `displayAlbumArtist`
+        // (`childFromMediaFile` maps `mf.AlbumArtist` there); absent on
+        // lenient servers, where the field stays empty and callers fall back.
+        assert_eq!(
+            song(r#"{"id":"a","title":"A","displayAlbumArtist":"Various Artists"}"#)
+                .display_album_artist,
+            "Various Artists"
+        );
+        assert_eq!(song(r#"{"id":"a","title":"A"}"#).display_album_artist, "");
     }
 }

@@ -24,9 +24,31 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install Tauri Linux dependencies
+      - name: Prefer the upstream Ubuntu archive
+        # The ubuntu-24.04 image routes apt through
+        # mirror+file:/etc/apt/apt-mirrors.txt, which can point at an
+        # unreachable azure.archive.ubuntu.com host (blocking installs with
+        # "Unable to connect"). Rewrite that host to the upstream archive.
         run: |
-          sudo apt-get update
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$f" ] || continue
+            sudo sed -i \
+              -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              "$f" || true
+          done
+
+      - name: Install Tauri Linux dependencies
+        # Mirror hiccups have left this step hanging for 40+ minutes. Bound
+        # it and let apt retry, so a bad runner fails fast and can be rerun
+        # instead of blocking the whole workflow.
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=60 \
+            -o Acquire::https::Timeout=60
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             build-essential \
@@ -78,12 +100,29 @@ jobs:
   # tags (the public download path). Re-add a manual `workflow_dispatch`
   # build here if per-push artifacts are ever needed.
 
+  # One idempotent creator so the three parallel platform builds can upload
+  # assets to the same release without racing to create it.
+  release-create:
+    name: Release (create)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Ensure the GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes
+
   release:
     name: Release (Mac mini)
     # Tag pushes (v*) only: publish the dmg as a GitHub Release asset.
     # Self-hosted runner — never runs for fork pull requests.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, release-create]
     runs-on: [self-hosted, macOS]
     permissions:
       contents: write
@@ -154,17 +193,7 @@ jobs:
             echo "no signing identity configured — build stays ad-hoc signed"
           fi
 
-      - name: Set version from tag
-        run: |
-          VER="${GITHUB_REF_NAME#v}"
-          echo "building version $VER"
-          # The release PR already stamps package.json; npm errors on a
-          # same-version bump unless explicitly allowed.
-          npm version "$VER" --no-git-tag-version --allow-same-version
-          sed -i '' "s/^version = \".*\"/version = \"$VER\"/" Cargo.toml
-          grep -q "^version = \"$VER\"" Cargo.toml || { echo "version stamp failed"; exit 1; }
-          # sync Cargo.lock member versions (no dependency upgrades)
-          cargo metadata --format-version 1 > /dev/null
+      - uses: ./.github/actions/stamp-version
 
       - name: Build release bundle
         # APP only: Tauri's dmg step drives Finder via AppleScript, which
@@ -180,16 +209,176 @@ jobs:
       - name: Package dmg (headless-safe hdiutil)
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          mkdir -p target/release/bundle/dmg
+          STAGING="target/release/bundle/dmg/NaVinaMP_${VER}"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          cp -R "target/release/bundle/macos/NaVinaMP.app" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
           hdiutil create \
             -volname "NaVinaMP" \
-            -srcfolder "target/release/bundle/macos/NaVinaMP.app" \
+            -srcfolder "$STAGING" \
             -ov -format UDZO \
             "target/release/bundle/dmg/NaVinaMP_${VER}_x64.dmg"
 
       - name: Publish GitHub Release (dmg)
-        uses: softprops/action-gh-release@v2
-        with:
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           # dmg only — no zip, per project decision.
-          files: target/release/bundle/dmg/*.dmg
-          generate_release_notes: true
+          gh release upload "$GITHUB_REF_NAME" target/release/bundle/dmg/*.dmg --clobber
+
+  release-linux:
+    name: Release (Linux)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, release-create]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Prefer the upstream Ubuntu archive
+        # The ubuntu-24.04 image routes apt through
+        # mirror+file:/etc/apt/apt-mirrors.txt, which can point at an
+        # unreachable azure.archive.ubuntu.com host (blocking installs with
+        # "Unable to connect"). Rewrite that host to the upstream archive.
+        run: |
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$f" ] || continue
+            sudo sed -i \
+              -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              "$f" || true
+          done
+
+      - name: Install Tauri Linux dependencies
+        # Mirror hiccups have left this step hanging for 40+ minutes. Bound
+        # it and let apt retry, so a bad runner fails fast and can be rerun
+        # instead of blocking the whole workflow.
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=60 \
+            -o Acquire::https::Timeout=60
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            patchelf
+          # AppImage tooling (linuxdeploy/appimagetool are AppImages): FUSE is
+          # absent on GitHub runners, so the tools extract-and-run; the package
+          # name differs across Ubuntu releases.
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: ./.github/actions/stamp-version
+
+      - name: Build release bundle
+        run: npm ci && npm run tauri build -- --bundles deb,rpm,appimage
+
+      - name: Publish GitHub Release (Linux)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fail fast (and legibly) if a bundler produced an unexpected path
+          # instead of letting `gh` fail after the compile.
+          for f in target/release/bundle/deb/*.deb \
+                   target/release/bundle/rpm/*.rpm \
+                   target/release/bundle/appimage/*.AppImage; do
+            [ -e "$f" ] || { echo "missing expected artifact: $f"; exit 1; }
+          done
+          gh release upload "$GITHUB_REF_NAME" \
+            target/release/bundle/deb/*.deb \
+            target/release/bundle/rpm/*.rpm \
+            target/release/bundle/appimage/*.AppImage \
+            --clobber
+
+  release-windows:
+    name: Release (Windows)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, release-create]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    # Git Bash: `sed`/`grep`/`gh` behave like the other jobs; the default
+    # PowerShell would need different quoting for the same version stamp.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Tauri downloads WiX (msi) and NSIS (setup.exe) itself on first use.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: ./.github/actions/stamp-version
+
+      - name: Build release bundle
+        run: npm ci && npm run tauri build -- --bundles msi,nsis
+
+      - name: Publish GitHub Release (Windows)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fail fast (and legibly) if a bundler produced an unexpected path
+          # instead of letting `gh` fail after the compile.
+          for f in target/release/bundle/msi/*.msi \
+                   target/release/bundle/nsis/*-setup.exe; do
+            [ -e "$f" ] || { echo "missing expected artifact: $f"; exit 1; }
+          done
+          gh release upload "$GITHUB_REF_NAME" \
+            target/release/bundle/msi/*.msi \
+            target/release/bundle/nsis/*-setup.exe \
+            --clobber
+
+  release-verify:
+    name: Release (verify assets)
+    # release-please creates the release (non-draft) before the tag workflow
+    # runs, so partial releases cannot be prevented by draft gymnastics — this
+    # job is the single signal that every platform actually shipped.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release, release-linux, release-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: All three platforms published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          echo "$assets"
+          fail=0
+          for ext in dmg deb rpm AppImage msi exe; do
+            printf '%s\n' "$assets" | grep -q "\.${ext}$" \
+              || { echo "::error::release is missing a .${ext} artifact"; fail=1; }
+          done
+          exit "$fail"

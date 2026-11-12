@@ -195,14 +195,65 @@
   const glyphContent = $derived((o?.display === "time" ? glyphTime : content));
 
   /**
+   * Unicode typography → classic charmap equivalents. text.bmp is a 1997
+   * ASCII strip (dashes, straight quotes only), so a single en dash or curly
+   * quote otherwise pushes the whole ticker onto the HTML fallback font.
+   *
+   * Entries are grouped by class (dashes, quotes/primes, symbols, spaces) so
+   * the table stays auditable against the charmap; each target must be a real
+   * cell (see `CLASSIC_TEXT_SPEC.charmap`), not just plausible ASCII.
+   */
+  const CLASSIC_GLYPH_SUBSTITUTIONS: Record<string, string> = {
+    "\u2010": "-", // hyphen
+    "\u2011": "-", // non-breaking hyphen
+    "\u2012": "-", // figure dash
+    "\u2013": "-", // en dash
+    "\u2014": "-", // em dash
+    "\u2015": "-", // horizontal bar
+    "\u2018": "'", // left single quote
+    "\u2019": "'", // right single quote
+    "\u201a": "'", // single low quote
+    "\u201b": "'",
+    "\u201c": '"', // left double quote
+    "\u201d": '"', // right double quote
+    "\u201e": '"',
+    "\u201f": '"',
+    "\u2032": "'", // prime
+    "\u2033": '"', // double prime
+    "\u00ab": '"', // left guillemet
+    "\u00bb": '"', // right guillemet
+    "\u2022": "*", // bullet
+    "\u00b7": "*", // middle dot (the usual metadata separator)
+    "\u00d7": "x", // multiplication sign
+    "\u00a0": " ", // non-breaking space
+    "\u2009": " ", // thin space
+    "\u200a": " ",
+    "\u202f": " ", // narrow no-break space
+  };
+
+  /**
+   * Downgrade Unicode typography to the classic charmap's ASCII cells before
+   * glyph rendering, so fancy punctuation keeps the pixel font. Scripts with
+   * no mapping (Cyrillic, CJK, emoji) still fall back to HTML below.
+   */
+  function classicGlyphText(text: string): string {
+    let out = "";
+    for (const ch of text) out += CLASSIC_GLYPH_SUBSTITUTIONS[ch] ?? ch;
+    return out;
+  }
+
+  /** What the bitmap path actually draws (typography downgraded). */
+  const glyphText = $derived(classicGlyphText(glyphContent));
+
+  /**
    * Text the glyph renderer actually blits: the numbers charmap has no
    * colon cell (the classic time skips it), so coverage is checked against
    * the drawn characters.
    */
   const coverageText = $derived(
     o?.display === "time" && charset !== "classic-text"
-      ? glyphContent.replace(":", "")
-      : glyphContent,
+      ? glyphText.replace(":", "")
+      : glyphText,
   );
 
   /**
@@ -249,7 +300,7 @@
     if (!f || !el || !o) return;
     const w = obj.w ?? 0;
     const h = obj.h ?? 0;
-    const text = glyphContent; // redraw when the live value changes
+    const text = glyphText; // redraw when the live value changes
 
     const ctx = el.getContext("2d");
     if (!ctx) return;
@@ -387,6 +438,12 @@
       {style}
     ></canvas>
   {:else}
+    <!-- HTML fallback: renders the raw `content`, deliberately NOT
+         `glyphText`. The substitutions above exist only because the 1997
+         bitmap strip lacks those cells; in the system font the original
+         typography (— “ ” …) is correct. The asymmetry is therefore
+         intentional: a mixed-script title like `Тест – Part 2` keeps its
+         real en dash here, while an otherwise-ASCII title draws `-`. -->
     <div class="txt" class:time={o.display === "time"} bind:this={boxEl} {style}>
       <span class="probe" aria-hidden="true" bind:this={probeEl}>{content}</span>
       {#if marquee && overflow}

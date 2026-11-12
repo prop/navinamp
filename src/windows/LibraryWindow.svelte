@@ -43,6 +43,7 @@
   import {
     emitMediaCommand,
     queueIntent,
+    queuePlayNext,
     queuePlayNow,
     queueReplaceAll,
     queueSnapshot,
@@ -96,11 +97,11 @@
   let skinNote = $state<string | null>(null);
   let skinError = $state<string | null>(null);
 
-  /** Prefer the persisted choice, then the loader's default pick. */
+  /** Prefer the persisted choice; otherwise the bundled base skin. */
   function currentSkinId(list: SkinInfo[]): string {
     const wanted = selectedSkinId();
     if (wanted != null && list.some((s) => s.id === wanted)) return wanted;
-    return list.find((s) => s.id !== "fallback")?.id ?? list[0]?.id ?? "";
+    return list.find((s) => s.id === "base-2-91")?.id ?? list[0]?.id ?? "";
   }
 
   async function refreshSkins(): Promise<void> {
@@ -215,6 +216,8 @@
     durationSecs: number | null;
     volume: number;
     underrunFrames: number;
+    /** Of underrunFrames, frames lost while a remote stream was active. */
+    underrunRemoteFrames: number;
     bitrateKbps: number | null;
     sampleRateHz: number | null;
     channels: number | null;
@@ -225,11 +228,19 @@
     durationSecs: null,
     volume: 1,
     underrunFrames: 0,
+    underrunRemoteFrames: 0,
     bitrateKbps: null,
     sampleRateHz: null,
     channels: null,
   });
   let seeking = $state<number | null>(null);
+
+  /** "underruns: N" plus the remote split when network stalls contributed. */
+  function underrunLabel(frames: number, remote: number): string {
+    return remote > 0
+      ? `underruns: ${frames} · ${remote} remote`
+      : `underruns: ${frames}`;
+  }
 
   // The 10 Hz audio poll runs only while the DEV tab is visible (#16).
   $effect(() => {
@@ -283,9 +294,19 @@
   );
 
   // ── window sizing: natural panel size × global scale ────────────────────
-  // The inner .win keeps the unscaled layout (so the library's virtualized
-  // math and 640px panes stay intact); the outer .scaler reserves the scaled
-  // box and the OS window matches it.
+  // The .win root keeps its natural layout (so the library's virtualized
+  // math and 640px panes stay intact) and uses CSS `zoom` rather than a
+  // `transform`. A transform rasterizes text at 1× and then scales the
+  // bitmap, which makes the Silkscreen chrome (title strip, tabs, EQ panel)
+  // soft and uneven at 1.25×/1.5×; `zoom` re-lays-out and rasterizes at the
+  // real size, so text is scale-native. Engines (and WebKit configurations
+  // — `GetBoundingClientRectZoomedEnabled` is a platform/embedder-dependent
+  // preference whose CSS-spec default is zoomed) disagree on whether
+  // `getBoundingClientRect` includes an ancestor's CSS `zoom`, so a 100px
+  // ruler inside the root measures the convention at runtime rather than
+  // assuming one. Getting it wrong sizes the OS window to the unscaled
+  // width and truncates the content (observed on macOS at 1.5×). The probe
+  // result is logged once per scale change for field diagnosis.
 
   let root: HTMLElement | null = $state(null);
   // Start at the window's default natural size (640px pane + 12px padding)
@@ -298,9 +319,30 @@
   $effect(() => {
     const el = root;
     if (!el) return;
+    // Do this engine's box metrics include the ancestor `zoom`? A hidden
+    // 100 px ruler inside the zoomed root answers it empirically (Chromium:
+    // ~100·scale, WebKit: 100). The probe is removed synchronously and is
+    // absolutely positioned, so the observer below never sees it.
+    const zoomInclusive = (() => {
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:absolute;left:0;top:0;width:100px;height:0;visibility:hidden;pointer-events:none;";
+      el.appendChild(probe);
+      const width = probe.getBoundingClientRect().width;
+      probe.remove();
+      // The 0.5px threshold is tied to the 100px ruler: the smallest non-1
+      // preset (1.25) gives 125px, far clear of it.
+      const inclusive = width > 100.5;
+      console.info(
+        `[navinamp] library zoom metrics: ${inclusive ? "include" : "exclude"} ` +
+          `zoom (probe ${width.toFixed(1)}px at scale ${scale})`,
+      );
+      return inclusive;
+    })();
     const measure = () => {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
+      const rect = el.getBoundingClientRect();
+      const w = Math.round(zoomInclusive ? rect.width / scale : rect.width);
+      const h = Math.round(zoomInclusive ? rect.height / scale : rect.height);
       if (w > 0 && h > 0) {
         naturalW = w;
         naturalH = h;
@@ -320,8 +362,7 @@
 
 </script>
 
-<div class="scaler" style="width:{scaledW}px; height:{scaledH}px;">
-  <div class="win" bind:this={root} style="transform:scale({scale});">
+<div class="win" bind:this={root} style="zoom:{scale};">
     <TitleStrip title="MEDIA LIBRARY" note={queueNote} />
 
     <TabStrip tabs={TABS} active={tab} onselect={(id) => (tab = id as TabId)} />
@@ -332,6 +373,7 @@
       <MediaLibrary
         {scale}
         onenqueue={(metas) => queueIntent({ type: "addFromLibrary", metas })}
+        onplaynext={(metas) => queuePlayNext(metas)}
         onplaynow={(metas) => queuePlayNow(metas)}
         onreplace={(metas) => queueReplaceAll(metas)}
         onlog={logLine} />
@@ -349,7 +391,7 @@
           <span class="skinlabel">skin</span>
           <select bind:value={skinChoice} aria-label="skin" onchange={() => (skinNote = null)}>
             {#each skins as s (s.id)}
-              <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" ? " (built-in)" : ""}</option>
+              <option value={s.id}>{skinLabel(s.id)}{s.id === "fallback" || s.id === "base-2-91" ? " (built-in)" : ""}</option>
             {/each}
           </select>
           <button onclick={() => void applySkin()} disabled={skinBusy || skins.length === 0}>
@@ -482,7 +524,9 @@
               </span>
             {/if}
             {#if devState.underrunFrames > 0}
-              <span class="warn">(underruns: {devState.underrunFrames})</span>
+              <span class="warn">
+                ({underrunLabel(devState.underrunFrames, devState.underrunRemoteFrames)})
+              </span>
             {/if}
           </p>
 
@@ -497,20 +541,12 @@
       </section>
     {/if}
 
-  </div>
-  <!-- Outside the scaled surface: the tour's spotlight uses screen-space
-       DOMRect coordinates and would be scaled/misplaced inside it. -->
-  <TourHost onensurelibrary={() => (tab = "library")} />
 </div>
+<!-- Outside the zoomed root: the tour's spotlight uses screen-space
+     DOMRect coordinates and would be scaled/misplaced inside it. -->
+<TourHost onensurelibrary={() => (tab = "library")} />
 
 <style>
-  /* Outer box reserves the scaled size; the inner .win keeps its natural
-     layout and is transformed from the top-left. */
-  .scaler {
-    position: relative;
-    overflow: hidden;
-    background: #000;
-  }
 
   .win {
     width: max-content; /* widest pane (640px) + padding */
@@ -524,7 +560,6 @@
     color: #c8c8c8;
     font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     user-select: none;
-    transform-origin: top left;
   }
 
   /* One pane per tab; the OS window is sized to the active pane's natural

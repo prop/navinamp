@@ -35,10 +35,12 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use navinamp_library::{Library, RemoteAlbum, RemoteTrack, Track, remote_path, repair_tag_text};
+use navinamp_library::{
+    Library, RemoteAlbum, RemoteTrack, Track, album_key, remote_path, repair_tag_text,
+};
 use navinamp_subsonic::{
     AlbumDetail, AlbumSummary, MusicFolder, PlaylistSummary, SongSummary, StreamFormat,
-    SubsonicClient,
+    SubsonicClient, join_record_labels,
 };
 
 use crate::library::{LibraryState, db_file, with_library};
@@ -1025,6 +1027,15 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
             let title = repair_tag_text(&song.title).into_owned();
             let artist = repair_tag_text(&song.artist).into_owned();
             let album = repair_tag_text(&song.album).into_owned();
+            // Same fallback chain as `map_song`: the server's album artist
+            // (`displayAlbumArtist`) when reported (compilations → "Various
+            // Artists"), else the track artist. A playlist row must not
+            // disagree with its synced row.
+            let album_artist = if song.display_album_artist.is_empty() {
+                artist.clone()
+            } else {
+                repair_tag_text(&song.display_album_artist).into_owned()
+            };
             let genre = song
                 .genre
                 .as_deref()
@@ -1040,9 +1051,9 @@ fn playlist_rows(songs: &[SongSummary], server_id: &str) -> Vec<Track> {
                     .unwrap_or(0),
                 title,
                 artist: artist.clone(),
-                album_artist: artist,
+                album_key: album_key(&album_artist, &artist, &album),
+                album_artist,
                 album,
-                album_key: String::new(),
                 genre,
                 year: (song.year > 0).then_some(i64::from(song.year)),
                 track_no: (song.track_no > 0).then_some(i64::from(song.track_no)),
@@ -1656,7 +1667,9 @@ async fn sync_album_index(
                 } else {
                     detail.songs.len() as u64
                 };
-                album_updates.push(remote_album_from_summary(server_id, &album));
+                let mut update = remote_album_from_summary(server_id, &album);
+                apply_album_detail(&mut update, &detail);
+                album_updates.push(update);
             }
             Some(Err(e)) => {
                 report.errors.push(format!(
@@ -1761,6 +1774,9 @@ async fn sync_by_artist(job: SyncJob<'_>, report: &mut SyncReport) -> Result<(),
                         tracks.push(map_song(&detail, song, server_id));
                     }
                     scanned_tracks += detail.songs.len() as u64;
+                    let mut update = remote_album_from_summary(server_id, &album);
+                    apply_album_detail(&mut update, &detail);
+                    album_updates.push(update);
                 }
                 Err(e) => report.errors.push(format!(
                     "album `{}`: {}",
@@ -1809,6 +1825,13 @@ fn album_matches(stored: Option<&RemoteAlbum>, album: &AlbumSummary, known: &[St
         && stored.year == year
         && stored.cover_art_id == album.cover_art_id
         && stored.created == album.created
+        // Labels are stored exactly as the cheap album index reports them
+        // (never overwritten from getAlbum), so this term converges: a label
+        // appearing or disappearing forces one detail fetch, which then
+        // stores the summary value and matches on the next rescan. Navidrome
+        // maps getAlbumList2 through the same buildAlbumID3 as getAlbum, so
+        // the index carries the same labels.
+        && stored.label == join_record_labels(&album.record_labels)
         && known.len() as u32 == album.song_count
 }
 
@@ -1823,6 +1846,18 @@ fn remote_album_from_summary(server_id: &str, album: &AlbumSummary) -> RemoteAlb
         year: (album.year > 0).then_some(i64::from(album.year)),
         cover_art_id: album.cover_art_id.clone(),
         created: album.created.clone(),
+        label: join_record_labels(&album.record_labels),
+        catalog_num: album.catalog_number.clone(),
+    }
+}
+
+/// Fill the catalog number from the `getAlbum` detail when present. The
+/// label deliberately stays summary-sourced: `album_matches` compares the
+/// stored label against the album index, and a detail override could never
+/// converge when the two sources disagree.
+fn apply_album_detail(album: &mut RemoteAlbum, detail: &AlbumDetail) {
+    if detail.catalog_number.is_some() {
+        album.catalog_num = detail.catalog_number.clone();
     }
 }
 
@@ -1856,7 +1891,13 @@ fn flush_remote_batch(
 /// per-song tags; `codec` from the suffix, duration from `song.duration`.
 fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteTrack {
     let album_artist = if album.artist.is_empty() {
-        song.artist.clone()
+        // Same fallback chain as `playlist_rows`: the child's display album
+        // artist when the album summary lacks one, else the track artist.
+        if song.display_album_artist.is_empty() {
+            song.artist.clone()
+        } else {
+            song.display_album_artist.clone()
+        }
     } else {
         album.artist.clone()
     };
@@ -2147,6 +2188,7 @@ mod tests {
             artist_id: "ar-1".into(),
             album: "Selected Ambient Works".into(),
             album_id: "al-1".into(),
+            display_album_artist: String::new(),
             track_no: 1,
             disc_no: 0,
             year: 1992,
@@ -2186,6 +2228,35 @@ mod tests {
     }
 
     #[test]
+    fn playlist_rows_use_the_album_artist_for_compilations() {
+        // A compilation track: per-track artist, album artist on the album.
+        let mut compilation = song("c");
+        compilation.artist = "DJ Promo".into();
+        compilation.album = "Thunderdome".into();
+        compilation.display_album_artist = "Various Artists".into();
+        let rows = playlist_rows(&[compilation], "p1");
+        assert_eq!(rows[0].artist, "DJ Promo");
+        assert_eq!(rows[0].album_artist, "Various Artists");
+        assert_eq!(
+            rows[0].album_key,
+            album_key("Various Artists", "DJ Promo", "Thunderdome"),
+            "playlist rows must derive the same album key as synced rows"
+        );
+    }
+
+    #[test]
+    fn playlist_rows_fall_back_to_the_track_artist() {
+        // Servers without `albumArtist` (empty) keep the old fallback, but the
+        // album key is still derived instead of left blank.
+        let rows = playlist_rows(&[song("a")], "p1");
+        assert_eq!(rows[0].album_artist, "Aphex Twin");
+        assert_eq!(
+            rows[0].album_key,
+            album_key("Aphex Twin", "Aphex Twin", "Selected Ambient Works")
+        );
+    }
+
+    #[test]
     fn remote_text_is_charset_repaired() {
         // "Песня" / "Альбом" encoded as CP1251 and read through Latin-1.
         let mut s = song("a");
@@ -2201,6 +2272,8 @@ mod tests {
             song_count: 1,
             duration_secs: 293,
             cover_art_id: Some("al-1".into()),
+            record_labels: Vec::new(),
+            catalog_number: None,
             songs: vec![],
         };
 
@@ -2210,9 +2283,11 @@ mod tests {
         assert_eq!(row.album_artist, "Исполнитель");
         assert_eq!(row.artist, "Aphex Twin", "ASCII tags stay untouched");
 
+        s.display_album_artist = "Èñïîëíèòåëü".into();
         let rows = playlist_rows(&[s], "p1");
         assert_eq!(rows[0].title, "Песня");
         assert_eq!(rows[0].album, "Альбом");
+        assert_eq!(rows[0].album_artist, "Исполнитель");
     }
 
     fn album_summary() -> AlbumSummary {
@@ -2226,6 +2301,8 @@ mod tests {
             cover_art_id: Some("al-1".into()),
             year: 1993,
             created: Some("2024-01-01T00:00:00Z".into()),
+            record_labels: Vec::new(),
+            catalog_number: None,
         }
     }
 
@@ -2240,6 +2317,28 @@ mod tests {
         let mut changed = summary.clone();
         changed.name = "Debut (Deluxe)".into();
         assert!(!album_matches(Some(&stored), &changed, &known));
+
+        // Labels ride on the album index: a label appearing (backfill) or
+        // changing forces one detail fetch, then the new value is stored.
+        let mut labeled = summary.clone();
+        labeled.record_labels = vec![navinamp_subsonic::RecordLabel {
+            name: "Bloody Fist Records".into(),
+        }];
+        assert!(!album_matches(Some(&stored), &labeled, &known));
+        let stored_labeled = remote_album_from_summary("p1", &labeled);
+        assert_eq!(
+            stored_labeled.label.as_deref(),
+            Some("Bloody Fist Records"),
+            "fingerprint rows keep the joined label"
+        );
+        assert!(album_matches(Some(&stored_labeled), &labeled, &known));
+
+        // A label removed server-side costs one fetch, then converges to
+        // None — the stored label is always the summary's value, never an
+        // override from getAlbum, so this term can never churn.
+        assert!(!album_matches(Some(&stored_labeled), &summary, &known));
+        let stored_after_removal = remote_album_from_summary("p1", &summary);
+        assert!(album_matches(Some(&stored_after_removal), &summary, &known));
 
         // A partial/legacy track set must be re-fetched even if metadata
         // matches: pruning needs every remote id for the album.

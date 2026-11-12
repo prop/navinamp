@@ -19,7 +19,7 @@
    * garbage came from).
    */
   import type { ResolvedObject } from "../../lib/skin/resolver";
-  import type { PlaybackStatus } from "../../lib/skin/wasabi";
+  import { imageRenderingFor, type PlaybackStatus } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
@@ -27,9 +27,11 @@
     status: PlaybackStatus;
     /** Source channel count from audio_state (null when unknown/stopped). */
     channels?: number | null;
+    /** Global UI scale; integer values rasterize vector payloads nearest-neighbour. */
+    scale?: number;
   }
 
-  let { obj, images, status, channels = null }: Props = $props();
+  let { obj, images, status, channels = null, scale = 1 }: Props = $props();
 
   const o = $derived(obj.object.kind === "status" ? obj.object : null);
   const params = $derived(o?.params ?? {});
@@ -82,7 +84,7 @@
   <img
     class="st"
     src={url}
-    style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 9}px; height:{obj.h ?? 9}px;"
+    style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 9}px; height:{obj.h ?? 9}px;{imageRenderingFor(url, scale)}"
     alt=""
     aria-hidden="true"
     title={label}

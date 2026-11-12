@@ -20,6 +20,7 @@
   import { onDestroy } from "svelte";
 
   import type { ResolvedObject } from "../../lib/skin/resolver";
+  import { imageRenderingFor } from "../../lib/skin/wasabi";
 
   interface Props {
     obj: ResolvedObject;
@@ -33,6 +34,8 @@
     onholdstart?: (action: string) => boolean;
     /** End a hold that actually started. */
     onholdend?: (action: string) => void;
+    /** Global UI scale; integer values rasterize vector payloads nearest-neighbour. */
+    scale?: number;
   }
 
   let {
@@ -43,6 +46,7 @@
     holdable = false,
     onholdstart,
     onholdend,
+    scale = 1,
   }: Props = $props();
 
   /** Delay before a press becomes a hold instead of a click. */
@@ -165,7 +169,7 @@
     tabindex="0"
     style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{image
       ? `background-image:url('${image}');`
-      : ''}"
+      : ''}{imageRenderingFor(image, scale)}"
     title={o.tooltip ?? o.id ?? undefined}
     onpointerenter={() => (hover = true)}
     onpointerleave={() => (hover = false)}

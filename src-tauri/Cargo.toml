@@ -21,6 +21,7 @@ navinamp-audio = { path = "../crates/navinamp-audio" }
 navinamp-library = { path = "../crates/navinamp-library" }
 navinamp-llm = { path = "../crates/navinamp-llm" }
 navinamp-subsonic = { path = "../crates/navinamp-subsonic" }
+any_ascii = "0.3"
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 # The default features select notify-rust's macOS backend

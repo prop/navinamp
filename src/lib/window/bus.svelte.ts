@@ -34,7 +34,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { IS_PLAYER, LABEL, PLAYER_LABEL, type WindowLabel } from "./identity";
-import { persistQueue, queue } from "../player/queue.svelte";
+import { persistPlayback, persistQueue, queue, queueReady } from "../player/queue.svelte";
 import type { QueueItem, QueueItemMeta, RepeatMode } from "../player/queue.svelte";
 import {
   DEFAULT_SKIN_THEME,
@@ -172,12 +172,16 @@ export type QueueIntent =
   | { type: "add"; paths: string[] }
   | { type: "addUrl"; meta: QueueItemMeta }
   | { type: "addFromLibrary"; metas: QueueItemMeta[] }
+  /** Enqueue right after the current item ("play next"). */
+  | { type: "addFromLibraryNext"; metas: QueueItemMeta[] }
   /** Append and start the first appended item, resolved by the player. */
   | { type: "addFromLibraryAndPlay"; metas: QueueItemMeta[] }
   | { type: "replaceAll"; metas: QueueItemMeta[] }
   | { type: "addNext"; path: string; index?: number }
   | { type: "remove"; index: number }
   | { type: "move"; from: number; to: number }
+  /** Move `index` to just after the current item ("play next"). */
+  | { type: "moveNext"; index: number }
   | { type: "clear" }
   | { type: "next" }
   | { type: "prev" }
@@ -218,6 +222,9 @@ export function applyQueueIntent(intent: QueueIntent): void {
     case "addFromLibrary":
       queue.addFromLibrary(intent.metas);
       break;
+    case "addFromLibraryNext":
+      queue.addNextFromLibrary(intent.metas);
+      break;
     case "addFromLibraryAndPlay": {
       const first = queue.addFromLibrary(intent.metas);
       queue.play(first);
@@ -235,6 +242,9 @@ export function applyQueueIntent(intent: QueueIntent): void {
       break;
     case "move":
       queue.move(intent.from, intent.to);
+      break;
+    case "moveNext":
+      queue.moveNext(intent.index);
       break;
     case "clear":
       queue.clear();
@@ -284,6 +294,12 @@ export function queuePlayNow(metas: QueueItemMeta[]): void {
 export function queueReplaceAll(metas: QueueItemMeta[]): void {
   if (metas.length === 0) return;
   queueIntent({ type: "replaceAll", metas });
+}
+
+/** "Play next" from a library view: enqueue right after the current item. */
+export function queuePlayNext(metas: QueueItemMeta[]): void {
+  if (metas.length === 0) return;
+  queueIntent({ type: "addFromLibraryNext", metas });
 }
 
 // ── reactive stores ────────────────────────────────────────────────────────
@@ -512,7 +528,11 @@ export function initWindowBus(): void {
     // tens of thousands of items and the effect deep-reads the whole queue,
     // so a burst of mutations must not serialize + broadcast it repeatedly.
     // 150ms is below perception; the snapshot of the latest run wins.
+    // Wait for restoreQueue(): its async disk load completes after this
+    // module graph initializes, and saving the empty state first would
+    // overwrite the file we are about to restore.
     $effect(() => {
+      if (!queueReady.value) return;
       const snapshot = readSnapshot();
       const timer = setTimeout(() => {
         void emit("queue-state", { from: "main", snapshot });
@@ -522,10 +542,14 @@ export function initWindowBus(): void {
     });
     // Best-effort flush if the player window closes inside the debounce.
     // `beforeunload` is not reliable in the Tauri webview; the close path is.
-    window.addEventListener("beforeunload", () => persistQueue(readSnapshot()));
+    window.addEventListener("beforeunload", () => {
+      persistQueue(readSnapshot());
+      persistPlayback();
+    });
     void getCurrentWindow()
       .onCloseRequested(() => {
         persistQueue(readSnapshot());
+        persistPlayback();
       })
       .catch(() => undefined);
     return;

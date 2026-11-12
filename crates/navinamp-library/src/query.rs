@@ -199,14 +199,22 @@ pub(super) fn albums(conn: &Connection, source: Option<&str>) -> rusqlite::Resul
                ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1),
              (SELECT t2.server_id FROM tracks t2
                WHERE t2.album_key = t.album_key AND t2.art_id IS NOT NULL
-               ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1)
+               ORDER BY t2.disc_no, t2.track_no, t2.path LIMIT 1),
+             -- One representative pair, so a label and its catalog number
+             -- always come from the same remote_albums row. MAX prefers a
+             -- real pair over the empty marker produced by a missing join.
+             MAX(COALESCE(ra.label, '') || char(31) || COALESCE(ra.catalog_num, ''))
+                                                                AS label_pair
          FROM tracks t
+         LEFT JOIN remote_albums ra
+             ON ra.server_id = t.server_id AND ra.album_id = t.remote_album_id
          WHERE ?1 IS NULL OR t.source = ?1
          GROUP BY t.album_key
          ORDER BY artist, year, name",
     )?;
     let albums = stmt
         .query_map([source], |row| {
+            let (label, catalog_number) = split_label_pair(row.get(9)?);
             Ok(Album {
                 album_key: row.get(0)?,
                 name: row.get(1)?,
@@ -217,10 +225,24 @@ pub(super) fn albums(conn: &Connection, source: Option<&str>) -> rusqlite::Resul
                 art_id: row.get(6)?,
                 art_source: row.get(7)?,
                 art_server_id: row.get(8)?,
+                label,
+                catalog_number,
             })
         })?
         .collect::<Result<_, _>>()?;
     Ok(albums)
+}
+
+/// Split the `label␟catalog` pair selected by `albums()` (char(31) separator).
+/// Empty halves become `None`, so missing metadata never renders as blank.
+fn split_label_pair(pair: Option<String>) -> (Option<String>, Option<String>) {
+    let Some(pair) = pair else {
+        return (None, None);
+    };
+    let mut parts = pair.splitn(2, '\u{1f}');
+    let label = parts.next().filter(|s| !s.is_empty()).map(str::to_owned);
+    let catalog = parts.next().filter(|s| !s.is_empty()).map(str::to_owned);
+    (label, catalog)
 }
 
 /// Distinct track artists, optionally scoped to one source, sorted

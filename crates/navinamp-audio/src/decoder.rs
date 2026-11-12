@@ -59,7 +59,22 @@ impl PcmSource {
         let source_len = file.metadata().ok().map(|m| m.len());
         let replaygain_gain = replaygain::scan(&mut file);
         file.rewind().map_err(AudioError::Io)?;
-        Self::probe(Box::new(file), replaygain_gain, source_len)
+
+        // Tolerant RIFF/WAVE repair: patch the header lengths that
+        // symphonia's strict chunk walker rejects (RIFF/data sizes of 0 or
+        // under-reported, as written by streaming recorders). Good files
+        // produce no patches and are probed as plain files.
+        let source: Box<dyn MediaSource> = match crate::wav_repair::scan(&mut file) {
+            Some(repair) if !repair.patches.is_empty() => {
+                Box::new(crate::wav_repair::PatchedSource::new(file, repair.patches))
+            }
+            _ => {
+                file.rewind().map_err(AudioError::Io)?;
+                Box::new(file)
+            }
+        };
+
+        Self::probe(source, replaygain_gain, source_len)
     }
 
     /// Open and probe a remote HTTP(S) media stream by content. The
@@ -350,6 +365,103 @@ fn average_kbps(bytes: u64, duration_secs: f64) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::average_kbps;
+
+    /// Minimal 8 kHz mono PCM16 WAV (RIFF + fmt + data, no extras) as bytes.
+    fn wav_bytes(interleaved: &[i16]) -> Vec<u8> {
+        let data_len = (interleaved.len() * 2) as u32;
+        let mut v = Vec::with_capacity(44 + data_len as usize);
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(36 + data_len).to_le_bytes());
+        v.extend_from_slice(b"WAVE");
+        v.extend_from_slice(b"fmt ");
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        v.extend_from_slice(&1u16.to_le_bytes()); // mono
+        v.extend_from_slice(&8000u32.to_le_bytes());
+        v.extend_from_slice(&16000u32.to_le_bytes()); // byte rate
+        v.extend_from_slice(&2u16.to_le_bytes()); // block align
+        v.extend_from_slice(&16u16.to_le_bytes()); // bits
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_len.to_le_bytes());
+        for s in interleaved {
+            v.extend_from_slice(&s.to_le_bytes());
+        }
+        v
+    }
+
+    fn write_temp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "navinamp-audio-wavfix-{}-{name}.wav",
+            std::process::id()
+        ));
+        std::fs::write(&p, bytes).expect("write fixture");
+        p
+    }
+
+    fn decode_all(path: &std::path::Path) -> Vec<f32> {
+        let mut src = super::PcmSource::open(path).expect("open + probe + repair");
+        let mut out = Vec::new();
+        loop {
+            let more = src.next_block(&mut out).expect("decode");
+            if !more {
+                break;
+            }
+        }
+        out
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        std::fs::remove_file(path).ok();
+    }
+
+    /// The ramp fixture: i16 samples and the f32 values symphonia yields
+    /// for them (i16/32768 — exact, 32768 is a power of two).
+    fn ramp(frames: usize) -> (Vec<i16>, Vec<f32>) {
+        let samples: Vec<i16> = (0..frames as i16).map(|n| -4000 + (n % 80) * 100).collect();
+        let expected = samples.iter().map(|s| f32::from(*s) / 32768.0).collect();
+        (samples, expected)
+    }
+
+    #[test]
+    fn healthy_wav_decodes_as_a_control() {
+        let (samples, expected) = ramp(400);
+        let path = write_temp("healthy.wav", &wav_bytes(&samples));
+        let decoded = decode_all(&path);
+        assert_eq!(decoded.len(), expected.len());
+        for (got, want) in decoded.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn wav_with_zero_riff_len_still_decodes() {
+        let (samples, expected) = ramp(400);
+        let mut bytes = wav_bytes(&samples);
+        bytes[4..8].copy_from_slice(&0u32.to_le_bytes()); // broken RIFF size
+        let path = write_temp("zero-riff-len.wav", &bytes);
+        let decoded = decode_all(&path);
+        assert_eq!(decoded.len(), expected.len());
+        for (got, want) in decoded.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn wav_with_zero_data_len_still_decodes() {
+        let (samples, expected) = ramp(400);
+        let mut bytes = wav_bytes(&samples);
+        bytes[40..44].copy_from_slice(&0u32.to_le_bytes()); // broken data size
+        let path = write_temp("zero-data-len.wav", &bytes);
+        let decoded = decode_all(&path);
+        assert_eq!(decoded.len(), expected.len());
+        for (got, want) in decoded.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+        }
+        cleanup(&path);
+    }
 
     #[test]
     fn average_kbps_computes_classic_readout() {
