@@ -536,17 +536,24 @@ fn main_window(out: &mut Builder, viscolors: &VisColors) {
     // fractional UI scales (1.25×/1.5×). At 1× it is a pixel-identical
     // overlay of the band underneath.
     //
-    // The crop height is clamped to the decoded bitmap: `bitmap()` does not
-    // validate rects (payloads would drop an out-of-range crop with a
-    // per-load CropOutOfRange warning), and a skin with a sub-14-row
-    // main.bmp should simply get a shorter band — or none at all.
-    let band_h = crate::images::file_dimensions(out.archive, "main.bmp")
-        .map(|(_, height)| height.min(14))
-        .filter(|height| *height > 0);
-    if let Some(height) = band_h
-        && let Some(band) = out.bitmap("main.titlebar", "main.bmp", 0, 0, WINDOW_W as u32, height)
+    // The crop is clamped to the decoded bitmap on BOTH axes: `bitmap()`
+    // does not validate rects (payloads would drop an out-of-range crop with
+    // a per-load CropOutOfRange warning), and a skin with a narrower or
+    // shorter main.bmp should simply get a smaller band — or none at all.
+    let band_size = crate::images::file_dimensions(out.archive, "main.bmp")
+        .map(|(width, height)| (width.min(WINDOW_W as u32), height.min(14)))
+        .filter(|(width, height)| *width > 0 && *height > 0);
+    if let Some((width, height)) = band_size
+        && let Some(band) = out.bitmap("main.titlebar", "main.bmp", 0, 0, width, height)
     {
-        objects.push(layer("main.titlebar", band, 0, 0, WINDOW_W, height as i32));
+        objects.push(layer(
+            "main.titlebar",
+            band,
+            0,
+            0,
+            width as i32,
+            height as i32,
+        ));
     }
 
     // Songticker + time-display fonts. numbers.bmp is the modern form;
