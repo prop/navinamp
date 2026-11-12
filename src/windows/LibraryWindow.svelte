@@ -216,6 +216,8 @@
     durationSecs: number | null;
     volume: number;
     underrunFrames: number;
+    /** Of underrunFrames, frames lost while a remote stream was active. */
+    underrunRemoteFrames: number;
     bitrateKbps: number | null;
     sampleRateHz: number | null;
     channels: number | null;
@@ -226,11 +228,19 @@
     durationSecs: null,
     volume: 1,
     underrunFrames: 0,
+    underrunRemoteFrames: 0,
     bitrateKbps: null,
     sampleRateHz: null,
     channels: null,
   });
   let seeking = $state<number | null>(null);
+
+  /** "underruns: N" plus the remote split when network stalls contributed. */
+  function underrunLabel(frames: number, remote: number): string {
+    return remote > 0
+      ? `underruns: ${frames} · ${remote} remote`
+      : `underruns: ${frames}`;
+  }
 
   // The 10 Hz audio poll runs only while the DEV tab is visible (#16).
   $effect(() => {
@@ -484,7 +494,9 @@
               </span>
             {/if}
             {#if devState.underrunFrames > 0}
-              <span class="warn">(underruns: {devState.underrunFrames})</span>
+              <span class="warn">
+                ({underrunLabel(devState.underrunFrames, devState.underrunRemoteFrames)})
+              </span>
             {/if}
           </p>
 
