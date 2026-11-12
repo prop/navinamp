@@ -59,22 +59,25 @@ export function formatWarning(warning: Warning): string {
 }
 
 /**
- * Inline CSS override for image payloads. Bitmap payloads inherit the
- * surface's `image-rendering: pixelated` (crisp integer upscaling).
+ * Inline CSS override for image payloads. The UI scale decides the sampling:
  *
- * Vector payloads (`data:image/svg…`) are scale-dependent:
- *  - at integer scales, force `pixelated` too: exact-rect geometry rasterized
- *    at an integer factor is identical to nearest-neighbour, and forcing it
- *    guarantees the 1×/2× look stays bit-identical to the old bitmap pipeline
- *    even if the engine rasterizes the SVG at intrinsic size instead of at
- *    the displayed size;
- *  - at fractional scales, `auto` lets the engine rasterize at display size,
- *    which is the anti-aliased smoothness the vector payloads exist for.
+ *  - at integer scales, force `pixelated`: the 1×/2× mapping is exact
+ *    nearest-neighbour, and forcing it guarantees 2× stays bit-identical
+ *    to the classic double-size pipeline even if the engine rasterizes an
+ *    SVG at intrinsic size instead of at the displayed size;
+ *  - at fractional scales, `auto` resamples smoothly on current
+ *    Chromium/WebKit (the spec leaves the choice to the UA). This
+ *    applies to RASTER payloads too, not just vector ones: nearest-neighbour
+ *    at 1.25/1.5 turns a classic skin's 2×2 dither into visible 1px stripes
+ *    (the "trail" on dithered seek bars and backgrounds) and makes edges
+ *    uneven. Fractional scales therefore soften the bitmap art slightly by
+ *    design.
  *
  * Engine note (review finding): Chromium rasterizes SVG at display size
- * already and IGNORES `image-rendering` on SVG documents — this override is
- * a measured no-op there. It targets WebKit (WKWebView, the shipping macOS
- * build), whose intrinsic-size rasterization path it corrects.
+ * already and IGNORES `image-rendering` on SVG documents — the vector part
+ * of this override is a measured no-op there. It targets WebKit (WKWebView,
+ * the shipping macOS build), whose intrinsic-size rasterization path it
+ * corrects.
  *
  * `Number.isInteger(scale)` is only meaningful because `normalizeUiScale`
  * (lib/window/bus.svelte.ts) snaps values to the UI_SCALE_PRESETS list —
@@ -87,6 +90,6 @@ export function formatWarning(warning: Warning): string {
  * emitting raw percent-encoded SVG URLs without re-escaping those sites.
  */
 export function imageRenderingFor(url: string | undefined, scale: number): string {
-  if (!url?.startsWith("data:image/svg")) return "";
+  if (!url) return "";
   return Number.isInteger(scale) ? "image-rendering:pixelated;" : "image-rendering:auto;";
 }
