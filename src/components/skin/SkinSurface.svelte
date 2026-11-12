@@ -247,6 +247,7 @@
           {bitrateKbps}
           {sampleRateHz}
           images={layout.images}
+          {scale}
         />
       {:else if obj.object.kind === "status"}
         <SkinStatus {obj} images={layout.images} {status} {channels} {scale} />

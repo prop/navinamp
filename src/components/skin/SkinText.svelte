@@ -51,10 +51,20 @@
     sampleRateHz?: number | null;
     /** bitmap id -> data URL (the layout's image table). */
     images?: Record<string, string>;
+    /** Global UI scale applied to the containing surface (CSS transform). */
+    scale?: number;
   }
 
-  let { obj, status, position, ticker, bitrateKbps = null, sampleRateHz = null, images }: Props =
-    $props();
+  let {
+    obj,
+    status,
+    position,
+    ticker,
+    bitrateKbps = null,
+    sampleRateHz = null,
+    images,
+    scale = 1,
+  }: Props = $props();
 
   const o = $derived(obj.object.kind === "text" ? obj.object : null);
   const params = $derived(o?.params ?? {});
@@ -290,6 +300,35 @@
 
   let canvasEl = $state<HTMLCanvasElement | null>(null);
 
+  // Final device pixels per skin pixel in the transformed surface. Tracked
+  // through state so moving the window to another display re-renders.
+  let dpr = $state(typeof window === "undefined" ? 1 : window.devicePixelRatio || 1);
+  $effect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    const update = () => (dpr = window.devicePixelRatio || 1);
+    mql.addEventListener("change", update);
+    return () => mql.removeEventListener("change", update);
+  });
+
+  /**
+   * Glyph canvases are rendered at an integer supersample of the final
+   * device scale. A 1x canvas under `transform: scale(1.5)` is scaled as a
+   * bitmap: nearest-neighbour turns 1px strokes into a 1/2 px pattern and
+   * each glyph picks up a different phase — the "awkward" ticker font at
+   * fractional UI scales. At an exact integer ratio the backing store maps
+   * 1:1 and stays pixelated; at a fractional ratio the compositor downscales
+   * the supersampled canvas smoothly, keeping strokes even. Mirrors the
+   * vector-payload policy in `imageRenderingFor`.
+   */
+  const glyphRatio = $derived(Math.max(1, scale * dpr));
+  const glyphBacking = $derived(Math.max(1, Math.ceil(glyphRatio - 1e-6)));
+  const glyphRendering = $derived(
+    Math.abs(glyphBacking - glyphRatio) < 1e-6 ? "pixelated" : "auto",
+  );
+  const canvasW = $derived(Math.max(1, Math.round((obj.w ?? 0) * glyphBacking)));
+  const canvasH = $derived(Math.max(1, Math.round((obj.h ?? 0) * glyphBacking)));
+
   // Classic marquee: one char cell per 220 ms tick (Webamp's SEPARATOR).
   const TICKER_STEP_MS = 220;
   const TICKER_SEPARATOR = "  ***  ";
@@ -300,10 +339,21 @@
     if (!f || !el || !o) return;
     const w = obj.w ?? 0;
     const h = obj.h ?? 0;
+    if (w <= 0 || h <= 0) return;
     const text = glyphText; // redraw when the live value changes
+
+    // Backing store at the supersampled device size; the CSS box stays the
+    // skin rect (the surface transform supplies the UI scale). Drawing
+    // below therefore stays in skin pixels.
+    const backing = glyphBacking;
+    const bw = Math.max(1, Math.round(w * backing));
+    const bh = Math.max(1, Math.round(h * backing));
+    if (el.width !== bw) el.width = bw;
+    if (el.height !== bh) el.height = bh;
 
     const ctx = el.getContext("2d");
     if (!ctx) return;
+    ctx.setTransform(bw / w, 0, 0, bh / h, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
     // Time display: fixed digit cells; hidden while stopped, blink paused.
@@ -433,9 +483,9 @@
       class="glyphs"
       class:time={o.display === "time"}
       class:blink={o.display === "time" && status === "paused"}
-      width={obj.w ?? 0}
-      height={obj.h ?? 0}
-      {style}
+      width={canvasW}
+      height={canvasH}
+      style="image-rendering:{glyphRendering};{style}"
     ></canvas>
   {:else}
     <!-- HTML fallback: renders the raw `content`, deliberately NOT
