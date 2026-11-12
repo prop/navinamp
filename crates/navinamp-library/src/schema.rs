@@ -45,6 +45,16 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // albums whose fingerprint is unchanged without re-fetching them.
         conn.execute("ALTER TABLE tracks ADD COLUMN remote_album_id TEXT", [])?;
     }
+    if !has_column(conn, "remote_albums", "label")? {
+        // OpenSubsonic recordLabels, joined for display and part of the
+        // quick-rescan fingerprint (Navidrome sends them in getAlbumList2).
+        conn.execute("ALTER TABLE remote_albums ADD COLUMN label TEXT", [])?;
+    }
+    if !has_column(conn, "remote_albums", "catalog_num")? {
+        // Catalog number; no Subsonic response carries it yet, so this stays
+        // NULL until a server exposes it.
+        conn.execute("ALTER TABLE remote_albums ADD COLUMN catalog_num TEXT", [])?;
+    }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tracks_server ON tracks(server_id)",
         [],
@@ -265,6 +275,8 @@ CREATE TABLE IF NOT EXISTS remote_albums (
     year          INTEGER,
     cover_art_id  TEXT,
     created       TEXT,
+    label         TEXT,
+    catalog_num   TEXT,
     PRIMARY KEY (server_id, album_id)
 );
 

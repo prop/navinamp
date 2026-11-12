@@ -85,6 +85,12 @@ pub struct Album {
     pub art_source: Option<String>,
     /// Navidrome profile id that provided `art_id` (`None` for local art).
     pub art_server_id: Option<String>,
+    /// Record label(s) of a remote album (OpenSubsonic), joined for display.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Catalog number of a remote album (`None` for local/older servers).
+    #[serde(default)]
+    pub catalog_number: Option<String>,
 }
 
 /// Per-source counters (the library's source chips and tree counts).
@@ -257,6 +263,11 @@ pub struct RemoteAlbum {
     /// The server's `created` timestamp (ISO string), used verbatim as part
     /// of the fingerprint.
     pub created: Option<String>,
+    /// Joined OpenSubsonic record labels; part of the quick-rescan
+    /// fingerprint (the album index carries them on Navidrome 0.61+).
+    pub label: Option<String>,
+    /// Catalog number; no Subsonic field yet, kept for future servers.
+    pub catalog_num: Option<String>,
 }
 
 /// Counters from one [`crate::Library::sync_remote`] transaction. The

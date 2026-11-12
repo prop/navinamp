@@ -649,6 +649,8 @@ async fn search3_maps_hits() {
             cover_art_id: Some("al-7".into()),
             year: 0,
             created: None,
+            record_labels: Vec::new(),
+            catalog_number: None,
         }]
     );
 }

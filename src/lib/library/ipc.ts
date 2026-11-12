@@ -90,6 +90,10 @@ export interface Album {
   artSource: string | null;
   /** Navidrome profile id that provided `artId` (`null` for local art). */
   artServerId: string | null;
+  /** Record label(s) of a remote album (OpenSubsonic), joined for display. */
+  label: string | null;
+  /** Catalog number of a remote album (`null` for local/older servers). */
+  catalogNumber: string | null;
 }
 
 /** Per-source library counters (the source chips / tree). */
