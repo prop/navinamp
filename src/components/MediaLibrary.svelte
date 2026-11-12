@@ -789,6 +789,16 @@
       selection.kind === "remoteServer",
   );
 
+  /**
+   * Whether the footer/bulk actions should read counts and durations from
+   * `stats`. Search results are client-side and override the pane even when
+   * the underlying selection is a paged view, so they are not stats-backed:
+   * borrowing the stats made an empty search over ALL TRACKS read
+   * "0 tracks · 8216:46:34" (the whole library's duration), and PLAY ALL
+   * would have queued the entire library instead of the matches.
+   */
+  const statsBackedView = $derived(pagedView && searchResults == null);
+
   const displayedTotal = $derived.by(() => {
     if (searchResults != null) return searchResults.length;
     if (selection.kind === "server") return 0;
@@ -1226,7 +1236,7 @@
   });
 
   const footerText = $derived.by(() => {
-    const paged = pagedView;
+    const paged = statsBackedView;
     const n = paged ? displayedTotal : displayed.length;
     let secs = 0;
     if (paged) {
@@ -2022,9 +2032,15 @@
 
   let actionBusy = $state(false);
 
-  /** Load every row of the current paged view for an ENQUEUE/PLAY ALL. */
+  /**
+   * Rows behind a bulk action (PLAY/ENQUEUE ALL, bulk context menu): either
+   * the fully-materialized `displayed` view (search results, a loaded tree
+   * node) or every page of a stats-backed view.
+   */
   async function allRowsForAction(): Promise<Track[]> {
-    if (!pagedView) return displayed;
+    // Search results are client-side and fully materialized; act on those
+    // rather than paging the underlying stats-backed view.
+    if (!statsBackedView) return displayed;
     const total = displayedTotal;
     if (pagedRows.length >= total) return pagedRows;
     actionBusy = true;
