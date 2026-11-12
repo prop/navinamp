@@ -1,8 +1,10 @@
 <script lang="ts">
   /**
-   * `<text>`: live text objects. Two rendering paths, picked per object:
+   * `<text>`: live text objects. Two rendering paths; the smooth HTML path
+   * is the default for every skin (see `CLASSIC_BITMAP_TEXT` below) because
+   * the classic strips are the awkward part at fractional UI scales.
    *
-   *  · BITMAP GLYPHS (classic `.wsz` skins) — when the object carries
+   *  · BITMAP GLYPHS (opt-in; classic `.wsz` skins) — when the object carries
    *    `params["font"]` (a `<bitmapfont>` id) whose glyph strip was
    *    materialized as `images["{font}.image"]`, text is blitted from the
    *    strip (text.bmp/numbers.bmp) exactly like Winamp 2: opaque, crisp,
@@ -20,7 +22,7 @@
    *        from the engine's `audio_state` metadata (average kbps, source
    *        kHz); the cells stay empty when idle or when the engine does not
    *        report metadata.
-   *  · HTML TEXT (`.wal` skins / the fallback skin) — font-styled spans;
+   *  · HTML TEXT (default for all skins) — font-styled spans;
    *    the Wasabi `display` attribute decides the CONTENT and takes
    *    precedence over `params.text` — the fallback skin sets text=" " on
    *    its `display="time"` object purely as a ghost-suppressor (a dim
@@ -194,6 +196,29 @@
   /** What the glyph path draws: padded time, otherwise the shared content. */
   const glyphContent = $derived((o?.display === "time" ? glyphTime : content));
 
+  /** Classic normal-mode time: digits sit at the strip's fixed cell offsets. */
+  const classicNumberTime = $derived(
+    o?.display === "time" && charset === "classic-numbers",
+  );
+  /** Classic windowshade clock: the 5×6 text strip, including its colon cell. */
+  const classicShadeTime = $derived(o?.display === "time" && charset === "classic-text");
+  /** HTML text for the time: padded for the classic cells, plain m:ss otherwise. */
+  const timeText = $derived(classicShadeTime ? glyphTime : content);
+  /** Classic bitrate/kHz digit cells are narrower than the default 9px span. */
+  const classicReadout = $derived(
+    charset != null && (o?.display === "bitrate" || o?.display === "khz"),
+  );
+  /** Fallback x offsets of the four classic time digits (numbers.bmp cells). */
+  const CLASSIC_DIGIT_OFFSETS = [12, 24, 42, 54];
+  /**
+   * Silkscreen's line box is ~1.3× its font size: 10px measures 13px tall,
+   * exactly the classic numbers cell. Scale that ratio for skins with other
+   * cell heights — using the cell height as the font size overflows it.
+   */
+  const classicDigitFont = $derived(
+    Math.max(1, Math.round(((bmSpec?.cellH ?? 13) * 10) / 13)),
+  );
+
   /**
    * Unicode typography → classic charmap equivalents. text.bmp is a 1997
    * ASCII strip (dashes, straight quotes only), so a single en dash or curly
@@ -272,7 +297,17 @@
     return true;
   });
 
-  const useGlyphs = $derived(font != null && glyphsFit);
+  /**
+   * Classic skins *can* draw text with the skin's own bitmap strips
+   * (text.bmp/numbers.bmp). The renderer now prefers the smooth HTML path for
+   * every text object: at fractional UI scales the bitmap font is the
+   * awkward, phase-shifting part, and the system font keeps the skin's glyph
+   * colour while staying legible. Flip this to `true` to restore the classic
+   * bitmap text — the glyph path below is kept intact for that.
+   */
+  const CLASSIC_BITMAP_TEXT = false;
+
+  const useGlyphs = $derived(CLASSIC_BITMAP_TEXT && font != null && glyphsFit);
 
   // HTML-path colour for a bitmap skin. Don't sample unless the glyph path is
   // actually unavailable (sampling is a real getImageData, and must not be
@@ -438,21 +473,40 @@
       {style}
     ></canvas>
   {:else}
-    <!-- HTML fallback: renders the raw `content`, deliberately NOT
-         `glyphText`. The substitutions above exist only because the 1997
-         bitmap strip lacks those cells; in the system font the original
-         typography (— “ ” …) is correct. The asymmetry is therefore
-         intentional: a mixed-script title like `Тест – Part 2` keeps its
-         real en dash here, while an otherwise-ASCII title draws `-`. -->
-    <div class="txt" class:time={o.display === "time"} bind:this={boxEl} {style}>
-      <span class="probe" aria-hidden="true" bind:this={probeEl}>{content}</span>
-      {#if marquee && overflow}
-        <span class="roll" bind:this={rollEl}>
-          <span class="unit" bind:this={unitEl}>{content}{SEP}</span>
-          <span class="unit" aria-hidden="true">{content}{SEP}</span>
+    <!-- Smooth HTML path (the default for every skin). Classic time digits
+         are placed at the strip's own cell offsets so they line up with the
+         dim "88:88" ghost baked into main.bmp; the colon stays the ghost's
+         (numbers.bmp has no colon cell). -->
+    <div
+      class="txt"
+      class:time={o.display === "time"}
+      class:readout={classicReadout}
+      class:shade-time={classicShadeTime}
+      bind:this={boxEl}
+      {style}>
+      {#if classicNumberTime}
+        <span class="ctime" class:blink={status === "paused"}>
+          {#if status !== "stopped"}
+            {#each [...glyphTime.replace(":", "")] as ch, i}
+              <span
+                class="cdigit"
+                style="left:{digitOffsets?.[i] ?? CLASSIC_DIGIT_OFFSETS[i] ?? 0}px;
+                  width:{bmSpec?.cellW ?? 9}px;font-size:{classicDigitFont}px;
+                  line-height:{bmSpec?.cellH ?? 13}px"
+                >{ch}</span>
+            {/each}
+          {/if}
         </span>
       {:else}
-        <span class="unit">{content}</span>
+        <span class="probe" aria-hidden="true" bind:this={probeEl}>{timeText}</span>
+        {#if marquee && overflow}
+          <span class="roll" bind:this={rollEl}>
+            <span class="unit" bind:this={unitEl}>{timeText}{SEP}</span>
+            <span class="unit" aria-hidden="true">{timeText}{SEP}</span>
+          </span>
+        {:else}
+          <span class="unit">{timeText}</span>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -498,6 +552,40 @@
     font-size: 10px; /* Silkscreen's grid at the ghost's 2x scale */
     letter-spacing: 1px;
     color: #66ff99;
+  }
+
+  /* Windowshade clock: 7px is the largest size that fits the 25×8 strip.
+     The font's line box exceeds 8px by 1px, but its ink is 5px, so the
+     overflow is empty em-box (no glyph is clipped) — leave no extra slack. */
+  .txt.shade-time {
+    font-size: 7px;
+    letter-spacing: 0;
+  }
+
+  /* Classic bitrate/kHz wells are 5px per digit; the 8px face measured
+     ~5.7px/digit (17px for three) and overflowed the 15px well — 7px fits. */
+  .txt.readout {
+    font-size: 7px;
+  }
+
+  /* Classic normal-mode time: one digit per numbers.bmp cell. */
+  .ctime {
+    position: absolute;
+    inset: 0;
+  }
+
+  .cdigit {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Silkscreen", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  .ctime.blink {
+    animation: blink 2s step-start 1s infinite;
   }
 
   .unit {
