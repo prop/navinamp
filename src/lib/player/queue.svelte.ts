@@ -583,6 +583,11 @@ function applySavedQueue(saved: SavedQueue): void {
         : null;
   shuffle = saved.shuffle === true;
   if (saved.repeat === "all" || saved.repeat === "one") repeat = saved.repeat;
+  // The shuffle order is not persisted: rebuilding it from the restored
+  // items is mandatory. Without this it stays empty, shuffleStep() returns
+  // null, and next()/auto-advance treat the current item as its own
+  // successor — next becomes a no-op after every restart.
+  if (shuffle && items.length > 0) rebuildShuffle();
 }
 
 /**
