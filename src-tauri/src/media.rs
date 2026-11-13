@@ -38,7 +38,7 @@
 
 use std::ffi::c_void;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use souvlaki::{
@@ -47,6 +47,7 @@ use souvlaki::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::audio;
 use crate::library::LibraryState;
 use crate::navidrome::NavidromeState;
 
@@ -55,6 +56,14 @@ const POSITION_PUSH_SECS: f64 = 1.0;
 
 /// `souvlaki`'s undetermined Seek events move by this many seconds.
 const MEDIA_SEEK_STEP_SECS: f64 = 5.0;
+
+/// macOS emits a Play command when the default output device changes (e.g.
+/// Bluetooth headphones disconnect), which would otherwise resume a paused
+/// player. A paused-state `play` waits [`PLAY_DEFER`] and is dropped when a
+/// device change landed within [`DEVICE_CHANGE_WINDOW`] of the command.
+const DEVICE_CHANGE_WINDOW: Duration = Duration::from_secs(2);
+/// Imperceptible delay that lets a device-change event overtake the command.
+const PLAY_DEFER: Duration = Duration::from_millis(250);
 
 /// A media event mapped to the frontend `media-command` contract.
 #[derive(Debug, PartialEq)]
@@ -218,6 +227,30 @@ fn main_hwnd(_app: &AppHandle) -> Option<*mut c_void> {
     None
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Whether a paused-state Play is the system's device-change resume rather
+/// than a user command. The change may arrive slightly before or after the
+/// command, hence the symmetric window.
+fn is_device_change_resume(command_ms: u64, changed_ms: Option<u64>, window_ms: u64) -> bool {
+    changed_ms.is_some_and(|changed| changed.saturating_add(window_ms) >= command_ms)
+}
+
+fn emit_media_command(app: &AppHandle, mapped: MappedCommand) {
+    let _ = app.emit(
+        "media-command",
+        MediaCommandPayload {
+            command: mapped.command,
+            secs: mapped.secs,
+        },
+    );
+}
+
 fn on_media_event(app: &AppHandle, event: MediaControlEvent) {
     let playing = app
         .state::<MediaHub>()
@@ -225,15 +258,27 @@ fn on_media_event(app: &AppHandle, event: MediaControlEvent) {
         .lock()
         .map(|inner| inner.snap.playing)
         .unwrap_or(None);
-    if let Some(mapped) = map_event(&event, playing) {
-        let _ = app.emit(
-            "media-command",
-            MediaCommandPayload {
-                command: mapped.command,
-                secs: mapped.secs,
-            },
-        );
+    let Some(mapped) = map_event(&event, playing) else {
+        return;
+    };
+    if mapped.command == "play" && playing == Some(false) {
+        // Paused: macOS asks media apps to resume on default-device changes
+        // (it fires when Bluetooth headphones disconnect). Give the device
+        // event a moment to arrive, then drop the command if one did.
+        let command_ms = now_ms();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(PLAY_DEFER);
+            let changed = audio::last_output_device_change_ms(&app.state::<audio::Audio>());
+            if is_device_change_resume(command_ms, changed, DEVICE_CHANGE_WINDOW.as_millis() as u64)
+            {
+                return;
+            }
+            emit_media_command(&app, mapped);
+        });
+        return;
     }
+    emit_media_command(app, mapped);
 }
 
 fn push_metadata(inner: &mut MediaInner) {
@@ -550,5 +595,18 @@ mod tests {
         assert_eq!(sane_secs(-1.0), None);
         assert_eq!(sane_secs(f64::NAN), None);
         assert_eq!(sane_secs(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn device_change_resume_window_is_symmetric() {
+        let window = DEVICE_CHANGE_WINDOW.as_millis() as u64;
+        // Route change just before the Play command (macOS order).
+        assert!(is_device_change_resume(10_000, Some(9_800), window));
+        // Change landing during the deferral (the racy order).
+        assert!(is_device_change_resume(10_000, Some(10_200), window));
+        // A stale change: this is a genuine user press.
+        assert!(!is_device_change_resume(10_000, Some(7_900), window));
+        // No device change ever recorded.
+        assert!(!is_device_change_resume(10_000, None, window));
     }
 }

@@ -111,6 +111,10 @@ pub(crate) struct Shared {
     /// The most recently published ReplayGain gain as f32 bits
     /// (diagnostics: the gain scheduled for the current/next track).
     replaygain_bits: AtomicU32,
+    /// Wall-clock ms (UNIX epoch) of the last output-device route change or
+    /// removal; `0` = never. The media layer uses it to drop the Play command
+    /// macOS emits on a default-device change.
+    device_change_ms: AtomicU64,
 }
 
 impl Shared {
@@ -129,6 +133,7 @@ impl Shared {
             sink_rate: AtomicU32::new(44_100),
             rg_markers: RgMarkers::new(),
             replaygain_bits: AtomicU32::new(1.0f32.to_bits()),
+            device_change_ms: AtomicU64::new(0),
         }
     }
 
@@ -228,6 +233,22 @@ impl Shared {
     }
 
     /// Record the output sample rate (producer side, whenever a sink opens).
+    /// Record a device route change/removal (called from the sink error
+    /// callback thread).
+    pub(crate) fn note_output_device_change(&self) {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.device_change_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Wall-clock ms of the last device change, if one was ever recorded.
+    pub(crate) fn last_output_device_change_ms(&self) -> Option<u64> {
+        let ms = self.device_change_ms.load(Ordering::Relaxed);
+        (ms > 0).then_some(ms)
+    }
+
     pub(crate) fn set_sink_rate(&self, rate: u32) {
         self.sink_rate.store(rate, Ordering::Relaxed);
     }
@@ -397,5 +418,19 @@ mod tests {
             assert_eq!(markers.take(&mut read), Some((i * 10, i as f32)));
         }
         assert!(markers.take(&mut read).is_none());
+    }
+}
+
+#[cfg(test)]
+mod device_change_tests {
+    use super::Shared;
+
+    #[test]
+    fn output_device_change_timestamp_records_once_set() {
+        let shared = Shared::new(1.0);
+        assert_eq!(shared.last_output_device_change_ms(), None);
+        shared.note_output_device_change();
+        let ms = shared.last_output_device_change_ms().expect("stamped");
+        assert!(ms > 0);
     }
 }

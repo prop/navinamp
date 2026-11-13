@@ -257,6 +257,17 @@ fn persist(state: &Audio) {
     }
 }
 
+/// Wall-clock ms of the last output-device route change/removal, if the
+/// engine has been started and has seen one.
+pub fn last_output_device_change_ms(state: &Audio) -> Option<u64> {
+    state
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|engine| engine.last_output_device_change_ms())
+}
+
 /// Current desktop-notification preference (also read by the native menu).
 pub fn notify_track(state: &Audio) -> bool {
     *state.notify_track.lock().unwrap()

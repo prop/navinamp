@@ -383,6 +383,12 @@ impl EngineHandle {
         self.shared.underrun_remote_frames()
     }
 
+    /// Wall-clock ms (UNIX epoch) of the last output-device route change or
+    /// removal, if any. See [`crate::sink::SinkErrorKind`].
+    pub fn last_output_device_change_ms(&self) -> Option<u64> {
+        self.shared.last_output_device_change_ms()
+    }
+
     // ----- equaliser (see `eq.rs`; all reads/writes are lock-free) -----
 
     /// The current EQ state (atomic snapshot).

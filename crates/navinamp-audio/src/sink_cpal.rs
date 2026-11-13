@@ -10,7 +10,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 
 use crate::error::AudioError;
-use crate::sink::{AudioCallback, AudioSink, SinkConfig, SinkErrorCallback};
+use crate::sink::{AudioCallback, AudioSink, SinkConfig, SinkErrorCallback, SinkErrorKind};
 
 /// Sink over the system default output device (via cpal).
 pub struct CpalSink {
@@ -102,7 +102,14 @@ impl AudioSink for CpalSink {
             .build_output_stream(
                 stream_cfg,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| cb(data),
-                move |err| err_cb(format!("output stream error: {err}")),
+                move |err| {
+                    let kind = match err.kind() {
+                        cpal::ErrorKind::DeviceChanged => SinkErrorKind::DeviceChanged,
+                        cpal::ErrorKind::DeviceNotAvailable => SinkErrorKind::DeviceUnavailable,
+                        _ => SinkErrorKind::Other,
+                    };
+                    err_cb(kind, format!("output stream error: {err}"));
+                },
                 Some(Duration::from_secs(5)),
             )
             .map_err(|e| AudioError::UnsupportedConfig(format!("open stream: {e}")))?;

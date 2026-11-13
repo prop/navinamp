@@ -25,7 +25,7 @@ use crate::events::Events;
 use crate::resample::{ConvertStage, convert_channels};
 use crate::ring::{RingProducer, ring_buffer};
 use crate::shared::{PlaybackStatus, Session, Shared, TrackMetadata};
-use crate::sink::{AudioSink, SinkConfig};
+use crate::sink::{AudioSink, SinkConfig, SinkErrorCallback, SinkErrorKind};
 use crate::{Command, Event, TrackSource, UpcomingTrack};
 
 /// Ring buffer depth in seconds of audio.
@@ -1069,9 +1069,21 @@ impl Producer {
         let (prod, cons) = ring_buffer(frames, cfg.channels);
         let mut cb = Callback::new(cons, self.shared.clone(), &cfg);
         let events = self.events.clone();
-        let err_cb = Box::new(move |msg: String| {
-            events.emit(Event::Error { id: None, msg });
-        }) as Box<dyn FnMut(String) + Send>;
+        let shared = self.shared.clone();
+        let err_cb = Box::new(move |kind: SinkErrorKind, msg: String| {
+            if matches!(
+                kind,
+                SinkErrorKind::DeviceChanged | SinkErrorKind::DeviceUnavailable
+            ) {
+                shared.note_output_device_change();
+            }
+            // A reroute (Bluetooth headphones disconnect → speakers) is a
+            // normal route change, not a playback failure: record it for the
+            // media layer but do not surface it as an error.
+            if kind != SinkErrorKind::DeviceChanged {
+                events.emit(Event::Error { id: None, msg });
+            }
+        }) as SinkErrorCallback;
         self.sink
             .open(cfg, Box::new(move |out: &mut [f32]| cb.pull(out)), err_cb)?;
 
