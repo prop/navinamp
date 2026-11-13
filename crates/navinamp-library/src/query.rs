@@ -41,6 +41,8 @@ const TRACK_COLUMN_NAMES: &[&str] = &[
     "server_id",
     "remote_path",
     "art_id",
+    "label",
+    "catalog_num",
 ];
 
 /// Column list for every `SELECT` on `tracks`; positionally mapped by
@@ -86,8 +88,8 @@ pub(super) fn track_from_row(row: &Row<'_>) -> rusqlite::Result<Track> {
         server_id: row.get(25)?,
         remote_path: row.get(26)?,
         art_id: row.get(27)?,
-        label: None,
-        catalog_number: None,
+        label: row.get(28)?,
+        catalog_number: row.get(29)?,
     })
 }
 
@@ -431,7 +433,8 @@ pub(super) fn track_by_path(conn: &Connection, path: &str) -> rusqlite::Result<O
             track_from_row,
         )
         .optional()?;
-    // The row menu shows release metadata; bulk track queries stay join-free.
+    // The album join supplements rows whose own tag columns are NULL; bulk
+    // track queries stay join-free.
     if let Some(track) = track.as_mut() {
         let pair: Option<String> = conn.query_row(
             "SELECT MAX(COALESCE(ra.label, '') || char(31) || COALESCE(ra.catalog_num, ''))
@@ -442,7 +445,16 @@ pub(super) fn track_by_path(conn: &Connection, path: &str) -> rusqlite::Result<O
             [path],
             |row| row.get(0),
         )?;
-        (track.label, track.catalog_number) = split_label_pair(pair);
+        // The row menu shows release metadata. The track's own synced
+        // columns are authoritative (what the file carries); the album-level
+        // join is only the fallback for rows without their own tag.
+        let (album_label, album_catalog) = split_label_pair(pair);
+        if track.label.is_none() {
+            track.label = album_label;
+        }
+        if track.catalog_number.is_none() {
+            track.catalog_number = album_catalog;
+        }
     }
     Ok(track)
 }

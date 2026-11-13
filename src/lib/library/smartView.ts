@@ -22,6 +22,8 @@ export const SMART_FIELDS: SmartFieldMeta[] = [
   { id: "albumArtist", label: "Album artist", type: "string" },
   { id: "album", label: "Album", type: "string" },
   { id: "genre", label: "Genre", type: "string" },
+  { id: "label", label: "Record label", type: "string" },
+  { id: "catalogNumber", label: "Catalog number", type: "string" },
   { id: "codec", label: "Codec", type: "string" },
   { id: "path", label: "Path", type: "string" },
   { id: "source", label: "Source", type: "string" },

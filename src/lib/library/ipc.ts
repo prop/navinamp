@@ -65,11 +65,12 @@ export interface Track {
    */
   artId: string | null;
   /**
-   * Remote album record label(s), joined for display. Filled by the row
-   * context menu's point lookup; `null` in bulk track listings.
+   * Record-label tag from the track's file (synced from Navidrome's native
+   * API), falling back to the album's joined labels; `null` when neither
+   * the file nor the album carries one.
    */
   label: string | null;
-  /** Remote album catalog number; same population rules as `label`. */
+  /** Catalog-number tag, same population rules as `label`. */
   catalogNumber: string | null;
 }
 
@@ -168,6 +169,8 @@ export type SmartField =
   | "albumArtist"
   | "album"
   | "genre"
+  | "label"
+  | "catalogNumber"
   | "codec"
   | "path"
   | "source"

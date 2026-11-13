@@ -45,6 +45,16 @@ pub(super) fn init(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         // albums whose fingerprint is unchanged without re-fetching them.
         conn.execute("ALTER TABLE tracks ADD COLUMN remote_album_id TEXT", [])?;
     }
+    if !has_column(conn, "tracks", "label")? {
+        // Per-track record label, synced from Navidrome's native API (the
+        // Subsonic song object has no such field). The next sync fills it.
+        conn.execute("ALTER TABLE tracks ADD COLUMN label TEXT", [])?;
+    }
+    if !has_column(conn, "tracks", "catalog_num")? {
+        // Per-track catalog number, same source; stays NULL for rows whose
+        // files carry no tag (about half of a typical synced library).
+        conn.execute("ALTER TABLE tracks ADD COLUMN catalog_num TEXT", [])?;
+    }
     if !has_column(conn, "remote_albums", "label")? {
         // OpenSubsonic recordLabels, joined for display and part of the
         // quick-rescan fingerprint (Navidrome sends them in getAlbumList2).
@@ -253,7 +263,9 @@ CREATE TABLE IF NOT EXISTS tracks (
     server_id       TEXT,                      -- navidrome profile id (remote rows)
     remote_path     TEXT,                      -- server-relative file path (navidrome rows)
     remote_album_id TEXT,                      -- navidrome album id (quick-rescan grouping)
-    art_id          TEXT                       -- local: content hash into art-cache; remote: coverArt id
+    art_id          TEXT,                      -- local: content hash into art-cache; remote: coverArt id
+    label           TEXT,                      -- record-label tag (navidrome native API / future local scan)
+    catalog_num     TEXT                       -- catalog-number tag (navidrome native API)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_album_key ON tracks(album_key);
