@@ -60,10 +60,10 @@ const SALT_BYTES: usize = 12;
 /// ```
 #[derive(Clone)]
 pub struct SubsonicClient {
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     /// `…/rest/` — normalized with a trailing slash so `join(endpoint)` appends.
-    base: Url,
-    username: String,
+    pub(crate) base: Url,
+    pub(crate) username: String,
     token: String,
     salt: String,
     server_version: Option<String>,
@@ -124,6 +124,18 @@ impl SubsonicClient {
     /// Server version reported during [`SubsonicClient::connect`].
     pub fn server_version(&self) -> Option<&str> {
         self.server_version.as_deref()
+    }
+
+    /// Whether the server base URL is `https`. Callers use this to gate
+    /// features that would otherwise send the plaintext password in clear
+    /// (the native-API JWT login, unlike Subsonic's salted-token auth).
+    pub fn uses_https(&self) -> bool {
+        self.base.scheme() == "https"
+    }
+
+    /// The normalized server base URL (`…/rest/`), for diagnostics.
+    pub fn server_url(&self) -> String {
+        self.base.as_str().to_owned()
     }
 
     /// Verifies connectivity/auth; returns what the server says about itself.
