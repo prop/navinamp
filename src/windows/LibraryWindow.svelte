@@ -65,6 +65,12 @@
   // natural size and CSS-transformed; the outer box/OS window use scaled px.
   const scale = $derived(uiScale.value);
 
+  // Build identity injected by vite.config.ts: tells the DEV tab exactly
+  // which frontend/binary is running (version · commit · build time).
+  const buildLine = `v${__APP_VERSION__} · ${__BUILD_COMMIT__} · ${new Date(
+    __BUILD_TIME__,
+  ).toLocaleString()}`;
+
   // ── tabs (#16): LIBRARY | EQUALIZER | SKIN | DEV; active tab persists ───
 
   const TAB_KEY = "navinamp.library.tab";
@@ -471,6 +477,11 @@
             </label>
             <span class="mono">{Math.round(uiScale.value * 100)}%</span>
             <span class="dim">all windows · Alt+S cycles</span>
+          </div>
+
+          <div class="row">
+            <span class="dim">build</span>
+            <span class="mono">{buildLine}</span>
           </div>
 
           <div class="row">
