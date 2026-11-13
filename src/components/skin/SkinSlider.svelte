@@ -56,6 +56,16 @@
 
   const thumbImage = $derived(o?.thumbimage ? images[o.thumbimage] : undefined);
 
+  /** Shared track/backdrop background string (image + rendering + colour). */
+  const trackBackground = $derived.by(() => {
+    const image = trackImage ? `background-image:url('${trackImage}');` : "";
+    return (
+      image +
+      "background-size:100% 100%;background-repeat:no-repeat;background-color:#1a1a20;" +
+      imageRenderingFor(trackImage, scale)
+    );
+  });
+
   // Square thumb, sized by the track's cross dimension.
   const thumbSize = $derived(vertical ? (obj.w ?? 12) : (obj.h ?? 12));
 
@@ -104,6 +114,19 @@
 </script>
 
 {#if o}
+  <!-- Opaque backdrop at fractional scales only: the trough and thumb can
+       composite with transparent seams when the surface is scaled, letting
+       the window texture show through as a striped band. Painting the trough
+       again behind the interactive elements keeps the bar solid; at 1x/2x
+       (and while disabled, so the fade still reveals the surface) it is
+       omitted and the pixels stay exactly as before. -->
+  {#if !disabled && scale % 1 !== 0}
+    <div
+      class="backdrop"
+      aria-hidden="true"
+      style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{trackBackground}"
+    ></div>
+  {/if}
   <div
     class="track"
     class:hover
@@ -116,9 +139,7 @@
     aria-valuemax="1"
     aria-valuenow={Math.round(shown * 100) / 100}
     tabindex="0"
-    style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{trackImage
-      ? `background-image:url('${trackImage}');`
-      : ''}{imageRenderingFor(trackImage, scale)}"
+    style="left:{obj.x}px; top:{obj.y}px; width:{obj.w ?? 0}px; height:{obj.h ?? 0}px;{trackBackground}"
     onpointerenter={() => (hover = true)}
     onpointerleave={() => (hover = false)}
     onpointerdown={down}
@@ -143,6 +164,11 @@
 {/if}
 
 <style>
+  .backdrop {
+    position: absolute;
+    pointer-events: none;
+  }
+
   .track {
     position: absolute;
     background-size: 100% 100%;
