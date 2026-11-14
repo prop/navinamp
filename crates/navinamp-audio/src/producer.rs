@@ -28,6 +28,25 @@ use crate::shared::{PlaybackStatus, Session, Shared, TrackMetadata};
 use crate::sink::{AudioSink, SinkConfig, SinkErrorCallback, SinkErrorKind};
 use crate::{Command, Event, TrackSource, UpcomingTrack};
 
+/// User-facing message for a sink error; `None` means stay quiet. A reroute
+/// (Bluetooth headphones disconnect → speakers) is normal playback; a lost
+/// output device is actionable on every platform, so it gets explicit
+/// wording instead of the backend's text.
+fn sink_error_message(kind: SinkErrorKind, msg: String) -> Option<String> {
+    match kind {
+        SinkErrorKind::DeviceChanged => {
+            // Quiet in the UI, but keep the backend text for diagnostics.
+            eprintln!("navinamp audio: {msg}");
+            None
+        }
+        SinkErrorKind::DeviceUnavailable => {
+            eprintln!("navinamp audio: {msg}");
+            Some("output device disconnected".to_string())
+        }
+        SinkErrorKind::Other => Some(msg),
+    }
+}
+
 /// Ring buffer depth in seconds of audio.
 const RING_SECS: f64 = 2.0;
 /// Minimum buffered audio before playback is un-muted (status → Playing).
@@ -1071,16 +1090,13 @@ impl Producer {
         let events = self.events.clone();
         let shared = self.shared.clone();
         let err_cb = Box::new(move |kind: SinkErrorKind, msg: String| {
-            if matches!(
-                kind,
-                SinkErrorKind::DeviceChanged | SinkErrorKind::DeviceUnavailable
-            ) {
+            // Only a *reroute* can explain a system-generated Play command.
+            // A lost device stops the stream outright, so stamping it would
+            // swallow the very recovery press the error message asks for.
+            if kind == SinkErrorKind::DeviceChanged {
                 shared.note_output_device_change();
             }
-            // A reroute (Bluetooth headphones disconnect → speakers) is a
-            // normal route change, not a playback failure: record it for the
-            // media layer but do not surface it as an error.
-            if kind != SinkErrorKind::DeviceChanged {
+            if let Some(msg) = sink_error_message(kind, msg) {
                 events.emit(Event::Error { id: None, msg });
             }
         }) as SinkErrorCallback;
@@ -1221,4 +1237,25 @@ fn spawn_opener(
             }
         })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod sink_error_tests {
+    use super::{SinkErrorKind, sink_error_message};
+
+    #[test]
+    fn reroutes_are_quiet_and_device_loss_is_actionable() {
+        assert_eq!(
+            sink_error_message(SinkErrorKind::DeviceChanged, "ignored".into()),
+            None
+        );
+        assert_eq!(
+            sink_error_message(SinkErrorKind::DeviceUnavailable, "cpal text".into()).as_deref(),
+            Some("output device disconnected")
+        );
+        assert_eq!(
+            sink_error_message(SinkErrorKind::Other, "boom".into()).as_deref(),
+            Some("boom")
+        );
+    }
 }
