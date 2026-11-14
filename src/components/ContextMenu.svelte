@@ -22,13 +22,16 @@
   /**
    * In-app context menu (replaces the webview's Reload/Inspect menu on rows).
    *
-   * Rendered at the pointer's coordinates (mapped into the containing
-   * window root's local pixels when the root is scaled) and clamped to the
-   * viewport. Closes on outside click, Escape, scroll, resize or focus loss.
-   * Items are data-driven; a `rating` item renders a 5-star picker and emits
-   * `rate:<n>` (or `rate:0` when the current star is clicked again).
+   * Portaled to the document body (see `portal`), so the menu escapes the
+   * window's scaled/zoomed root and its text is rasterized at the final size
+   * instead of being scaled as a bitmap. Positioned at the pointer's raw
+   * viewport coordinates and clamped to the viewport. Closes on outside
+   * click, Escape, scroll, resize or focus loss. Items are data-driven; a
+   * `rating` item renders a 5-star picker and emits `rate:<n>` (or `rate:0`
+   * when the current star is clicked again).
    */
   import { registerEscape } from "../lib/window/escape";
+  import { portal } from "../lib/window/portal";
 
   interface Props {
     x: number;
@@ -37,16 +40,11 @@
     /** Optional track details (artist, album, quality, …) above the actions. */
     info?: ContextMenuInfoRow[];
     /**
-     * UI scale of the containing window root (CSS `zoom` in the library,
-     * `transform: scale()` in skinned windows). The menu is `position:
-     * fixed`, so inside a scaled root it lives in that root's local pixels:
-     * divide the client coordinates (and viewport caps) by this to land
-     * under the pointer.
-     *
-     * The menu's SIZE deliberately follows the UI scale. It is part of the
-     * scale-native chrome: counter-scaling would leave an 11 px menu beside
-     * ~16 px rows at 1.5×, and would need inverse `zoom` in the library vs
-     * inverse `transform` in skinned windows. Settled in #106.
+     * UI scale of the app. The menu is portaled to the document body (real
+     * viewport pixels), so `x`/`y` are raw client coordinates and the menu's
+     * font/spacing are multiplied by this instead of living inside the
+     * window's scaled/zoomed root. That keeps the text laid out at its final
+     * size (crisp) while the menu still follows the UI scale, per #106.
      */
     scale?: number;
     onselect: (id: string) => void;
@@ -56,26 +54,28 @@
   let { x, y, items, info = [], scale = 1, onselect, onclose }: Props = $props();
 
   let el = $state<HTMLDivElement | null>(null);
-  // Initial placement in the containing block's local pixels; the effect
-  // below clamps it after measuring. The component remounts per open, so
-  // capturing x/y once is intended.
+  // Initial placement in real viewport pixels; the effect below clamps it
+  // after measuring. The component remounts per open, so capturing x/y once
+  // is intended.
   // svelte-ignore state_referenced_locally
-  let left = $state(x / scale);
+  let left = $state(x);
   // svelte-ignore state_referenced_locally
-  let top = $state(y / scale);
+  let top = $state(y);
 
   // Clamp after measuring (the menu width/height depend on content; the
   // details block can arrive asynchronously after the metadata lookup).
+  // The menu is body-level and size-scaled via `--s`, so these are real px.
   $effect(() => {
     void info;
     const node = el;
     if (!node) return;
     const w = node.offsetWidth;
     const h = node.offsetHeight;
-    const viewW = window.innerWidth / scale;
-    const viewH = window.innerHeight / scale;
-    left = Math.max(4, Math.min(x / scale, viewW - w - 4));
-    top = Math.max(4, Math.min(y / scale, viewH - h - 4));
+    const margin = 4 * scale;
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+    left = Math.max(margin, Math.min(x, viewW - w - margin));
+    top = Math.max(margin, Math.min(y, viewH - h - margin));
   });
 
   $effect(() => {
@@ -107,7 +107,8 @@
 <div
   class="menu"
   bind:this={el}
-  style="left:{left}px; top:{top}px; max-width:calc(100vw / {scale} - 8px); max-height:calc(100vh / {scale} - 8px);"
+  use:portal
+  style="left:{left}px; top:{top}px; max-width:calc(100vw - {8 * scale}px); max-height:calc(100vh - {8 * scale}px); --s:{scale};"
   role="menu">
   {#if info.length > 0}
     <div class="info" role="group" aria-label="track details">
@@ -155,19 +156,19 @@
     z-index: 1000;
     /* The playlist action menu sits inside a pointer-events:none overlay. */
     pointer-events: auto;
-    min-width: 170px;
+    min-width: calc(170px * var(--s, 1));
     /* The playlist window is only 275px wide; keep the fixed menu inside it
        so long values wrap against the visible width instead of being clipped
        by the window edge. */
     max-width: calc(100vw - 8px);
     max-height: calc(100vh - 8px);
     box-sizing: border-box;
-    padding: 3px 0;
+    padding: calc(3px * var(--s, 1)) 0;
     background: #161616;
-    border: 1px solid #3a3a3a;
-    box-shadow: 2px 2px 0 #000;
+    border: calc(1px * var(--s, 1)) solid #3a3a3a;
+    box-shadow: calc(2px * var(--s, 1)) calc(2px * var(--s, 1)) 0 #000;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 11px;
+    font-size: calc(11px * var(--s, 1));
     color: #c8c8c8;
     user-select: none;
     /* The playlist window is only ~230px tall; a details block + actions can
@@ -180,7 +181,7 @@
 
   /* Match the playlist's thin scrollbar on WebKit too. */
   .menu::-webkit-scrollbar {
-    width: 6px;
+    width: calc(6px * var(--s, 1));
   }
 
   .menu::-webkit-scrollbar-thumb {
@@ -188,20 +189,20 @@
   }
 
   .info {
-    max-width: 360px;
+    max-width: calc(360px * var(--s, 1));
     box-sizing: border-box;
-    padding: 3px 10px 5px;
+    padding: calc(3px * var(--s, 1)) calc(10px * var(--s, 1)) calc(5px * var(--s, 1));
   }
 
   .irow {
     display: flex;
-    gap: 8px;
+    gap: calc(8px * var(--s, 1));
     line-height: 1.5;
   }
 
   .ilabel {
     flex: none;
-    width: 52px;
+    width: calc(52px * var(--s, 1));
     color: #707070;
   }
 
@@ -221,7 +222,7 @@
     background: transparent;
     color: inherit;
     border: none;
-    padding: 5px 10px;
+    padding: calc(5px * var(--s, 1)) calc(10px * var(--s, 1));
     font: inherit;
     cursor: pointer;
   }
@@ -246,16 +247,16 @@
   }
 
   .sep {
-    height: 1px;
-    margin: 3px 0;
+    height: calc(1px * var(--s, 1));
+    margin: calc(3px * var(--s, 1)) 0;
     background: #2a2a2a;
   }
 
   .rating {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 4px 10px;
+    gap: calc(8px * var(--s, 1));
+    padding: calc(4px * var(--s, 1)) calc(10px * var(--s, 1));
   }
 
   .rlabel {
@@ -264,14 +265,14 @@
 
   .stars {
     display: flex;
-    gap: 1px;
+    gap: calc(1px * var(--s, 1));
   }
 
   .star {
     background: none;
     border: none;
-    padding: 0 1px;
-    font-size: 13px;
+    padding: 0 calc(1px * var(--s, 1));
+    font-size: calc(13px * var(--s, 1));
     line-height: 1;
     color: #3a5a3f;
     cursor: pointer;
