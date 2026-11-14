@@ -654,26 +654,14 @@
 </div>
 
 {#if menu}
-  {#snippet rowMenu()}
-    <ContextMenu
-      x={menu.x}
-      y={menu.y}
-      items={menuItems}
-      info={menuDetails}
-      {scale}
-      onselect={menuSelect}
-      onclose={() => (menu = null)} />
-  {/snippet}
-  {#if embedded}
-    <!-- Scale-native list: the row menu re-creates the overlay's local
-         coordinate space (ContextMenu divides coordinates by scale), while
-         staying visually scaled like the skin around it. -->
-    <div class="menu-space" style="transform:scale({scale});">
-      {@render rowMenu()}
-    </div>
-  {:else}
-    {@render rowMenu()}
-  {/if}
+  <ContextMenu
+    x={menu.x}
+    y={menu.y}
+    items={menuItems}
+    info={menuDetails}
+    {scale}
+    onselect={menuSelect}
+    onclose={() => (menu = null)} />
 {/if}
 
 <style>
@@ -685,18 +673,6 @@
     border: 1px solid var(--pl-border, #3a3a3a);
     background: #161616;
     user-select: none;
-  }
-
-  /* Scale-native row menus: a full-viewport layer that re-creates the local
-     pixel space the ContextMenu positions in (it divides by scale), scaled
-     back up so the menu keeps the skin's visual size. Transparent to
-     pointers; the menu re-enables them. */
-  .menu-space {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    pointer-events: none;
-    transform-origin: top left;
   }
 
   /* Embedded in a skin frame: the caller owns the box, border and actions. */

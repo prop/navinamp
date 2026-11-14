@@ -253,8 +253,9 @@
 
   function actionAnchor(action: string): { x: number; y: number } {
     const target = skinLayout?.objects.find((o) => actionOf(o.object) === action);
-    // Viewport pixels: the ContextMenu is inside the transformed overlay and
-    // divides by `scale` before positioning (see openMenu).
+    // Viewport pixels: the ContextMenu is portaled to the body and takes raw
+    // client coordinates, so multiply the skin-layout position by the UI
+    // scale exactly once here.
     if (!target) return { x: 8 * scale, y: 8 * scale };
     return { x: target.x * scale, y: target.y * scale };
   }
