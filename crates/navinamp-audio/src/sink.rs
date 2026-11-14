@@ -21,8 +21,24 @@ pub struct SinkConfig {
 /// loop). It never blocks, locks, or allocates.
 pub type AudioCallback = Box<dyn FnMut(&mut [f32]) + Send + 'static>;
 
+/// Coarse classification of sink errors. The app needs to know when the
+/// output *route* changed: macOS sends a spurious media Play on a default
+/// device change (e.g. Bluetooth headphones disconnect), which must not
+/// resume a paused player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkErrorKind {
+    /// The default output route changed; the stream was rerouted and keeps
+    /// running (normal, not a failure).
+    DeviceChanged,
+    /// The output device disappeared and no replacement was available; the
+    /// stream stopped.
+    DeviceUnavailable,
+    /// Any other output error.
+    Other,
+}
+
 /// Sink error reporter (invoked off-thread by the device backend).
-pub type SinkErrorCallback = Box<dyn FnMut(String) + Send + 'static>;
+pub type SinkErrorCallback = Box<dyn FnMut(SinkErrorKind, String) + Send + 'static>;
 
 /// A pull-mode audio output. The sink object itself is a factory owned by the
 /// producer thread; [`AudioSink::open`] (re)builds the running stream and starts
