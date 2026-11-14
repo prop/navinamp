@@ -47,17 +47,19 @@ fn sink_error_message(kind: SinkErrorKind, msg: String) -> Option<String> {
     }
 }
 
-/// Ring buffer depth in seconds of audio.
-const RING_SECS: f64 = 2.0;
+/// Ring buffer depth in seconds of audio. Sized for remote streaming: a
+/// network hiccup must be ridden out by the buffer, not heard as a gap (the
+/// HTTP source also reconnects, but that costs up to ~1.5 s of backoff).
+const RING_SECS: f64 = 6.0;
 /// Minimum buffered audio before playback is un-muted (status → Playing).
 const PREFILL_SECS: f64 = 0.125;
 /// Keep the ring at least this full while decoding.
 const HIGH_WATER_SECS: f64 = 1.0;
-/// Remote streams decode straight off the network — no read-ahead beyond the
-/// ring cushions a stalled read — so keep a deeper cushion to ride out
-/// jitter. The ~2.7 s ring (2 s hint rounded up to a power-of-two sample
-/// count) still leaves headroom above this.
-const HIGH_WATER_REMOTE_SECS: f64 = 1.8;
+/// Remote streams decode straight off the network, so keep a deeper cushion
+/// to ride out jitter: the producer keeps roughly this many seconds buffered,
+/// and the 6 s ring hint (rounded up to a power-of-two sample count) leaves
+/// headroom above it for reconnects.
+const HIGH_WATER_REMOTE_SECS: f64 = 4.0;
 /// How long a reset (seek/stop) waits for the consumer to observe it.
 const RESET_WAIT: Duration = Duration::from_millis(250);
 /// Safety valve for waiting on the consumer to drain the queue.
