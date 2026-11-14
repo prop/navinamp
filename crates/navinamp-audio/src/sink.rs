@@ -28,10 +28,12 @@ pub type AudioCallback = Box<dyn FnMut(&mut [f32]) + Send + 'static>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkErrorKind {
     /// The default output route changed; the stream was rerouted and keeps
-    /// running (normal, not a failure).
+    /// running (normal, not a failure). Per cpal's contract this is only
+    /// reported by backends that follow the default device themselves — the
+    /// stream is not stopped, so no rebuild is required.
     DeviceChanged,
     /// The output device disappeared and no replacement was available; the
-    /// stream stopped.
+    /// stream stopped. Always actionable (the player now has no output).
     DeviceUnavailable,
     /// Any other output error.
     Other,
