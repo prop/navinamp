@@ -232,7 +232,6 @@ impl Shared {
             .and_then(|s| s.duration_secs)
     }
 
-    /// Record the output sample rate (producer side, whenever a sink opens).
     /// Record a device route change/removal (called from the sink error
     /// callback thread).
     pub(crate) fn note_output_device_change(&self) {
@@ -249,6 +248,7 @@ impl Shared {
         (ms > 0).then_some(ms)
     }
 
+    /// Record the output sample rate (producer side, whenever a sink opens).
     pub(crate) fn set_sink_rate(&self, rate: u32) {
         self.sink_rate.store(rate, Ordering::Relaxed);
     }

@@ -236,9 +236,10 @@ fn now_ms() -> u64 {
 
 /// Whether a paused-state Play is the system's device-change resume rather
 /// than a user command. The change may arrive slightly before or after the
-/// command, hence the symmetric window.
+/// command, hence the absolute-distance window. A future-dated stamp (an NTP
+/// step backwards) must not swallow later presses, so the bound is symmetric.
 fn is_device_change_resume(command_ms: u64, changed_ms: Option<u64>, window_ms: u64) -> bool {
-    changed_ms.is_some_and(|changed| changed.saturating_add(window_ms) >= command_ms)
+    changed_ms.is_some_and(|changed| changed.abs_diff(command_ms) <= window_ms)
 }
 
 fn emit_media_command(app: &AppHandle, mapped: MappedCommand) {
@@ -606,6 +607,8 @@ mod tests {
         assert!(is_device_change_resume(10_000, Some(10_200), window));
         // A stale change: this is a genuine user press.
         assert!(!is_device_change_resume(10_000, Some(7_900), window));
+        // A forward clock step must not poison every later press.
+        assert!(!is_device_change_resume(10_000, Some(10_000_000), window));
         // No device change ever recorded.
         assert!(!is_device_change_resume(10_000, None, window));
     }
