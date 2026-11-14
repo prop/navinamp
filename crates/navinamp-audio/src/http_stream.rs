@@ -43,6 +43,11 @@ const MAX_REDIRECTS: usize = 5;
 /// TCP connect timeout. There is deliberately **no** whole-request timeout:
 /// a streamed body legitimately lives for the whole track.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Transient network failures (open, mid-body read, premature EOF) are
+/// retried this many times before the track is failed.
+const STREAM_RETRIES: usize = 3;
+/// Backoff before each retry, in order.
+const RETRY_BACKOFF_MS: [u64; STREAM_RETRIES] = [150, 400, 900];
 
 /// Parsed `Content-Range: bytes <start>-<end>/<total>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,7 +287,7 @@ impl<F: HttpFetch> HttpStream<F> {
         fetch: F,
         headers: Vec<(String, String)>,
     ) -> io::Result<Self> {
-        let resp = fetch.get(url, 0, &headers)?;
+        let resp = get_with_retries(&fetch, url, 0, &headers)?;
         let (total, body) = match resp.status {
             206 => {
                 let cr = resp.content_range.as_ref().ok_or_else(|| {
@@ -346,7 +351,7 @@ impl<F: HttpFetch> HttpStream<F> {
             return Ok(());
         }
 
-        let resp = self.fetch.get(&self.url, abs, &self.headers)?;
+        let resp = get_with_retries(&self.fetch, &self.url, abs, &self.headers)?;
         match resp.status {
             206 => {
                 let cr = resp.content_range.as_ref().ok_or_else(|| {
@@ -362,19 +367,7 @@ impl<F: HttpFetch> HttpStream<F> {
                         cr.start
                     )));
                 }
-                let mut skip = abs - cr.start;
-                let mut scratch = [0u8; 4096];
-                while skip > 0 {
-                    let want = skip.min(scratch.len() as u64) as usize;
-                    let n = read_exactish(&mut body, &mut scratch[..want])?;
-                    if n == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "http body ended before the seek target",
-                        ));
-                    }
-                    skip -= n as u64;
-                }
+                discard_bytes(&mut body, abs - cr.start)?;
                 self.body = Body::Remote {
                     body: SyncBody::new(body),
                 };
@@ -440,6 +433,58 @@ impl HttpStream<ReqwestFetch> {
     }
 }
 
+/// Discard exactly `skip` bytes from `body` (block-clamped ranges, restarted
+/// transcode bodies).
+fn discard_bytes(body: &mut Box<dyn Read + Send>, mut skip: u64) -> io::Result<()> {
+    let mut scratch = [0u8; 4096];
+    while skip > 0 {
+        let want = skip.min(scratch.len() as u64) as usize;
+        let n = read_exactish(body, &mut scratch[..want])?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "http body ended before the target offset",
+            ));
+        }
+        skip -= n as u64;
+    }
+    Ok(())
+}
+
+fn retry_backoff(attempt: usize) -> Duration {
+    Duration::from_millis(RETRY_BACKOFF_MS[attempt.min(RETRY_BACKOFF_MS.len() - 1)])
+}
+
+/// Transient statuses worth retrying: server-side failures and throttling.
+fn retryable_status(status: u16) -> bool {
+    status == 408 || status == 429 || (500..600).contains(&status)
+}
+
+/// One ranged GET with bounded retries for transient network failures.
+/// Client errors (404, 403, …) are returned immediately.
+fn get_with_retries<F: HttpFetch>(
+    fetch: &F,
+    url: &str,
+    range_start: u64,
+    headers: &[(String, String)],
+) -> io::Result<HttpResponse> {
+    let mut attempt = 0;
+    loop {
+        match fetch.get(url, range_start, headers) {
+            Ok(resp) if retryable_status(resp.status) && attempt < STREAM_RETRIES => {
+                std::thread::sleep(retry_backoff(attempt));
+                attempt += 1;
+            }
+            Ok(resp) => return Ok(resp),
+            Err(_) if attempt < STREAM_RETRIES => {
+                std::thread::sleep(retry_backoff(attempt));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Reads up to `buf.len()`, looping only on `ErrorKind::Interrupted`.
 fn read_exactish(body: &mut Box<dyn Read + Send>, buf: &mut [u8]) -> io::Result<usize> {
     loop {
@@ -474,28 +519,94 @@ impl<F: HttpFetch> Drop for HttpStream<F> {
     }
 }
 
+impl<F: HttpFetch> HttpStream<F> {
+    /// Read from the live body. A dropped connection or a body that ends
+    /// before the advertised length reconnects at the current byte and retries
+    /// with backoff, so a transient network blip does not turn into a
+    /// track-level failure (which the producer would treat as EOF and advance
+    /// past).
+    fn read_remote(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut last: Option<io::Error> = None;
+        for attempt in 0..=STREAM_RETRIES {
+            if attempt > 0 {
+                std::thread::sleep(retry_backoff(attempt - 1));
+                if let Err(e) = self.reconnect() {
+                    last = Some(e);
+                    continue;
+                }
+            }
+            let result = {
+                let Body::Remote { body } = &mut self.body else {
+                    return Err(io::Error::other("remote body disappeared"));
+                };
+                loop {
+                    match body.read(buf) {
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                        other => break other,
+                    }
+                }
+            };
+            match result {
+                Ok(0) => {
+                    last = Some(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "http body ended before the advertised length",
+                    ));
+                }
+                Ok(n) => {
+                    self.pos += n as u64;
+                    return Ok(n);
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| io::Error::other("remote read failed")))
+    }
+
+    /// Re-establish the body at the current position after a transient
+    /// failure. Range-capable servers resume exactly; a range-ignoring
+    /// (transcode) response restarts the body and discards up to `pos`.
+    fn reconnect(&mut self) -> io::Result<()> {
+        let abs = self.pos;
+        let resp = self.fetch.get(&self.url, abs, &self.headers)?;
+        let mut body = resp.body;
+        match resp.status {
+            206 => {
+                let cr = resp.content_range.as_ref().ok_or_else(|| {
+                    io::Error::other("HTTP 206 without Content-Range (cannot determine length)")
+                })?;
+                if cr.start > abs {
+                    return Err(io::Error::other(format!(
+                        "server returned Content-Range starting at {} for a reconnect to {abs}",
+                        cr.start
+                    )));
+                }
+                self.total = cr.total;
+                discard_bytes(&mut body, abs - cr.start)?;
+            }
+            200 => {
+                let len = resp.content_length.ok_or_else(|| {
+                    io::Error::other("HTTP 200 without Content-Length (cannot determine length)")
+                })?;
+                self.total = len;
+                discard_bytes(&mut body, abs)?;
+            }
+            status => return Err(http_status_error(status)),
+        }
+        self.body = Body::Remote {
+            body: SyncBody::new(body),
+        };
+        Ok(())
+    }
+}
+
 impl<F: HttpFetch> Read for HttpStream<F> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.pos >= self.total {
+        if self.pos >= self.total || buf.is_empty() {
             return Ok(0);
         }
         match &mut self.body {
-            Body::Remote { body, .. } => loop {
-                match body.read(buf) {
-                    Ok(n) => {
-                        self.pos += n as u64;
-                        if n == 0 && self.pos < self.total && !buf.is_empty() {
-                            return Err(io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                "http body ended before the advertised length",
-                            ));
-                        }
-                        return Ok(n);
-                    }
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(e) => return Err(e),
-                }
-            },
+            Body::Remote { .. } => self.read_remote(buf),
             Body::Spilled(file) => {
                 let n = file.read(buf)?;
                 self.pos += n as u64;
@@ -548,41 +659,97 @@ mod tests {
         requests: Mutex<Vec<u64>>,
         headers: SeenHeaders,
         status: Option<u16>,
+        /// Answer the first N requests with `fail_status` before succeeding.
+        fail_first: Mutex<usize>,
+        fail_status: u16,
+        /// The first body drops the connection after this many bytes.
+        fail_body_after: Option<usize>,
+        /// Whether the flaky body has already been handed out.
+        body_failed: Mutex<bool>,
     }
 
     impl FakeFetch {
-        fn ranged(data: Vec<u8>) -> Self {
+        fn base(data: Vec<u8>, honor_ranges: bool) -> Self {
             Self {
                 data,
-                honor_ranges: true,
+                honor_ranges,
                 requests: Mutex::new(Vec::new()),
                 headers: Arc::new(Mutex::new(Vec::new())),
                 status: None,
+                fail_first: Mutex::new(0),
+                fail_status: 503,
+                fail_body_after: None,
+                body_failed: Mutex::new(false),
             }
+        }
+
+        fn ranged(data: Vec<u8>) -> Self {
+            Self::base(data, true)
         }
 
         fn full_only(data: Vec<u8>) -> Self {
-            Self {
-                data,
-                honor_ranges: false,
-                requests: Mutex::new(Vec::new()),
-                headers: Arc::new(Mutex::new(Vec::new())),
-                status: None,
-            }
+            Self::base(data, false)
         }
 
         fn failing(status: u16) -> Self {
-            Self {
-                data: Vec::new(),
-                honor_ranges: false,
-                requests: Mutex::new(Vec::new()),
-                headers: Arc::new(Mutex::new(Vec::new())),
-                status: Some(status),
-            }
+            let mut fetch = Self::base(Vec::new(), false);
+            fetch.status = Some(status);
+            fetch
+        }
+
+        /// `failures` initial requests answer `status`, then the data serves.
+        fn transient(data: Vec<u8>, status: u16, failures: usize) -> Self {
+            let mut fetch = Self::base(data, true);
+            fetch.fail_status = status;
+            *fetch.fail_first.lock().unwrap() = failures;
+            fetch
+        }
+
+        /// The first body errors after `fail_after` bytes (dropped socket).
+        fn flaky_body(data: Vec<u8>, fail_after: usize) -> Self {
+            let mut fetch = Self::base(data, true);
+            fetch.fail_body_after = Some(fail_after);
+            fetch
         }
 
         fn body(&self, start: u64) -> Box<dyn Read + Send> {
-            Box::new(Cursor::new(self.data[start as usize..].to_vec()))
+            let data = self.data[start as usize..].to_vec();
+            if let Some(fail_after) = self.fail_body_after {
+                let mut failed = self.body_failed.lock().unwrap();
+                if !*failed {
+                    *failed = true;
+                    return Box::new(FlakyReader {
+                        data,
+                        pos: 0,
+                        fail_at: fail_after.saturating_sub(start as usize),
+                    });
+                }
+            }
+            Box::new(Cursor::new(data))
+        }
+    }
+
+    /// Serves `data` then reports a connection reset.
+    struct FlakyReader {
+        data: Vec<u8>,
+        pos: usize,
+        fail_at: usize,
+    }
+
+    impl Read for FlakyReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pos >= self.fail_at {
+                return Err(io::Error::other("connection reset"));
+            }
+            let n = (self.fail_at - self.pos)
+                .min(self.data.len() - self.pos)
+                .min(buf.len());
+            if n == 0 {
+                return Ok(0);
+            }
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
         }
     }
 
@@ -595,6 +762,18 @@ mod tests {
         ) -> io::Result<HttpResponse> {
             self.requests.lock().unwrap().push(range_start);
             self.headers.lock().unwrap().push(headers.to_vec());
+            {
+                let mut remaining = self.fail_first.lock().unwrap();
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    return Ok(HttpResponse {
+                        status: self.fail_status,
+                        content_length: Some(0),
+                        content_range: None,
+                        body: Box::new(Cursor::new(Vec::new())),
+                    });
+                }
+            }
             if let Some(status) = self.status {
                 return Ok(HttpResponse {
                     status,
@@ -758,6 +937,46 @@ mod tests {
             .map(|_| ())
             .unwrap_err();
         assert!(err.to_string().contains("404"), "{err}");
+    }
+
+    #[test]
+    fn transient_open_status_is_retried() {
+        let fetch = FakeFetch::transient(data(), 503, 2);
+        let stream = HttpStream::with_fetch_headers("http://x/media", fetch, Vec::new()).unwrap();
+        assert_eq!(stream.total_len(), 1000);
+        let reqs = stream.fetch.requests.lock().unwrap().clone();
+        assert_eq!(reqs, vec![0, 0, 0], "two failures then success: {reqs:?}");
+    }
+
+    #[test]
+    fn client_error_is_not_retried() {
+        let fetch = FakeFetch::failing(404);
+        let err = HttpStream::with_fetch_headers("http://x/media", fetch, Vec::new())
+            .map(|_| ())
+            .unwrap_err();
+        assert!(err.to_string().contains("404"), "{err}");
+    }
+
+    #[test]
+    fn mid_body_failure_reconnects_and_resumes() {
+        let expected = data();
+        let fetch = FakeFetch::flaky_body(expected.clone(), 400);
+        let mut stream =
+            HttpStream::with_fetch_headers("http://x/media", fetch, Vec::new()).unwrap();
+
+        let mut out = Vec::new();
+        let mut buf = [0u8; 128];
+        loop {
+            match stream.read(&mut buf).unwrap() {
+                0 => break,
+                n => out.extend_from_slice(&buf[..n]),
+            }
+        }
+        assert_eq!(out, expected, "reconnect must resume at the failed byte");
+
+        let reqs = stream.fetch.requests.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 2, "one reconnect: {reqs:?}");
+        assert!(reqs[1] > 0 && reqs[1] < 1000, "resumed at {reqs:?}");
     }
 
     #[test]
