@@ -37,8 +37,8 @@
 //! tick cheaply.
 
 use std::ffi::c_void;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use souvlaki::{
@@ -92,6 +92,9 @@ struct MediaInner {
     snap: Snapshot,
     pushed_meta: Option<Snapshot>,
     pushed_play: Option<Snapshot>,
+    /// Deferred paused-state play commands (see [`defer_paused_play`]); the
+    /// worker is started on first use.
+    defer_tx: Option<mpsc::Sender<u64>>,
 }
 
 /// Last-known player state pushed by the player window.
@@ -235,11 +238,19 @@ fn now_ms() -> u64 {
 }
 
 /// Whether a paused-state Play is the system's device-change resume rather
-/// than a user command. The change may arrive slightly before or after the
-/// command, hence the absolute-distance window. A future-dated stamp (an NTP
-/// step backwards) must not swallow later presses, so the bound is symmetric.
-fn is_device_change_resume(command_ms: u64, changed_ms: Option<u64>, window_ms: u64) -> bool {
-    changed_ms.is_some_and(|changed| changed.abs_diff(command_ms) <= window_ms)
+/// than a user command.
+///
+/// Suppress only when the reroute landed at most [`PLAY_DEFER`] *before* the
+/// command (the racy order) or during the deferral (the usual order). A
+/// change further back — or a future-dated stamp from a clock step — must
+/// not swallow a real press.
+fn is_device_change_resume(command_ms: u64, changed_ms: Option<u64>) -> bool {
+    let window_ms = DEVICE_CHANGE_WINDOW.as_millis() as u64;
+    let defer_ms = PLAY_DEFER.as_millis() as u64;
+    changed_ms.is_some_and(|changed| {
+        changed <= command_ms.saturating_add(window_ms)
+            && command_ms.saturating_sub(changed) <= defer_ms
+    })
 }
 
 fn emit_media_command(app: &AppHandle, mapped: MappedCommand) {
@@ -250,6 +261,59 @@ fn emit_media_command(app: &AppHandle, mapped: MappedCommand) {
             secs: mapped.secs,
         },
     );
+}
+
+/// Queue a paused-state Play for the device-change check. A single worker
+/// serializes them: no thread per press, and broadcasts keep their order.
+fn defer_paused_play(app: &AppHandle, command_ms: u64) {
+    let hub = app.state::<MediaHub>();
+    let mut inner = hub.inner.lock().unwrap();
+    if inner.defer_tx.is_none() {
+        let (tx, rx) = mpsc::channel();
+        inner.defer_tx = Some(tx);
+        spawn_deferred_play_worker(app.clone(), rx);
+    }
+    if let Some(tx) = inner.defer_tx.as_ref() {
+        let _ = tx.send(command_ms);
+    }
+}
+
+/// Waits out [`PLAY_DEFER`] once per burst, then emits every queued Play that
+/// is not a device-change resume (in arrival order).
+fn spawn_deferred_play_worker(app: AppHandle, rx: mpsc::Receiver<u64>) {
+    let _ = std::thread::Builder::new()
+        .name("navinamp-media-defer".into())
+        .spawn(move || {
+            while let Ok(first) = rx.recv() {
+                let mut batch = vec![first];
+                let deadline = Instant::now() + PLAY_DEFER;
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    match rx.recv_timeout(remaining) {
+                        Ok(command_ms) => batch.push(command_ms),
+                        Err(_) => break, // timeout or sender gone
+                    }
+                }
+                let changed = audio::last_output_device_change_ms(&app.state::<audio::Audio>());
+                // One emit per queued press: duplicates are harmless (PLAY is
+                // a no-op once playing) and collapsing them would discard the
+                // ordering guarantee this worker exists for.
+                for command_ms in batch {
+                    if !is_device_change_resume(command_ms, changed) {
+                        emit_media_command(
+                            &app,
+                            MappedCommand {
+                                command: "play",
+                                secs: None,
+                            },
+                        );
+                    }
+                }
+            }
+        });
 }
 
 fn on_media_event(app: &AppHandle, event: MediaControlEvent) {
@@ -264,19 +328,10 @@ fn on_media_event(app: &AppHandle, event: MediaControlEvent) {
     };
     if mapped.command == "play" && playing == Some(false) {
         // Paused: macOS asks media apps to resume on default-device changes
-        // (it fires when Bluetooth headphones disconnect). Give the device
-        // event a moment to arrive, then drop the command if one did.
-        let command_ms = now_ms();
-        let app = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(PLAY_DEFER);
-            let changed = audio::last_output_device_change_ms(&app.state::<audio::Audio>());
-            if is_device_change_resume(command_ms, changed, DEVICE_CHANGE_WINDOW.as_millis() as u64)
-            {
-                return;
-            }
-            emit_media_command(&app, mapped);
-        });
+        // (it fires when Bluetooth headphones disconnect). The worker gives
+        // the device event a moment to arrive, then drops the command if one
+        // did.
+        defer_paused_play(app, now_ms());
         return;
     }
     emit_media_command(app, mapped);
@@ -599,17 +654,17 @@ mod tests {
     }
 
     #[test]
-    fn device_change_resume_window_is_symmetric() {
-        let window = DEVICE_CHANGE_WINDOW.as_millis() as u64;
-        // Route change just before the Play command (macOS order).
-        assert!(is_device_change_resume(10_000, Some(9_800), window));
-        // Change landing during the deferral (the racy order).
-        assert!(is_device_change_resume(10_000, Some(10_200), window));
-        // A stale change: this is a genuine user press.
-        assert!(!is_device_change_resume(10_000, Some(7_900), window));
+    fn device_change_resume_window_is_asymmetric() {
+        // Change landing during the deferral (the usual macOS order).
+        assert!(is_device_change_resume(10_000, Some(10_200)));
+        // Change up to PLAY_DEFER before the command (the racy order).
+        assert!(is_device_change_resume(10_000, Some(9_800)));
+        // A press long before the unplug is a genuine user command.
+        assert!(!is_device_change_resume(10_000, Some(8_500)));
+        assert!(!is_device_change_resume(10_000, Some(7_900)));
         // A forward clock step must not poison every later press.
-        assert!(!is_device_change_resume(10_000, Some(10_000_000), window));
+        assert!(!is_device_change_resume(10_000, Some(10_000_000)));
         // No device change ever recorded.
-        assert!(!is_device_change_resume(10_000, None, window));
+        assert!(!is_device_change_resume(10_000, None));
     }
 }
