@@ -113,6 +113,9 @@ jobs:
       - name: Ensure the GitHub Release exists
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no checkout, so `gh` cannot infer the repository
+          # from a git remote; name it explicitly.
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes
