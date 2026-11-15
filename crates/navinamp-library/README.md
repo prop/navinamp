@@ -53,7 +53,9 @@ CREATE TABLE tracks (
     server_id       TEXT,                   -- Navidrome profile id
     remote_path     TEXT,                   -- server-relative file path
     remote_album_id TEXT,                   -- Navidrome album id (quick-rescan grouping)
-    art_id          TEXT                    -- local: art-cache content hash; remote: coverArt id
+    art_id          TEXT,                   -- local: art-cache content hash; remote: coverArt id
+    label           TEXT,                   -- record-label tag (Navidrome native API sync)
+    catalog_num     TEXT                    -- catalog-number tag (same source; NULL when untagged)
 );
 -- indexes: album_key, artist, genre, (artist, album)
 ```

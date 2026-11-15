@@ -70,6 +70,8 @@ fn remote(remote_id: &str, album: &str, art_id: Option<&str>) -> RemoteTrack {
         starred: false,
         art_id: art_id.map(str::to_owned),
         size: Some(1_000),
+        label: None,
+        catalog_num: None,
     }
 }
 
@@ -236,7 +238,11 @@ fn albums_expose_first_track_art_and_its_source() {
 
     // A navidrome album whose rows carry the server's coverArt id.
     library
-        .sync_remote("s1", vec![remote("mf-1", "Homogenic", Some("al-42"))])
+        .sync_remote(
+            "s1",
+            vec![remote("mf-1", "Homogenic", Some("al-42"))],
+            false,
+        )
         .unwrap();
 
     let albums = library.albums(None).unwrap();
@@ -401,7 +407,7 @@ fn art_for_track_point_lookup_covers_both_sources() {
         .scan_roots(std::slice::from_ref(&music), |_| {})
         .unwrap();
     library
-        .sync_remote("s1", vec![remote("mf-7", "Post", None)])
+        .sync_remote("s1", vec![remote("mf-7", "Post", None)], false)
         .unwrap();
 
     // The scanner canonicalizes roots, so the stored path is the resolved

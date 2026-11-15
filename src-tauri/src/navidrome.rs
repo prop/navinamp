@@ -39,8 +39,8 @@ use navinamp_library::{
     Library, RemoteAlbum, RemoteTrack, Track, album_key, remote_path, repair_tag_text,
 };
 use navinamp_subsonic::{
-    AlbumDetail, AlbumSummary, MusicFolder, PlaylistSummary, SongSummary, StreamFormat,
-    SubsonicClient, join_record_labels,
+    AlbumDetail, AlbumSummary, MusicFolder, NativeTrackTags, PlaylistSummary, SongSummary,
+    StreamFormat, SubsonicClient, join_record_labels,
 };
 
 use crate::library::{LibraryState, db_file, with_library};
@@ -1268,6 +1268,9 @@ struct SyncTarget {
     label: String,
     library_id: Option<String>,
     client: Arc<SubsonicClient>,
+    /// Plaintext password — the native API's JWT login needs it (the
+    /// Subsonic token does not authenticate there). See `native_track_tags`.
+    password: String,
 }
 
 /// Borrowed inputs shared by the album-index and artist-fallback walks.
@@ -1280,6 +1283,7 @@ struct SyncJob<'a> {
     server_id: &'a str,
     label: &'a str,
     force_full: bool,
+    password: &'a str,
 }
 
 /// Library sync for one or all saved servers. A quick sync (default) pages
@@ -1341,15 +1345,7 @@ pub async fn navidrome_sync(
             let mut errors = initial_errors;
             let mut successes = 0u32;
             for target in targets {
-                match run_sync(
-                    &emitter,
-                    &target.client,
-                    &library,
-                    target.library_id.as_deref(),
-                    &target.server_id,
-                    &target.label,
-                    force_full,
-                ) {
+                match run_sync(&emitter, &library, &target, force_full) {
                     Ok(report) => {
                         successes += 1;
                         aggregate.artists += report.artists;
@@ -1409,7 +1405,7 @@ async fn prepare_sync_targets(
     let requested = requested
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    let profiles: Vec<(String, String, Option<String>)> = {
+    let profiles: Vec<(String, String, Option<String>, String)> = {
         let guard = state.inner.lock().unwrap();
         match requested.as_deref() {
             Some(id) => {
@@ -1421,13 +1417,21 @@ async fn prepare_sync_targets(
                     profile.id.clone(),
                     profile.name(),
                     profile.library_id.clone(),
+                    profile.password.clone(),
                 )]
             }
             None => guard
                 .config
                 .profiles
                 .iter()
-                .map(|p| (p.id.clone(), p.name(), p.library_id.clone()))
+                .map(|p| {
+                    (
+                        p.id.clone(),
+                        p.name(),
+                        p.library_id.clone(),
+                        p.password.clone(),
+                    )
+                })
                 .collect(),
         }
     };
@@ -1437,13 +1441,14 @@ async fn prepare_sync_targets(
 
     let mut targets = Vec::new();
     let mut errors = Vec::new();
-    for (server_id, label, library_id) in profiles {
+    for (server_id, label, library_id, password) in profiles {
         match ensure_client_for(state, &server_id).await {
             Ok(client) => targets.push(SyncTarget {
                 server_id,
                 label,
                 library_id,
                 client,
+                password,
             }),
             Err(e) if requested.is_none() => errors.push(format!("{label}: {e}")),
             Err(e) => return Err(format!("{label}: {e}")),
@@ -1483,29 +1488,27 @@ fn mark_synced(app: &AppHandle, inner: &Arc<Mutex<Inner>>, server_id: &str) {
 /// album walk is concurrent and prunes only this server after a clean pass.
 fn run_sync(
     app: &AppHandle,
-    client: &SubsonicClient,
     library: &Library,
-    library_id: Option<&str>,
-    server_id: &str,
-    label: &str,
+    target: &SyncTarget,
     force_full: bool,
 ) -> Result<SyncReport, String> {
     let started = Instant::now();
     tauri::async_runtime::block_on(async {
         let mut report = SyncReport::default();
         // Immediate feedback while the album index is paged.
-        emit_progress(app, 0, 0, server_id, label);
+        emit_progress(app, 0, 0, &target.server_id, &target.label);
         let job = SyncJob {
             app,
-            client,
+            client: &target.client,
             library,
-            library_id,
-            server_id,
-            label,
+            library_id: target.library_id.as_deref(),
+            server_id: &target.server_id,
+            label: &target.label,
             force_full,
+            password: &target.password,
         };
 
-        match fetch_album_index(client, library_id).await {
+        match fetch_album_index(&target.client, target.library_id.as_deref()).await {
             Some(albums) => {
                 sync_album_index(job, albums, &mut report).await?;
             }
@@ -1519,6 +1522,59 @@ fn run_sync(
         report.duration_ms = started.elapsed().as_millis() as u64;
         Ok(report)
     })
+}
+
+/// Per-track label/catalog tags from Navidrome's native API, keyed by
+/// Subsonic song id. Empty on any failure — the sync continues and rows
+/// keep NULL tags; the Subsonic surface simply has no equivalent fields on
+/// non-Navidrome servers, so this is best-effort by design.
+/// `None` = tags unavailable this run: the sync proceeds, but the batch
+/// upserts run in tag-preserving mode (previously synced values survive a
+/// failed walk instead of being overwritten with NULL — only a run that
+/// actually saw the native tag map may clear a tag). Also refused outright
+/// for plain-HTTP profiles: the native JWT login posts the plaintext
+/// password, unlike Subsonic's salted-token auth, so it must not travel
+/// unencrypted.
+async fn fetch_native_tags(
+    client: &SubsonicClient,
+    password: &str,
+    library_id: Option<&str>,
+) -> Option<HashMap<String, NativeTrackTags>> {
+    if !client.uses_https() {
+        eprintln!(
+            "navinamp navidrome: skipping native label/catalog tag fetch over non-HTTPS {}",
+            scrub_urls(&client.server_url())
+        );
+        return None;
+    }
+    match client.native_track_tags(password, library_id).await {
+        Ok(map) => Some(map),
+        Err(e) => {
+            eprintln!(
+                "navinamp navidrome: per-track label/catalog tags unavailable: {}",
+                scrub_urls(&e.to_string())
+            );
+            None
+        }
+    }
+}
+
+/// Sync-report warning for an unavailable native tag walk (the eprintln in
+/// [`fetch_native_tags`] is invisible in a release UI).
+fn note_tags_unavailable(report: &mut SyncReport) {
+    report
+        .errors
+        .push("per-track label/catalog tags unavailable this run — existing values kept".into());
+}
+
+/// The backfill payload for [`Library::apply_native_tags`]: `(remote_id,
+/// catalog_num, label)` triples straight from the native walk.
+fn native_tag_pairs(
+    map: &HashMap<String, NativeTrackTags>,
+) -> Vec<(String, Option<String>, Option<String>)> {
+    map.iter()
+        .map(|(id, t)| (id.clone(), t.catalog_num.clone(), t.label.clone()))
+        .collect()
 }
 
 /// Page the whole album index for one library, deduped by album id. `None`
@@ -1578,10 +1634,11 @@ async fn sync_album_index(
         app,
         client,
         library,
-        library_id: _,
+        library_id,
         server_id,
         label,
         force_full,
+        password,
     } = job;
     let total_albums = albums.len() as u64;
     let total_tracks: u64 = albums.iter().map(|a| u64::from(a.song_count)).sum();
@@ -1631,6 +1688,17 @@ async fn sync_album_index(
     let mut scanned_albums: u64 = 0;
     let mut scanned_tracks: u64 = 0;
 
+    // Per-track label/catalog tags are fetched on every run — even a no-op
+    // quick rescan, whose unchanged albums never re-map, needs them for the
+    // end-of-walk backfill (one request per 2000 tracks on the server).
+    let native_tags = match fetch_native_tags(client, password, library_id).await {
+        Some(map) => Some(map),
+        None => {
+            note_tags_unavailable(report);
+            None
+        }
+    };
+
     let mut stream = futures::stream::iter(albums.into_iter().map(|album| {
         let known = known_tracks.get(&album.id).cloned().unwrap_or_default();
         let skip = !force_full && album_matches(stored_albums.get(&album.id), &album, &known);
@@ -1662,7 +1730,7 @@ async fn sync_album_index(
                     if !song.id.is_empty() {
                         seen.insert(song.id.clone());
                     }
-                    tracks.push(map_song(&detail, song, server_id));
+                    tracks.push(map_song(&detail, song, server_id, native_tags.as_ref()));
                 }
                 scanned_tracks += if total_tracks > 0 {
                     u64::from(album.song_count)
@@ -1688,7 +1756,13 @@ async fn sync_album_index(
         {
             // Persist decoded rows before announcing progress: the library
             // pane refreshes on these events.
-            flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+            flush_remote_batch(
+                library,
+                &mut tracks,
+                &mut album_updates,
+                report,
+                native_tags.is_none(),
+            )?;
             let shown = if total_tracks == 0 {
                 scanned_tracks
             } else {
@@ -1696,11 +1770,33 @@ async fn sync_album_index(
             };
             emit_progress(app, shown, total_tracks, server_id, label);
         } else if tracks.len() >= SYNC_BATCH_TRACKS {
-            flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+            flush_remote_batch(
+                library,
+                &mut tracks,
+                &mut album_updates,
+                report,
+                native_tags.is_none(),
+            )?;
         }
     }
 
-    flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+    flush_remote_batch(
+        library,
+        &mut tracks,
+        &mut album_updates,
+        report,
+        native_tags.is_none(),
+    )?;
+
+    // Backfill rows a detail fetch never re-mapped (unchanged albums on a
+    // quick rescan) so existing libraries converge without a full sync.
+    if let Some(map) = &native_tags {
+        let pairs = native_tag_pairs(map);
+        library
+            .apply_native_tags(server_id, &pairs)
+            .map_err(|e| format!("native tag backfill failed: {e}"))?;
+    }
+
     let shown = if total_tracks == 0 {
         scanned_tracks
     } else {
@@ -1734,7 +1830,17 @@ async fn sync_by_artist(job: SyncJob<'_>, report: &mut SyncReport) -> Result<(),
         server_id,
         label,
         force_full: _,
+        password,
     } = job;
+    // The artist walk is a full walk by definition, so per-track
+    // label/catalog tags always ride along.
+    let native_tags = match fetch_native_tags(client, password, library_id).await {
+        Some(map) => Some(map),
+        None => {
+            note_tags_unavailable(report);
+            None
+        }
+    };
     let artists = client
         .get_artists(library_id)
         .await
@@ -1773,7 +1879,7 @@ async fn sync_by_artist(job: SyncJob<'_>, report: &mut SyncReport) -> Result<(),
                         if !song.id.is_empty() {
                             seen.insert(song.id.clone());
                         }
-                        tracks.push(map_song(&detail, song, server_id));
+                        tracks.push(map_song(&detail, song, server_id, native_tags.as_ref()));
                     }
                     scanned_tracks += detail.songs.len() as u64;
                     let mut update = remote_album_from_summary(server_id, &album);
@@ -1790,15 +1896,39 @@ async fn sync_by_artist(job: SyncJob<'_>, report: &mut SyncReport) -> Result<(),
             if scanned_albums.is_multiple_of(PROGRESS_EVERY)
                 || (total_albums > 0 && scanned_albums >= total_albums)
             {
-                flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+                flush_remote_batch(
+                    library,
+                    &mut tracks,
+                    &mut album_updates,
+                    report,
+                    native_tags.is_none(),
+                )?;
                 emit_progress(app, scanned_tracks, 0, server_id, label);
             } else if tracks.len() >= SYNC_BATCH_TRACKS {
-                flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+                flush_remote_batch(
+                    library,
+                    &mut tracks,
+                    &mut album_updates,
+                    report,
+                    native_tags.is_none(),
+                )?;
             }
         }
     }
 
-    flush_remote_batch(library, &mut tracks, &mut album_updates, report)?;
+    flush_remote_batch(
+        library,
+        &mut tracks,
+        &mut album_updates,
+        report,
+        native_tags.is_none(),
+    )?;
+    if let Some(map) = &native_tags {
+        let pairs = native_tag_pairs(map);
+        library
+            .apply_native_tags(server_id, &pairs)
+            .map_err(|e| format!("native tag backfill failed: {e}"))?;
+    }
     emit_progress(app, scanned_tracks, 0, server_id, label);
     if report.errors.is_empty() {
         report.tracks_removed = library
@@ -1870,11 +2000,12 @@ fn flush_remote_batch(
     tracks: &mut Vec<RemoteTrack>,
     albums: &mut Vec<RemoteAlbum>,
     report: &mut SyncReport,
+    preserve_missing_tags: bool,
 ) -> Result<(), String> {
     if !tracks.is_empty() {
         let batch = std::mem::take(tracks);
         let db = library
-            .upsert_remote(&batch)
+            .upsert_remote(&batch, preserve_missing_tags)
             .map_err(|e| format!("library sync failed: {e}"))?;
         report.tracks_added += db.added;
         report.tracks_updated += db.updated;
@@ -1891,7 +2022,12 @@ fn flush_remote_batch(
 /// Song + enclosing album → library row. `album_artist` comes from the
 /// album (Subsonic songs rarely carry one); the album fills gaps in
 /// per-song tags; `codec` from the suffix, duration from `song.duration`.
-fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteTrack {
+fn map_song(
+    album: &AlbumDetail,
+    song: &SongSummary,
+    server_id: &str,
+    native_tags: Option<&HashMap<String, NativeTrackTags>>,
+) -> RemoteTrack {
     let album_artist = if album.artist.is_empty() {
         // Same fallback chain as `playlist_rows`: the child's display album
         // artist when the album summary lacks one, else the track artist.
@@ -1918,6 +2054,29 @@ fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteT
         .clone()
         .or_else(|| album.genre.clone())
         .unwrap_or_default();
+    // Per-track tags come from the native API when the server is Navidrome;
+    // the album's joined labels / catalog number are the fallback (the
+    // album-level values are index-wide, the per-track values are what the
+    // individual file carries). When the native walk was unavailable
+    // (`None`), no value is produced at all: the batch upsert runs in
+    // tag-preserving mode, so synced values survive and fresh rows stay
+    // NULL rather than guessing from album-level data. Same charset repair
+    // as the other tags.
+    let native = native_tags.and_then(|m| m.get(&song.id));
+    let label = if native_tags.is_some() {
+        native
+            .and_then(|t| t.label.clone())
+            .or_else(|| join_record_labels(&album.record_labels))
+    } else {
+        None
+    };
+    let catalog_num = if native_tags.is_some() {
+        native
+            .and_then(|t| t.catalog_num.clone())
+            .or_else(|| album.catalog_number.clone().filter(|c| !c.is_empty()))
+    } else {
+        None
+    };
     RemoteTrack {
         remote_id: song.id.clone(),
         server_id: server_id.to_owned(),
@@ -1943,6 +2102,8 @@ fn map_song(album: &AlbumDetail, song: &SongSummary, server_id: &str) -> RemoteT
             .clone()
             .or_else(|| album.cover_art_id.clone()),
         size: song.size.map(|s| i64::try_from(s).unwrap_or(i64::MAX)),
+        label: label.map(|s| repair_tag_text(&s).into_owned()),
+        catalog_num: catalog_num.map(|s| repair_tag_text(&s).into_owned()),
     }
 }
 
@@ -2279,7 +2440,7 @@ mod tests {
             songs: vec![],
         };
 
-        let row = map_song(&album, &s, "p1");
+        let row = map_song(&album, &s, "p1", Some(&HashMap::new()));
         assert_eq!(row.title, "Песня");
         assert_eq!(row.album, "Альбом");
         assert_eq!(row.album_artist, "Исполнитель");
@@ -2290,6 +2451,56 @@ mod tests {
         assert_eq!(rows[0].title, "Песня");
         assert_eq!(rows[0].album, "Альбом");
         assert_eq!(rows[0].album_artist, "Исполнитель");
+    }
+
+    #[test]
+    fn track_labels_prefer_native_tags_and_fall_back_to_album() {
+        let album = AlbumDetail {
+            id: "al-1".into(),
+            name: "Selected Ambient Works".into(),
+            artist: "Aphex Twin".into(),
+            artist_id: "ar-1".into(),
+            year: 1992,
+            genre: None,
+            song_count: 2,
+            duration_secs: 586,
+            cover_art_id: None,
+            record_labels: vec![navinamp_subsonic::RecordLabel {
+                name: "Apollo Records".into(),
+            }],
+            catalog_number: Some("AMB CD 9205".into()),
+            songs: vec![],
+        };
+        let tagged = song("a");
+        let untagged = song("b");
+        let mut native = HashMap::new();
+        native.insert(
+            "a".into(),
+            NativeTrackTags {
+                catalog_num: Some("NORD 3".into()),
+                label: Some("Nordcore Records".into()),
+            },
+        );
+        // `b` is absent from the native map: album-level values fill in.
+
+        let rows = [
+            map_song(&album, &tagged, "p1", Some(&native)),
+            map_song(&album, &untagged, "p1", Some(&native)),
+            map_song(&album, &untagged, "p1", None),
+        ];
+        assert_eq!(rows[0].label.as_deref(), Some("Nordcore Records"));
+        assert_eq!(rows[0].catalog_num.as_deref(), Some("NORD 3"));
+        assert_eq!(
+            rows[1].label.as_deref(),
+            Some("Apollo Records"),
+            "album labels are the fallback for files without their own tag"
+        );
+        assert_eq!(rows[1].catalog_num.as_deref(), Some("AMB CD 9205"));
+        assert_eq!(
+            (rows[2].label.as_deref(), rows[2].catalog_num.as_deref()),
+            (None, None),
+            "an unavailable native walk must not fall back to album data"
+        );
     }
 
     fn album_summary() -> AlbumSummary {

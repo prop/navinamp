@@ -32,7 +32,60 @@ fn rt(remote_id: &str, title: &str) -> RemoteTrack {
         starred: false,
         art_id: Some("al-1".into()),
         size: Some(10_000_000),
+        label: None,
+        catalog_num: None,
     }
+}
+
+#[test]
+fn sync_stores_per_track_label_and_catalog_number() {
+    let (_s, library) = db("remote-labels");
+    let mut tagged = rt("t1", "Human Behaviour");
+    tagged.label = Some("Nordcore Records".into());
+    tagged.catalog_num = Some("NORD 3".into());
+    library
+        .sync_remote(S, vec![tagged, rt("t2", "Venus as a Boy")], false)
+        .unwrap();
+
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    let t1 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t1"))
+        .unwrap();
+    let t2 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t2"))
+        .unwrap();
+    assert_eq!(t1.label.as_deref(), Some("Nordcore Records"));
+    assert_eq!(t1.catalog_number.as_deref(), Some("NORD 3"));
+    assert_eq!(
+        t2.label, None,
+        "unlabeled rows stay NULL, not empty strings"
+    );
+    assert_eq!(t2.catalog_number, None);
+
+    // A rescan that drops the tags (file re-tagged without them) rewrites
+    // the stored values — the upsert is wholesale, not additive.
+    library
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], false)
+        .unwrap();
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    let t1 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t1"))
+        .unwrap();
+    assert_eq!(t1.label, None);
+    assert_eq!(t1.catalog_number, None);
 }
 
 fn db(label: &str) -> (common::Scratch, Library) {
@@ -48,6 +101,7 @@ fn sync_inserts_remote_rows_with_derived_paths() {
         .sync_remote(
             S,
             vec![rt("t1", "Human Behaviour"), rt("t2", "Venus as a Boy")],
+            false,
         )
         .unwrap();
 
@@ -99,7 +153,7 @@ fn sync_inserts_remote_rows_with_derived_paths() {
 fn resync_updates_metadata_preserves_user_data_and_dates() {
     let (scratch, library) = db("remote-update");
     library
-        .sync_remote(S, vec![rt("t1", "Human Behaviour")])
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], false)
         .unwrap();
 
     // Simulate user data + an older date_added (direct SQL: there is no
@@ -118,7 +172,7 @@ fn resync_updates_metadata_preserves_user_data_and_dates() {
     changed.album = "Debut (Deluxe)".into();
     changed.art_id = Some("al-2".into());
     changed.duration_secs = 251.0;
-    let report = library.sync_remote(S, vec![changed]).unwrap();
+    let report = library.sync_remote(S, vec![changed], false).unwrap();
 
     assert_eq!(report.added, 0);
     assert_eq!(report.updated, 1);
@@ -150,13 +204,13 @@ fn sync_refreshes_server_starred_state() {
     };
 
     library
-        .sync_remote(S, vec![rt("t1", "Human Behaviour")])
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], false)
         .unwrap();
     assert!(!starred_of("t1"), "fresh rows start unstarred");
 
     let mut starred = rt("t1", "Human Behaviour");
     starred.starred = true;
-    library.sync_remote(S, vec![starred]).unwrap();
+    library.sync_remote(S, vec![starred], false).unwrap();
     assert!(starred_of("t1"), "a sync refreshes the server-owned star");
 
     // The star command mirrors the server result into the local row.
@@ -183,7 +237,7 @@ fn sync_imports_server_ratings_without_clobbering_local_ones() {
     rated.rating = 4;
     let unrated = rt("t2", "Venus as a Boy");
     library
-        .sync_remote(S, vec![rated.clone(), unrated.clone()])
+        .sync_remote(S, vec![rated.clone(), unrated.clone()], false)
         .unwrap();
     assert_eq!(rating_of("t1"), 4);
     assert_eq!(rating_of("t2"), 0);
@@ -195,7 +249,7 @@ fn sync_imports_server_ratings_without_clobbering_local_ones() {
     let mut server_rated = unrated.clone();
     server_rated.rating = 3;
     library
-        .sync_remote(S, vec![server_changed, server_rated])
+        .sync_remote(S, vec![server_changed, server_rated], false)
         .unwrap();
     assert_eq!(rating_of("t1"), 2, "local rating survives a resync");
     assert_eq!(rating_of("t2"), 3, "unrated row picks up the server rating");
@@ -219,10 +273,10 @@ fn remove_unseen_is_scoped_to_navidrome_rows() {
     library.scan_roots(&[music], |_| {}).unwrap();
 
     library
-        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B")])
+        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B")], false)
         .unwrap();
     // t2 vanishes server-side; t1 stays.
-    let report = library.sync_remote(S, vec![rt("t1", "A")]).unwrap();
+    let report = library.sync_remote(S, vec![rt("t1", "A")], false).unwrap();
     assert_eq!(report.removed, 1);
     assert_eq!(report.added, 0);
     assert_eq!(report.updated, 1);
@@ -251,7 +305,7 @@ fn remove_unseen_is_scoped_to_navidrome_rows() {
     assert_eq!(locals[0].play_count, 0);
 
     // And an empty sync wipes the remote side only.
-    let report = library.sync_remote(S, vec![]).unwrap();
+    let report = library.sync_remote(S, vec![], false).unwrap();
     assert_eq!(report.removed, 1);
     assert_eq!(
         library
@@ -277,7 +331,7 @@ fn remove_unseen_is_scoped_to_navidrome_rows() {
 fn fts_finds_remote_rows() {
     let (_s, library) = db("remote-fts");
     library
-        .sync_remote(S, vec![rt("t1", "Böse Spieler")])
+        .sync_remote(S, vec![rt("t1", "Böse Spieler")], false)
         .unwrap();
 
     // Prefix + diacritic-insensitive, exactly like local rows.
@@ -287,20 +341,22 @@ fn fts_finds_remote_rows() {
 
     // Updated titles re-index (trigger-synced FTS).
     let changed = rt("t1", "Big Time Sensuality");
-    library.sync_remote(S, vec![changed]).unwrap();
+    library.sync_remote(S, vec![changed], false).unwrap();
     assert!(library.search("spiel", 10).unwrap().is_empty());
     let hits = library.search("sensual", 10).unwrap();
     assert_eq!(hits.len(), 1);
 
     // Removed rows vanish from the index too.
-    library.sync_remote(S, vec![]).unwrap();
+    library.sync_remote(S, vec![], false).unwrap();
     assert!(library.search("sensual", 10).unwrap().is_empty());
 }
 
 #[test]
 fn empty_remote_ids_are_skipped() {
     let (_s, library) = db("remote-empty-id");
-    let report = library.sync_remote(S, vec![rt("", "ghost")]).unwrap();
+    let report = library
+        .sync_remote(S, vec![rt("", "ghost")], false)
+        .unwrap();
     assert_eq!(report.added, 0);
     assert_eq!(
         library
@@ -315,11 +371,11 @@ fn empty_remote_ids_are_skipped() {
 fn batched_upserts_defer_pruning_until_the_walk_completes() {
     let (_scratch, library) = db("remote-batched");
     library
-        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B")])
+        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B")], false)
         .unwrap();
 
     // A mid-walk batch inserts rows but never removes unseen ones.
-    let report = library.upsert_remote(&[rt("t3", "C")]).unwrap();
+    let report = library.upsert_remote(&[rt("t3", "C")], false).unwrap();
     assert_eq!((report.added, report.updated, report.removed), (1, 0, 0));
     assert_eq!(
         library
@@ -354,8 +410,10 @@ fn remote_ids_are_scoped_per_server() {
     let mut other = rt("t1", "Same id on another server");
     other.server_id = "s2".into();
 
-    library.sync_remote(S, vec![rt("t1", "On s1")]).unwrap();
-    library.sync_remote("s2", vec![other]).unwrap();
+    library
+        .sync_remote(S, vec![rt("t1", "On s1")], false)
+        .unwrap();
+    library.sync_remote("s2", vec![other], false).unwrap();
 
     let rows = library.tracks_filtered(&TrackFilter::default()).unwrap();
     assert_eq!(rows.len(), 2, "same remote id stays distinct per server");
@@ -374,7 +432,7 @@ fn remote_ids_are_scoped_per_server() {
     assert_eq!((s1.tracks, s1.albums), (1, 1));
 
     // Pruning s1 cannot delete s2's row with the same remote id.
-    let report = library.sync_remote(S, vec![]).unwrap();
+    let report = library.sync_remote(S, vec![], false).unwrap();
     assert_eq!(report.removed, 1);
     let s2_rows = library
         .tracks_filtered(&TrackFilter {
@@ -398,7 +456,9 @@ fn remote_ids_are_scoped_per_server() {
 #[test]
 fn legacy_remote_paths_migrate_to_a_server() {
     let (scratch, library) = db("remote-migrate");
-    library.sync_remote("default", vec![rt("t1", "A")]).unwrap();
+    library
+        .sync_remote("default", vec![rt("t1", "A")], false)
+        .unwrap();
     drop(library);
 
     // Rewind the row to the pre-aggregation identity.
@@ -438,7 +498,7 @@ fn open_migrates_a_tracks_table_created_before_server_id() {
 
     // Reopening adds the column + index; remote upserts then work.
     let library = Library::open(scratch.db()).unwrap();
-    library.sync_remote(S, vec![rt("t1", "A")]).unwrap();
+    library.sync_remote(S, vec![rt("t1", "A")], false).unwrap();
     let track = &library.tracks_filtered(&TrackFilter::default()).unwrap()[0];
     assert_eq!(track.server_id.as_deref(), Some("s1"));
 }
@@ -449,7 +509,7 @@ fn remote_album_ids_group_tracks_for_quick_rescans() {
     let mut other = rt("t3", "C");
     other.remote_album_id = "al-2".into();
     library
-        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B"), other])
+        .sync_remote(S, vec![rt("t1", "A"), rt("t2", "B"), other], false)
         .unwrap();
 
     let by_album = library.remote_track_ids_by_album(S).unwrap();
@@ -468,7 +528,7 @@ fn remote_tracks_filtered_orders_by_server_path_not_synthetic_id() {
     earlier.remote_path = Some("A/Album/01 Earlier.mp3".into());
     earlier.album = "A".into();
 
-    library.sync_remote(S, vec![later, earlier]).unwrap();
+    library.sync_remote(S, vec![later, earlier], false).unwrap();
     let paths: Vec<String> = library
         .tracks_filtered(&TrackFilter {
             source: Some("navidrome".into()),
@@ -550,7 +610,7 @@ fn albums_surface_remote_label_and_catalog_number() {
     let mut other = rt("t2", "Venus as a Boy");
     other.remote_album_id = "al-2".into();
     library
-        .sync_remote(S, vec![rt("t1", "Human Behaviour"), other])
+        .sync_remote(S, vec![rt("t1", "Human Behaviour"), other], false)
         .unwrap();
     library
         .upsert_remote_albums(&[
@@ -597,7 +657,7 @@ fn albums_surface_remote_label_and_catalog_number() {
 fn track_point_lookup_carries_album_label_and_catalog() {
     let (_s, library) = db("remote-track-release-meta");
     library
-        .sync_remote(S, vec![rt("t1", "Human Behaviour")])
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], false)
         .unwrap();
     library
         .upsert_remote_albums(&[RemoteAlbum {
@@ -638,4 +698,174 @@ fn track_point_lookup_carries_album_label_and_catalog() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn sync_preserves_synced_tags_when_the_native_walk_failed() {
+    let (_s, library) = db("remote-tag-preserve");
+    let mut tagged = rt("t1", "Human Behaviour");
+    tagged.label = Some("Nordcore Records".into());
+    tagged.catalog_num = Some("NORD 3".into());
+    library.sync_remote(S, vec![tagged], false).unwrap();
+
+    // The next walk could not see the native tag map (server down): the
+    // wholesale upsert must keep the previously synced values.
+    library
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], true)
+        .unwrap();
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    let t1 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t1"))
+        .unwrap();
+    assert_eq!(t1.label.as_deref(), Some("Nordcore Records"));
+    assert_eq!(t1.catalog_number.as_deref(), Some("NORD 3"));
+
+    // A run that DID see the tag map (file re-tagged without label) may clear.
+    library
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], false)
+        .unwrap();
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    let t1 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t1"))
+        .unwrap();
+    assert!(t1.label.is_none() && t1.catalog_number.is_none());
+}
+
+#[test]
+fn apply_native_tags_backfills_rows_and_falls_back_to_the_album() {
+    let (_s, library) = db("remote-backfill");
+    // An album fingerprint row carrying the album-level values.
+    library
+        .upsert_remote_albums(&[RemoteAlbum {
+            server_id: S.into(),
+            album_id: "al-1".into(),
+            song_count: 1,
+            duration_secs: 250,
+            name: "Debut".into(),
+            artist: "Björk".into(),
+            year: Some(1993),
+            cover_art_id: None,
+            created: None,
+            label: Some("Apollo Records".into()),
+            catalog_num: Some("AMB CD 9205".into()),
+        }])
+        .unwrap();
+    library
+        .sync_remote(
+            S,
+            vec![rt("t1", "Human Behaviour"), rt("t2", "Venus as a Boy")],
+            false,
+        )
+        .unwrap();
+
+    // t1 has its own file tags; t2 has none and takes the album fallback.
+    let updated = library
+        .apply_native_tags(
+            S,
+            &[
+                (
+                    "t1".into(),
+                    Some("NORD 3".into()),
+                    Some("Nordcore Records".into()),
+                ),
+                ("t2".into(), None, None),
+            ],
+        )
+        .unwrap();
+    assert_eq!(updated, 2);
+
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    let t1 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t1"))
+        .unwrap();
+    let t2 = tracks
+        .iter()
+        .find(|t| t.remote_id.as_deref() == Some("t2"))
+        .unwrap();
+    assert_eq!(t1.label.as_deref(), Some("Nordcore Records"));
+    assert_eq!(t1.catalog_number.as_deref(), Some("NORD 3"));
+    assert_eq!(
+        t2.label.as_deref(),
+        Some("Apollo Records"),
+        "album fallback"
+    );
+    assert_eq!(t2.catalog_number.as_deref(), Some("AMB CD 9205"));
+
+    // Unknown ids touch nothing.
+    let updated = library
+        .apply_native_tags(S, &[("ghost".into(), None, None)])
+        .unwrap();
+    assert_eq!(updated, 0);
+}
+
+#[test]
+fn track_by_path_prefers_the_track_tags_over_album_values() {
+    let (_s, library) = db("remote-track-by-path-tags");
+    let mut own = rt("t1", "Human Behaviour");
+    own.label = Some("Nordcore Records".into());
+    own.catalog_num = Some("NORD 3".into());
+    let fallback = rt("t2", "Venus as a Boy");
+    library.upsert_remote(&[own, fallback], false).unwrap();
+    library
+        .upsert_remote_albums(&[RemoteAlbum {
+            server_id: S.into(),
+            album_id: "al-1".into(),
+            song_count: 2,
+            duration_secs: 500,
+            name: "Debut".into(),
+            artist: "Björk".into(),
+            year: Some(1993),
+            cover_art_id: None,
+            created: None,
+            label: Some("Apollo Records".into()),
+            catalog_num: Some("AMB CD 9205".into()),
+        }])
+        .unwrap();
+
+    let paths = |t: &str| {
+        library
+            .tracks_filtered(&TrackFilter {
+                source: Some("navidrome".into()),
+                ..TrackFilter::default()
+            })
+            .unwrap()
+            .into_iter()
+            .find(|row| row.remote_id.as_deref() == Some(t))
+            .unwrap()
+            .path
+    };
+
+    let own_row = library.track_by_path(&paths("t1")).unwrap().unwrap();
+    assert_eq!(
+        own_row.label.as_deref(),
+        Some("Nordcore Records"),
+        "own tag wins"
+    );
+    assert_eq!(own_row.catalog_number.as_deref(), Some("NORD 3"));
+
+    let fallback_row = library.track_by_path(&paths("t2")).unwrap().unwrap();
+    assert_eq!(
+        fallback_row.label.as_deref(),
+        Some("Apollo Records"),
+        "album values fill rows without their own tag"
+    );
+    assert_eq!(fallback_row.catalog_number.as_deref(), Some("AMB CD 9205"));
 }

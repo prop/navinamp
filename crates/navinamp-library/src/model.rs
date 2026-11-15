@@ -61,12 +61,12 @@ pub struct Track {
     /// `coverArt` id (feed it to the Subsonic `getCoverArt` URL builder).
     /// `None` = no art found.
     pub art_id: Option<String>,
-    /// Remote album record label(s), joined for display. Point lookups
-    /// (`track_by_path`, for the row context menu) fill it; bulk queries
-    /// leave it `None`.
+    /// Record-label tag synced from Navidrome's native API (what the file
+    /// carries), falling back to the album's joined labels when the file has
+    /// none; `None` when neither exists.
     #[serde(default)]
     pub label: Option<String>,
-    /// Remote album catalog number, same population rules as [`Self::label`].
+    /// Catalog-number tag, same population rules as [`Self::label`].
     #[serde(default)]
     pub catalog_number: Option<String>,
 }
@@ -252,6 +252,13 @@ pub struct RemoteTrack {
     pub art_id: Option<String>,
     /// File size in bytes when the server reports it.
     pub size: Option<i64>,
+    /// Record-label tag from Navidrome's native API, falling back to the
+    /// album's joined labels when the file itself carries none.
+    pub label: Option<String>,
+    /// Catalog-number tag from Navidrome's native API (no Subsonic field
+    /// carries it), falling back to the album's `catalogNumber` when the
+    /// server exposes one.
+    pub catalog_num: Option<String>,
 }
 
 /// One album-index fingerprint used by Navidrome quick rescans. It is built

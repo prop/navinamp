@@ -45,13 +45,19 @@ pub fn remote_ref_from_path(path: &str) -> Option<(&str, &str)> {
 pub(super) fn upsert_remote(
     conn: &Connection,
     tracks: &[RemoteTrack],
+    preserve_missing_tags: bool,
 ) -> rusqlite::Result<RemoteSyncReport> {
+    let sql = if preserve_missing_tags {
+        REMOTE_UPSERT_PRESERVE_TAGS_SQL
+    } else {
+        REMOTE_UPSERT_SQL
+    };
     let mut report = RemoteSyncReport::default();
 
     let tx = conn.unchecked_transaction()?;
     {
         let mut lookup = tx.prepare("SELECT id FROM tracks WHERE path = ?1")?;
-        let mut upsert = tx.prepare(REMOTE_UPSERT_SQL)?;
+        let mut upsert = tx.prepare(sql)?;
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -94,6 +100,8 @@ pub(super) fn upsert_remote(
                 t.remote_path,
                 t.remote_album_id,
                 t.art_id,
+                t.label,
+                t.catalog_num,
             ])?;
 
             if was_new {
@@ -311,8 +319,9 @@ pub(super) fn sync_remote(
     conn: &Connection,
     server_id: &str,
     tracks: &[RemoteTrack],
+    preserve_missing_tags: bool,
 ) -> rusqlite::Result<RemoteSyncReport> {
-    let mut report = upsert_remote(conn, tracks)?;
+    let mut report = upsert_remote(conn, tracks, preserve_missing_tags)?;
     let seen: HashSet<String> = tracks
         .iter()
         .filter(|t| !t.remote_id.is_empty() && t.server_id == server_id)
@@ -320,6 +329,41 @@ pub(super) fn sync_remote(
         .collect();
     report.removed = prune_remote(conn, server_id, &seen)?;
     Ok(report)
+}
+
+/// Bulk-apply native-API per-track tags (`(remote_id, catalog_num, label)`
+/// triples) to one server's rows without re-mapping album details. A track
+/// whose triple carries no value falls back to its album's stored values,
+/// the same fallback `upsert_remote` uses — one transaction, other servers
+/// and local rows never touched. Returns the number of rows updated.
+pub(super) fn apply_native_tags(
+    conn: &Connection,
+    server_id: &str,
+    tags: &[(String, Option<String>, Option<String>)],
+) -> rusqlite::Result<u64> {
+    let tx = conn.unchecked_transaction()?;
+    let mut updated = 0u64;
+    {
+        let mut stmt = tx.prepare(
+            "UPDATE tracks SET
+                 label       = COALESCE(?2, (SELECT ra.label
+                                                FROM remote_albums ra
+                                                WHERE ra.server_id = tracks.server_id
+                                                  AND ra.album_id  = tracks.remote_album_id)),
+                 catalog_num = COALESCE(?3, (SELECT ra.catalog_num
+                                             FROM remote_albums ra
+                                             WHERE ra.server_id = tracks.server_id
+                                               AND ra.album_id  = tracks.remote_album_id))
+               WHERE source = 'navidrome' AND server_id = ?1 AND remote_id = ?4",
+        )?;
+        for (remote_id, catalog_num, label) in tags {
+            // SQL positional order: ?2 = label, ?3 = catalog_num.
+            updated +=
+                stmt.execute(rusqlite::params![server_id, label, catalog_num, remote_id])? as u64;
+        }
+    }
+    tx.commit()?;
+    Ok(updated)
 }
 
 /// Insert-or-refresh. On conflict, everything the sync owns is refreshed
@@ -335,9 +379,9 @@ INSERT INTO tracks (
     path, mtime, size, title, artist, album_artist, album, album_key, genre,
     year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
     channels, codec, rating, starred, date_added, source, remote_id, server_id, remote_path,
-    remote_album_id, art_id
+    remote_album_id, art_id, label, catalog_num
 ) VALUES (
-    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22, ?23, ?24
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22, ?23, ?24, ?25, ?26
 )
 ON CONFLICT(path) DO UPDATE SET
     size         = excluded.size,
@@ -361,4 +405,45 @@ ON CONFLICT(path) DO UPDATE SET
     server_id       = excluded.server_id,
     remote_path     = excluded.remote_path,
     remote_album_id = excluded.remote_album_id,
-    art_id          = excluded.art_id";
+    art_id          = excluded.art_id,
+    label           = excluded.label,
+    catalog_num     = excluded.catalog_num";
+
+/// Same upsert, but used when the per-track label/catalog source was
+/// unavailable this run: `COALESCE` keeps the previously synced values
+/// instead of letting a NULL overwrite them. Only a run that actually saw
+/// the native tag map may clear a tag (wholesale convergence).
+const REMOTE_UPSERT_PRESERVE_TAGS_SQL: &str = "\
+INSERT INTO tracks (
+    path, mtime, size, title, artist, album_artist, album, album_key, genre,
+    year, track_no, disc_no, duration_secs, bitrate_kbps, samplerate,
+    channels, codec, rating, starred, date_added, source, remote_id, server_id, remote_path,
+    remote_album_id, art_id, label, catalog_num
+) VALUES (
+    ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 'navidrome', ?20, ?21, ?22, ?23, ?24, ?25, ?26
+)
+ON CONFLICT(path) DO UPDATE SET
+    size         = excluded.size,
+    title        = excluded.title,
+    artist       = excluded.artist,
+    album_artist = excluded.album_artist,
+    album        = excluded.album,
+    album_key    = excluded.album_key,
+    genre        = excluded.genre,
+    year         = excluded.year,
+    track_no     = excluded.track_no,
+    disc_no      = excluded.disc_no,
+    duration_secs   = excluded.duration_secs,
+    bitrate_kbps    = excluded.bitrate_kbps,
+    samplerate      = excluded.samplerate,
+    channels        = excluded.channels,
+    codec           = excluded.codec,
+    rating          = CASE WHEN tracks.rating = 0 THEN excluded.rating ELSE tracks.rating END,
+    starred         = excluded.starred,
+    remote_id       = excluded.remote_id,
+    server_id       = excluded.server_id,
+    remote_path     = excluded.remote_path,
+    remote_album_id = excluded.remote_album_id,
+    art_id          = excluded.art_id,
+    label           = COALESCE(excluded.label, tracks.label),
+    catalog_num     = COALESCE(excluded.catalog_num, tracks.catalog_num)";

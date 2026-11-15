@@ -183,16 +183,44 @@ impl Library {
         &self,
         server_id: &str,
         tracks: Vec<RemoteTrack>,
+        preserve_missing_tags: bool,
     ) -> Result<RemoteSyncReport> {
-        Ok(remote::sync_remote(&self.conn, server_id, &tracks)?)
+        Ok(remote::sync_remote(
+            &self.conn,
+            server_id,
+            &tracks,
+            preserve_missing_tags,
+        )?)
     }
 
     /// Upsert one batch of remote rows **without pruning** — the incremental
     /// sync writes while it walks, so the library UI can render rows before
     /// the whole server library has landed. Call [`Self::prune_remote`] with
     /// every id seen once the walk completes.
-    pub fn upsert_remote(&self, tracks: &[RemoteTrack]) -> Result<RemoteSyncReport> {
-        Ok(remote::upsert_remote(&self.conn, tracks)?)
+    pub fn upsert_remote(
+        &self,
+        tracks: &[RemoteTrack],
+        preserve_missing_tags: bool,
+    ) -> Result<RemoteSyncReport> {
+        Ok(remote::upsert_remote(
+            &self.conn,
+            tracks,
+            preserve_missing_tags,
+        )?)
+    }
+
+    /// Bulk-backfills per-track label / catalog-number columns from a
+    /// Navidrome native-API tag walk, keyed by `remote_id`, without
+    /// re-fetching album details. A track whose file carries no tag falls
+    /// back to its album's stored values, matching [`Self::upsert_remote`]
+    /// semantics — so this converges rows that a quick (unchanged-library)
+    /// sync never re-mapped. Returns the number of rows updated.
+    pub fn apply_native_tags(
+        &self,
+        server_id: &str,
+        tags: &[(String, Option<String>, Option<String>)],
+    ) -> Result<u64> {
+        Ok(remote::apply_native_tags(&self.conn, server_id, tags)?)
     }
 
     /// Remove one server's navidrome rows not present in `seen` (the

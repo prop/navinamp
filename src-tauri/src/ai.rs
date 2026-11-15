@@ -900,9 +900,13 @@ while pagination.pages > pagination.page (up to 4 calls).
 Example: "all Nordcore vinyl records according to Discogs"
 {"action":"discogs_search","label":"Nordcore","format":"Vinyl","kind":"release","per_page":100}
 Then finish with BOTH: the catalog panel (already shown to the user) and a
-def whose rules match the label keyword against album, artist and title with
-"contains" (match "any") — the library has no label tag, so keyword rules are
-how local tracks from that label are found. Say that in the explanation.
+def selecting the matching local tracks. Use the `label` / `catalogNumber`
+rule fields for that — they are synced from the server's per-file tags when
+available, and `catalogNumber` pins an exact pressing (e.g. from the
+catalog panel). Note in the explanation that these tags exist only on part
+of a typical collection, and add the keyword fallback rules (label keyword
+"contains" against album, artist and title, match "any") in the same group —
+tagless tracks are then still found while tagged tracks stay exact.
 Use "def": null only when no keyword can be extracted at all.
 
 2. Finish:
@@ -933,7 +937,7 @@ broader local results. When set, still build "def" from the catalog keywords
 as above.
 
 Rule schema:
-- Text fields: title, artist, albumArtist, album, genre, codec, path, source, server.
+- Text fields: title, artist, albumArtist, album, genre, label, catalogNumber, codec, path, source, server.
   Operators: is, isNot, contains, notContains, startsWith, endsWith.
   Values are strings. `source` is "local" or "navidrome". `path` also matches
   navidrome://<server>/<id>; `server` is a profile id from the library digest.
@@ -953,6 +957,14 @@ Guidance:
   the explanation. Do not invent genres; use the library digest.
 - "liked/favourite" means starred = 1. "recently added/played" use the date
   fields. "long songs" use durationSecs (e.g. gt 360).
+- `label` / `catalogNumber` are record-label and catalog-number tags synced
+  from the server (Navidrome's native API). Libraries typically carry them
+  on only part of the collection, so a `label is`/`catalogNumber is` rule
+  can legitimately match fewer tracks than exist — say so in the
+  explanation instead of widening the rule silently. Catalog numbers are
+  exact release identifiers: prefer `catalogNumber is "NORDCD05"` over a
+  label match when the user names a specific pressing, and a catalog
+  keyword match over title/artist guessing for Discogs-anchored requests.
 - When refining an existing definition, keep its good rules and change only
   what the new instruction asks for.
 "#
@@ -1859,15 +1871,22 @@ mod tests {
     }
 
     #[test]
-    fn prompt_pairs_catalog_lookups_with_local_keyword_rules() {
+    fn prompt_pairs_catalog_lookups_with_local_label_rules() {
         let prompt = system_prompt();
-        // A label/discogs lookup must ALSO produce local keyword rules, not a
+        // A label/discogs lookup must ALSO produce local rules, not a
         // catalog-only answer (regression: the prompt used to teach the model
         // to finish with "def": null for label questions).
-        assert!(prompt.contains("match the label keyword against album, artist and title"));
+        assert!(prompt.contains("def selecting the matching local tracks"));
         assert!(prompt.contains("Catalog answers and local tracks are not exclusive"));
         assert!(!prompt.contains("Do not collapse a catalog request"));
         assert!(!prompt.contains("For a catalog-only answer set"));
+        // The label fields are the primary selector now; keyword matching is
+        // only the tagless fallback, and the stale "no label tag" claim is
+        // gone.
+        assert!(prompt.contains("`label` / `catalogNumber`"));
+        assert!(prompt.contains("catalogNumber` pins an exact pressing"));
+        assert!(prompt.contains("add the keyword fallback rules"));
+        assert!(!prompt.contains("the library has no label tag"));
     }
 
     #[test]

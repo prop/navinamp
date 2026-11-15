@@ -702,7 +702,10 @@ fn mark_played_never_touches_remote_rows() {
                 starred: false,
                 art_id: None,
                 size: Some(1_000_000),
+                label: None,
+                catalog_num: None,
             }],
+            false,
         )
         .unwrap();
     let remote_path = library
@@ -747,6 +750,32 @@ fn open_migrates_a_tracks_table_created_before_starred() {
     let tracks = library.tracks_filtered(&TrackFilter::default()).unwrap();
     assert!(tracks.iter().all(|t| !t.starred));
     library.set_starred("s1", "anything", true).unwrap();
+}
+
+#[test]
+fn open_migrates_tracks_tables_without_label_columns() {
+    let scratch = common::Scratch::new("label-migration");
+    {
+        // A database from a build that predates the per-track
+        // label/catalog_num columns.
+        let library = Library::open(scratch.db()).unwrap();
+        drop(library);
+        let raw = rusqlite::Connection::open(scratch.db()).unwrap();
+        raw.execute("ALTER TABLE tracks DROP COLUMN label", [])
+            .unwrap();
+        raw.execute("ALTER TABLE tracks DROP COLUMN catalog_num", [])
+            .unwrap();
+        drop(raw);
+    }
+
+    let library = Library::open(scratch.db()).unwrap();
+    // The column list now selects both; this fails without the ALTERs.
+    let tracks = library.tracks_filtered(&TrackFilter::default()).unwrap();
+    assert!(
+        tracks
+            .iter()
+            .all(|t| t.label.is_none() && t.catalog_number.is_none())
+    );
 }
 
 #[test]

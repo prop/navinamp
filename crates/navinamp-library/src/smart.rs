@@ -138,6 +138,8 @@ pub enum Field {
     AlbumArtist,
     Album,
     Genre,
+    Label,
+    CatalogNumber,
     Codec,
     Path,
     Source,
@@ -162,8 +164,11 @@ enum FieldKind {
 }
 
 impl Field {
-    /// The `tracks` column for this field — from this exhaustive match,
-    /// never from user input.
+    /// The `tracks` column (or NULL-normalizing expression) for this field —
+    /// from this exhaustive match, never from user input. Nullable text
+    /// columns are wrapped in `COALESCE(col, '')` so `notContains`/`isNot`
+    /// treat unlabeled rows as empty rather than SQL-NULL (which would
+    /// silently exclude them from every comparison).
     fn column(self) -> &'static str {
         match self {
             Field::Title => "title",
@@ -171,6 +176,8 @@ impl Field {
             Field::AlbumArtist => "album_artist",
             Field::Album => "album",
             Field::Genre => "genre",
+            Field::Label => "COALESCE(label, '')",
+            Field::CatalogNumber => "COALESCE(catalog_num, '')",
             Field::Codec => "codec",
             Field::Path => "path",
             Field::Source => "source",
@@ -193,6 +200,8 @@ impl Field {
             | Field::AlbumArtist
             | Field::Album
             | Field::Genre
+            | Field::Label
+            | Field::CatalogNumber
             | Field::Codec
             | Field::Path
             | Field::Source

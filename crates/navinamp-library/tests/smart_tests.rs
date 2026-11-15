@@ -72,6 +72,8 @@ struct Row {
     last_played_at: Option<i64>,
     date_added: i64,
     source: String,
+    label: Option<String>,
+    catalog_num: Option<String>,
 }
 
 impl Row {
@@ -92,6 +94,8 @@ impl Row {
             last_played_at: None,
             date_added: 1_700_000_000,
             source: "local".into(),
+            label: None,
+            catalog_num: None,
         }
     }
 
@@ -143,6 +147,14 @@ impl Row {
         self.source = v.into();
         self
     }
+    fn label(mut self, v: &str) -> Row {
+        self.label = Some(v.into());
+        self
+    }
+    fn catalog_num(mut self, v: &str) -> Row {
+        self.catalog_num = Some(v.into());
+        self
+    }
 }
 
 fn insert(conn: &Connection, row: Row) {
@@ -150,8 +162,8 @@ fn insert(conn: &Connection, row: Row) {
         "INSERT INTO tracks (
              path, mtime, size, title, artist, album_artist, album, album_key,
              genre, year, duration_secs, bitrate_kbps, codec, rating,
-             play_count, last_played_at, date_added, source
-         ) VALUES (?1, 0, 0, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, ?9, 'mp3', ?10, ?11, ?12, ?13, ?14)",
+             play_count, last_played_at, date_added, source, label, catalog_num
+         ) VALUES (?1, 0, 0, ?2, ?3, '', ?4, ?5, ?6, ?7, ?8, ?9, 'mp3', ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
             row.path,
             row.title,
@@ -171,6 +183,8 @@ fn insert(conn: &Connection, row: Row) {
             row.last_played_at,
             row.date_added,
             row.source,
+            row.label,
+            row.catalog_num,
         ],
     )
     .unwrap();
@@ -197,6 +211,8 @@ fn rule_fixture(label: &str) -> Ctx {
             .artist("ANN")
             .album("Zoo")
             .genre("Rock")
+            .label("Nordcore Records")
+            .catalog_num("NORDCD05")
             .year(Some(1990))
             .rating(1)
             .duration(100.5)
@@ -659,6 +675,46 @@ fn text_rules_cover_artist_album_genre_path_source() {
     assert_eq!(
         one(Field::Source, Op::Contains, "navi"),
         strs(&["Remote One"])
+    );
+}
+
+#[test]
+fn text_rules_cover_label_and_catalog_number() {
+    let c = rule_fixture("label-fields");
+    let one = |field, op, value: &str| -> Vec<String> {
+        preview_titles(
+            &c.library,
+            &view("t", group(MatchMode::All, vec![rule(field, op, s(value))])),
+        )
+    };
+
+    // Only "Alpha" carries the tags in the fixture.
+    assert_eq!(
+        one(Field::Label, Op::Is, "nordcore records"),
+        strs(&["Alpha"]),
+        "is is case-insensitive"
+    );
+    assert_eq!(
+        one(Field::Label, Op::Contains, "nordcore"),
+        strs(&["Alpha"])
+    );
+    assert_eq!(
+        one(Field::CatalogNumber, Op::Is, "NORDCD05"),
+        strs(&["Alpha"])
+    );
+    assert_eq!(
+        one(Field::CatalogNumber, Op::StartsWith, "NORD"),
+        strs(&["Alpha"])
+    );
+    // NULL tags behave as the empty string: notContains/isNot keep the
+    // unlabeled rows instead of SQL-NULL dropping them (7 fixture rows,
+    // only Alpha carries the tags).
+    assert_eq!(one(Field::Label, Op::NotContains, "nordcore").len(), 6);
+    assert_eq!(one(Field::Label, Op::IsNot, "Nordcore Records").len(), 6);
+    assert_eq!(
+        one(Field::CatalogNumber, Op::NotContains, "NORD").len(),
+        6,
+        "unlabeled rows are not dropped by NOT-comparisons"
     );
 }
 
