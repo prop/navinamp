@@ -406,6 +406,33 @@ function broadcastQueueState(): void {
   void emit("queue-state", { from: "main", snapshot: readSnapshot() });
 }
 
+/**
+ * The last snapshot the player actually broadcast — the immediate-vs-debounce
+ * decision compares against it (item identities only; a position-only change
+ * keeps every id).
+ */
+let lastBroadcast: QueueSnapshot | null = null;
+
+/** Persistence keeps its own, slower debounce in every path (see below). */
+const PERSIST_DEBOUNCE_MS = 1000;
+
+/**
+ * Same ids in the same order ⇒ only position/toggle state changed. The
+ * comparison is deliberately order-sensitive: a reorder is a real item
+ * mutation and must stay on the coalesced path, so don't "fix" this into an
+ * order-insensitive compare.
+ */
+function sameItemsById(
+  a: QueueSnapshot["items"],
+  b: QueueSnapshot["items"],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id) return false;
+  }
+  return true;
+}
+
 // ── skin theme plumbing ─────────────────────────────────────────────────────
 
 /** The theme the player last published (starts as the classic default). */
@@ -524,21 +551,49 @@ export function initWindowBus(): void {
     // Heal: another window may have been focused before our listeners
     // existed (it answers by re-broadcasting its current state).
     void emit("app-focus-request", {});
-    // Broadcast after every queue mutation, coalesced: PLAY ALL can insert
-    // tens of thousands of items and the effect deep-reads the whole queue,
-    // so a burst of mutations must not serialize + broadcast it repeatedly.
-    // 150ms is below perception; the snapshot of the latest run wins.
+    // React to every queue-state change with a two-tier policy: broadcast
+    // immediately for position-only changes, coalesce item bursts at 150ms
+    // (PLAY ALL can insert tens of thousands of items and the effect
+    // deep-reads the whole queue; the snapshot of the latest run wins), and
+    // debounce persistence on its own slower clock. The immediate tier is
+    // what keeps the playlist editor's highlight and windowshade strip in
+    // lockstep with the player on every track change.
     // Wait for restoreQueue(): its async disk load completes after this
     // module graph initializes, and saving the empty state first would
     // overwrite the file we are about to restore.
     $effect(() => {
       if (!queueReady.value) return;
       const snapshot = readSnapshot();
-      const timer = setTimeout(() => {
+      // Persistence is always debounced, on its own clock: the save
+      // serializes the whole queue (JSON + disk IPC — tens of ms at tens of
+      // thousands of rows), and a track advance rarely changes anything
+      // worth saving beyond currentIndex, so it must not pay that per
+      // advance now that broadcasts go out immediately. The close path
+      // flushes the latest snapshot unconditionally.
+      const persistTimer = setTimeout(() => persistQueue(snapshot), PERSIST_DEBOUNCE_MS);
+      // Broadcasting is two-tier: item mutations (PLAY ALL inserting tens of
+      // thousands of items) stay coalesced at 150ms, latest-wins; everything
+      // else — above all a track advance (gapless engine advance, skip) but
+      // also shuffle/repeat toggles — goes out immediately, because the
+      // playlist editor's highlight and windowshade strip render from the
+      // broadcast and used to visibly trail the player on every track
+      // change.
+      if (
+        lastBroadcast != null &&
+        sameItemsById(lastBroadcast.items, snapshot.items)
+      ) {
+        lastBroadcast = snapshot;
         void emit("queue-state", { from: "main", snapshot });
-        persistQueue(snapshot);
+        return () => clearTimeout(persistTimer);
+      }
+      const timer = setTimeout(() => {
+        lastBroadcast = snapshot;
+        void emit("queue-state", { from: "main", snapshot });
       }, 150);
-      return () => clearTimeout(timer);
+      return () => {
+        clearTimeout(persistTimer);
+        clearTimeout(timer);
+      };
     });
     // Best-effort flush if the player window closes inside the debounce.
     // `beforeunload` is not reliable in the Tauri webview; the close path is.
