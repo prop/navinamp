@@ -233,7 +233,8 @@ impl Shared {
     }
 
     /// Record a device route change/removal (called from the sink error
-    /// callback thread).
+    /// callback thread, or from the app's macOS default-device listener when
+    /// our own stream is suspended and cannot observe the change).
     pub(crate) fn note_output_device_change(&self) {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

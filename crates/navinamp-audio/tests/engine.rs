@@ -462,8 +462,12 @@ fn seek_while_paused_jumps_and_continues_exactly() {
     assert!((p - 0.3).abs() < 0.005, "position after seek {p}");
 
     engine.send(Command::Resume).expect("resume");
+    // Wait for Playing WITHOUT pulling: the ring already holds the staged
+    // post-seek audio (cmd_seek prefills), and a pull landing just after the
+    // status flips would consume one 64-frame chunk that this test then
+    // expected to read — the intermittent 64-frame offset (sample 0 =
+    // -0.382 = frame 13294 instead of 13230).
     while engine.status() != PlaybackStatus::Playing {
-        sink.pull(64);
         std::thread::sleep(Duration::from_millis(1));
     }
 

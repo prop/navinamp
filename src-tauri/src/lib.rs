@@ -3,6 +3,8 @@ mod ai_rules;
 mod art;
 mod audio;
 mod commands;
+#[cfg(target_os = "macos")]
+mod device_watch;
 mod library;
 mod media;
 mod menu;
@@ -52,6 +54,11 @@ pub fn run() {
         .manage(media::MediaHub::default())
         .setup(|app| {
             audio::init(app.handle());
+            // Feed the engine's device-change stamp from CoreAudio's
+            // default-device property: the paused-play guard (#122) needs it
+            // even while our own stream is suspended (#131).
+            #[cfg(target_os = "macos")]
+            device_watch::install(app.handle());
             library::init(app.handle());
             navidrome::init(app.handle());
             // Creates the playlist/library windows, restores persisted

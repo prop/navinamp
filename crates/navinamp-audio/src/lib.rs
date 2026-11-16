@@ -389,6 +389,17 @@ impl EngineHandle {
         self.shared.last_output_device_change_ms()
     }
 
+    /// Record an output-device change seen by an external observer.
+    ///
+    /// The sink error callback only reports changes while the stream is
+    /// rendering; a suspended stream (paused playback) never errors, so the
+    /// app's macOS default-device listener stamps the same field to keep the
+    /// paused-play-suppression window (see `src-tauri/src/media.rs`) working
+    /// in every playback state.
+    pub fn note_output_device_change(&self) {
+        self.shared.note_output_device_change();
+    }
+
     // ----- equaliser (see `eq.rs`; all reads/writes are lock-free) -----
 
     /// The current EQ state (atomic snapshot).

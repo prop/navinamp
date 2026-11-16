@@ -268,6 +268,17 @@ pub fn last_output_device_change_ms(state: &Audio) -> Option<u64> {
         .and_then(|engine| engine.last_output_device_change_ms())
 }
 
+/// Stamp a device change the engine's own stream could not observe (it is
+/// suspended while playback is not live). The macOS default-device listener
+/// calls this; see `device_watch.rs` — cfg-gated with it so non-macOS builds
+/// don't carry an uncalled helper (CI clippy runs `-D warnings`).
+#[cfg(target_os = "macos")]
+pub fn note_output_device_change(state: &Audio) {
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.note_output_device_change();
+    }
+}
+
 /// Current desktop-notification preference (also read by the native menu).
 pub fn notify_track(state: &Audio) -> bool {
     *state.notify_track.lock().unwrap()
