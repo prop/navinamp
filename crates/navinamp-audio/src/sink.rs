@@ -57,4 +57,11 @@ pub trait AudioSink: Send + 'static {
         cb: AudioCallback,
         err_cb: SinkErrorCallback,
     ) -> Result<(), AudioError>;
+
+    /// Suspend (`true`) or resume (`false`) the output device. While
+    /// suspended the callback stops consuming the ring (contents preserved —
+    /// a later resume continues where consumption stopped) and the OS drops
+    /// its audio power assertion, so an idle player no longer prevents
+    /// system sleep. Default: no-op, for test sinks.
+    fn set_output_paused(&mut self, _paused: bool) {}
 }

@@ -191,6 +191,11 @@ pub(crate) struct Producer {
     source_flip: Option<(u64, bool)>,
     draining: bool,
     drain_started: Option<Instant>,
+    /// Whether the output device is currently suspended (see
+    /// [`AudioSink::set_output_paused`]). Synced to the playback status every
+    /// loop iteration; the stream itself starts running when opened, so the
+    /// first sync suspends it unless playback is already live.
+    output_paused: bool,
     shutdown: bool,
     /// Decoded frames not yet accepted by the ring (ring was full).
     pending_out: Vec<f32>,
@@ -226,6 +231,7 @@ impl Producer {
             source_flip: None,
             draining: false,
             drain_started: None,
+            output_paused: false,
             shutdown: false,
             pending_out: Vec::new(),
             decode_scratch: Vec::new(),
@@ -249,17 +255,31 @@ impl Producer {
             if self.shutdown {
                 break;
             }
+            self.sync_output();
             if self.tick() {
                 std::thread::sleep(Duration::from_micros(200));
             } else {
-                match self.cmd_rx.recv_timeout(self.idle_timeout()) {
-                    Ok(cmd) => {
-                        if self.handle_command(cmd) {
-                            self.shutdown = true;
+                // A zero timeout means "nothing can make progress without a
+                // command": block until one arrives instead of polling.
+                if self.idle_timeout().is_zero() {
+                    match self.cmd_rx.recv() {
+                        Ok(cmd) => {
+                            if self.handle_command(cmd) {
+                                self.shutdown = true;
+                            }
                         }
+                        Err(_) => break, // disconnected
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => break,
+                } else {
+                    match self.cmd_rx.recv_timeout(self.idle_timeout()) {
+                        Ok(cmd) => {
+                            if self.handle_command(cmd) {
+                                self.shutdown = true;
+                            }
+                        }
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
                 }
             }
         }
@@ -268,12 +288,37 @@ impl Producer {
     }
 
     fn idle_timeout(&self) -> Duration {
-        if self.current.is_some() || self.autoplay || self.pending_play.is_some() || self.draining {
-            Duration::from_millis(5)
-        } else {
-            // An idle window (declared by `SetUpcoming`) may still be opening;
-            // a 100 ms poll is plenty and avoids busy-looping while it waits.
-            Duration::from_millis(100)
+        let active =
+            self.current.is_some() || self.autoplay || self.pending_play.is_some() || self.draining;
+        if !active {
+            // Fully idle (no track, nothing queued to feed): commands are the
+            // only thing that can happen — block until one arrives instead of
+            // polling. A declared-but-unplayed window may still be opening
+            // asynchronously, so keep the cheap poll for that case.
+            if self.window.is_empty() {
+                return Duration::ZERO;
+            }
+            return Duration::from_millis(100);
+        }
+        // Paused: the ring is not being consumed, so there is no fill cadence
+        // to keep — a slow poll is plenty and commands wake the thread
+        // instantly on arrival.
+        if self.shared.status() == PlaybackStatus::Paused {
+            return Duration::from_millis(100);
+        }
+        Duration::from_millis(5)
+    }
+
+    /// Suspend the output device whenever playback is not live (paused or
+    /// stopped). A suspended CoreAudio stream drops the OS audio power
+    /// assertion — an idle NaVinaMP then no longer prevents system sleep —
+    /// and the device callback stops burning wakeups on silence. Ring
+    /// contents survive; a resume continues consumption where it stopped.
+    fn sync_output(&mut self) {
+        let desired_paused = self.shared.status() != PlaybackStatus::Playing;
+        if desired_paused != self.output_paused {
+            self.sink.set_output_paused(desired_paused);
+            self.output_paused = desired_paused;
         }
     }
 
@@ -1107,6 +1152,9 @@ impl Producer {
         }) as SinkErrorCallback;
         self.sink
             .open(cfg, Box::new(move |out: &mut [f32]| cb.pull(out)), err_cb)?;
+        // A fresh cpal stream starts running; sync_output suspends it unless
+        // playback is live.
+        self.output_paused = false;
 
         // The analyser maps FFT bins with the output rate; keep it current.
         self.shared.set_sink_rate(cfg.sample_rate);
@@ -1133,6 +1181,15 @@ impl Producer {
     fn hard_reset(&mut self) {
         self.pending_out.clear();
         if let Some(ring) = self.ring.as_mut() {
+            // The reset handshake completes inside the output callback — so
+            // the device must be live for it to be observed. Playback that
+            // arrives while the device is suspended (play from stopped,
+            // seek while paused) resumes it here; the regular sync suspends
+            // it again afterwards if playback is still not live.
+            if self.output_paused {
+                self.sink.set_output_paused(false);
+                self.output_paused = false;
+            }
             let target = ring.request_reset();
             ring.wait_reset_acked(target, RESET_WAIT);
             ring.refresh();
