@@ -16,6 +16,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# CoreAudio property listeners: the authoritative default-output-device
+# change event (kAudioHardwarePropertyDefaultOutputDevice), independent of
+# whether our own output stream is running. See `device_watch.rs`.
+objc2-core-audio = "0.3"
+
 [dependencies]
 navinamp-audio = { path = "../crates/navinamp-audio" }
 navinamp-library = { path = "../crates/navinamp-library" }
