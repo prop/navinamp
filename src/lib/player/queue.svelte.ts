@@ -513,8 +513,9 @@ function prev(): void {
 // ── persistence (player window only): the queue survives restarts ───────────
 // File-backed via `state_save_queue` / `state_load_queue` in the app data dir,
 // so queue length is not bound to the webview's localStorage quota. Saves are
-// debounced by the bus's broadcast effect; the legacy localStorage key is
-// still read once for migration.
+// debounced by the bus's broadcast effect on their own slower clock (a track
+// advance broadcasts immediately but must not pay a full-queue serialize per
+// change); the legacy localStorage key is still read once for migration.
 
 /** Legacy localStorage key (pre-file persistence); read once for migration. */
 const LEGACY_PERSIST_KEY = "navinamp.queue.v1";
