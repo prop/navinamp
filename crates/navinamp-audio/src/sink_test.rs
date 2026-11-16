@@ -8,6 +8,7 @@
 //! 44.1 kHz sink).
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::error::AudioError;
@@ -16,6 +17,10 @@ use crate::sink::{AudioCallback, AudioSink, SinkConfig, SinkErrorCallback};
 struct TestInner {
     cfg: SinkConfig,
     state: Mutex<TestState>,
+    /// Mirrors the last [`AudioSink::set_output_paused`] call, so tests can
+    /// assert the engine's suspend/resume lifecycle (idle device suspended,
+    /// playing device live).
+    paused: AtomicBool,
 }
 
 struct TestState {
@@ -42,8 +47,16 @@ impl TestSink {
                     cb: None,
                     open_count: 0,
                 }),
+                paused: AtomicBool::new(false),
             }),
         }
+    }
+
+    /// Whether the engine last asked this sink to suspend its output. A real
+    /// device drops its OS power assertion while suspended; tests assert this
+    /// flag instead of measuring power.
+    pub fn suspended(&self) -> bool {
+        self.inner.paused.load(Ordering::SeqCst)
     }
 
     /// The fixed configuration this sink accepts.
@@ -100,6 +113,10 @@ impl AudioSink for TestSink {
         state.cb = Some(cb);
         state.open_count += 1;
         Ok(())
+    }
+
+    fn set_output_paused(&mut self, paused: bool) {
+        self.inner.paused.store(paused, Ordering::SeqCst);
     }
 }
 
