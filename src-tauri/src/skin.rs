@@ -663,6 +663,32 @@ mod tests {
     }
 
     #[test]
+    fn slider_thumbs_ship_as_raster() {
+        // Thumb SVGs at fractional WebKit scales can leak a bevel sliver
+        // beside the element; keep all slider thumbs on the PNG path.
+        let archive = SkinArchive::from_bytes(BASE_291_WSZ.to_vec()).expect("archive");
+        let payload = load_archive(archive).expect("load");
+        for id in [
+            "wsz.seek.thumb",
+            "wsz.seek.thumb.down",
+            "wsz.vol.thumb",
+            "wsz.vol.thumb.down",
+            "wsz.bal.thumb",
+            "wsz.bal.thumb.down",
+            "wsz.shade.pos.thumb",
+            "wsz.eq.thumb",
+            "wsz.eq.thumb.down",
+        ] {
+            let url = payload.images.get(id).expect(id);
+            assert!(
+                url.starts_with("data:image/png"),
+                "{id} must stay raster, got {}",
+                &url[..24.min(url.len())]
+            );
+        }
+    }
+
+    #[test]
     fn base_skin_titlebar_band_ships_as_vector() {
         // The flat 275×14 titlebar band must vectorize so the Winamp
         // wordmark stays crisp at 1.25×/1.5× — regardless of whether the

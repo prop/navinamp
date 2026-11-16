@@ -64,6 +64,24 @@ const PNG_PREFIX: &str = "data:image/png;base64,";
 /// which alone would add ~230 KiB each — stay raster.
 const SVG_SIZE_BUDGET: f64 = 7.0;
 
+/// Bitmaps that always ship as PNG regardless of the size contest.
+///
+/// Slider thumbs are tiny flat art; their SVG form buys no resolution, and
+/// WebKit's SVG-background rasterization at fractional scales can leak a
+/// sliver of the bevel beside the element (the "trail" reported next to the
+/// seek/balance thumbs). Raster keeps the skin's own pixels.
+const RASTER_ONLY_IDS: &[&str] = &[
+    "wsz.seek.thumb",
+    "wsz.seek.thumb.down",
+    "wsz.vol.thumb",
+    "wsz.vol.thumb.down",
+    "wsz.bal.thumb",
+    "wsz.bal.thumb.down",
+    "wsz.shade.pos.thumb",
+    "wsz.eq.thumb",
+    "wsz.eq.thumb.down",
+];
+
 /// Bitmaps that always ship as SVG even when over [`SVG_SIZE_BUDGET`].
 ///
 /// The player titlebar band (`wsz.main.titlebar`, emitted by the classic
@@ -185,12 +203,14 @@ pub fn bitmap_payloads(
             // warning variant for the impossible case.
             Err(_) => svg_url.clone(),
         };
-        // Glyph strips stay raster regardless of the size comparison.
-        let raster_only = bitmap.file.as_deref().is_some_and(|file| {
-            font_files
-                .iter()
-                .any(|font_file| font_file.eq_ignore_ascii_case(file))
-        });
+        // Glyph strips and slider thumbs stay raster regardless of the size
+        // comparison.
+        let raster_only = RASTER_ONLY_IDS.contains(&bitmap.id.as_str())
+            || bitmap.file.as_deref().is_some_and(|file| {
+                font_files
+                    .iter()
+                    .any(|font_file| font_file.eq_ignore_ascii_case(file))
+            });
         let vector_forced = VECTOR_FORCED.contains(&bitmap.id.as_str());
         let url = if raster_only {
             png_url
