@@ -119,9 +119,13 @@
     pushMediaMetadata();
   }
 
-  // Poll engine state at 10 Hz.
+  // Poll engine state: 10 Hz while playing (the seekbar needs the cadence),
+  // 1 Hz otherwise — a paused/stopped player has nothing moving to show, and
+  // each poll is an IPC round trip that wakes both webview and backend.
+  const pollMs = $derived(audio.status === "playing" ? 100 : 1000);
   $effect(() => {
-    const timer = setInterval(refresh, 100);
+    const ms = pollMs;
+    const timer = setInterval(refresh, ms);
     return () => clearInterval(timer);
   });
 

@@ -122,6 +122,22 @@ impl AudioSink for CpalSink {
         self.open_cfg = Some(cfg);
         Ok(())
     }
+    fn set_output_paused(&mut self, paused: bool) {
+        let Some(stream) = &self.stream else {
+            return;
+        };
+        let result = if paused {
+            stream.pause()
+        } else {
+            stream.play()
+        };
+        if let Err(e) = result {
+            eprintln!(
+                "navinamp audio: cpal stream {} failed: {e}",
+                if paused { "pause" } else { "resume" }
+            );
+        }
+    }
 }
 
 impl std::fmt::Debug for CpalSink {
