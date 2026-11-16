@@ -433,8 +433,9 @@ fn common_paths() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         if let Some(local) = env::var_os("LOCALAPPDATA") {
-            candidates.push(PathBuf::from(local).join("Programs/yt-dlp/yt-dlp.exe"));
-            candidates.push(PathBuf::from(local).join("yt-dlp/yt-dlp.exe"));
+            let local = PathBuf::from(local);
+            candidates.push(local.join("Programs/yt-dlp/yt-dlp.exe"));
+            candidates.push(local.join("yt-dlp/yt-dlp.exe"));
         }
     }
     candidates.into_iter().find(|path| is_executable(path))
