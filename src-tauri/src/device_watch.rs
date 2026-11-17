@@ -43,6 +43,7 @@ mod imp {
         // SAFETY: `client_data` is the leaked AppHandle from `install`; it
         // lives for the process lifetime and AppHandle is Send + Sync.
         let app = unsafe { &*(client_data as *const AppHandle) };
+        eprintln!("navinamp device-watch: default output device changed");
         audio::note_output_device_change(&app.state::<audio::Audio>());
         0
     }
@@ -72,6 +73,11 @@ mod imp {
         };
         if status != 0 {
             eprintln!("navinamp: cannot watch default output device changes (OSStatus {status})");
+            // Registration failed: reclaim the leaked handle instead of
+            // keeping a dead clone for the process lifetime.
+            // SAFETY: `handle` came from `Box::into_raw` above and CoreAudio
+            // never took ownership (the call failed).
+            drop(unsafe { Box::from_raw(handle) });
         }
     }
 }

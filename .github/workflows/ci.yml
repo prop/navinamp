@@ -34,6 +34,7 @@ jobs:
             [ -f "$f" ] || continue
             sudo sed -i \
               -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              -e 's|https\?://[a-z0-9.-]*ec2\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
               "$f" || true
           done
 
@@ -252,6 +253,7 @@ jobs:
             [ -f "$f" ] || continue
             sudo sed -i \
               -e 's|https\?://azure\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
+              -e 's|https\?://[a-z0-9.-]*ec2\.archive\.ubuntu\.com|http://archive.ubuntu.com|g' \
               "$f" || true
           done
 

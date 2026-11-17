@@ -240,17 +240,21 @@ fn now_ms() -> u64 {
 /// Whether a paused-state Play is the system's device-change resume rather
 /// than a user command.
 ///
-/// Suppress only when the reroute landed at most [`PLAY_DEFER`] *before* the
-/// command (the racy order) or during the deferral (the usual order). A
-/// change further back — or a future-dated stamp from a clock step — must
-/// not swallow a real press.
+/// Suppress whenever the route change is within [`DEVICE_CHANGE_WINDOW`] of
+/// the command, in either order. The window must be symmetric: the
+/// CoreAudio property event fires at the *start* of a route change, while
+/// the OS media Play can trail it by well over [`PLAY_DEFER`] (Bluetooth
+/// teardown latency) — a one-sided window let exactly those resumes through.
+///
+/// The cost is that a genuine press within two seconds of a device change is
+/// dropped; the user can simply press again. The window intentionally
+/// accepts that a *small* forward wall-clock step (≤ the window) can also
+/// swallow one paused press — the alternative (a one-sided upper guard)
+/// re-opened the resume-on-device-change hole this window exists to close.
+/// Changes beyond the window in either direction never suppress.
 fn is_device_change_resume(command_ms: u64, changed_ms: Option<u64>) -> bool {
     let window_ms = DEVICE_CHANGE_WINDOW.as_millis() as u64;
-    let defer_ms = PLAY_DEFER.as_millis() as u64;
-    changed_ms.is_some_and(|changed| {
-        changed <= command_ms.saturating_add(window_ms)
-            && command_ms.saturating_sub(changed) <= defer_ms
-    })
+    changed_ms.is_some_and(|changed| changed.abs_diff(command_ms) <= window_ms)
 }
 
 fn emit_media_command(app: &AppHandle, mapped: MappedCommand) {
@@ -302,7 +306,32 @@ fn spawn_deferred_play_worker(app: AppHandle, rx: mpsc::Receiver<u64>) {
                 // a no-op once playing) and collapsing them would discard the
                 // ordering guarantee this worker exists for.
                 for command_ms in batch {
-                    if !is_device_change_resume(command_ms, changed) {
+                    let suppressed = is_device_change_resume(command_ms, changed);
+                    // The whole guard is invisible otherwise: log the decision
+                    // so a resumed-on-device-change report can be diagnosed
+                    // from stderr (Finder launch: `open --stderr …`).
+                    match changed {
+                        Some(changed_ms) => {
+                            let delta = command_ms.abs_diff(changed_ms);
+                            let side = if changed_ms <= command_ms {
+                                "before"
+                            } else {
+                                "after"
+                            };
+                            eprintln!(
+                                "navinamp media: paused play {} — device change {delta} ms {side} the command",
+                                if suppressed {
+                                    "suppressed"
+                                } else {
+                                    "forwarded"
+                                },
+                            )
+                        }
+                        None => eprintln!(
+                            "navinamp media: paused play forwarded — no device change recorded"
+                        ),
+                    }
+                    if !suppressed {
                         emit_media_command(
                             &app,
                             MappedCommand {
@@ -654,15 +683,28 @@ mod tests {
     }
 
     #[test]
-    fn device_change_resume_window_is_asymmetric() {
-        // Change landing during the deferral (the usual macOS order).
+    fn device_change_resume_window_is_symmetric() {
+        let window_ms = DEVICE_CHANGE_WINDOW.as_millis() as u64;
+        // Through the window on both sides of the command.
         assert!(is_device_change_resume(10_000, Some(10_200)));
-        // Change up to PLAY_DEFER before the command (the racy order).
         assert!(is_device_change_resume(10_000, Some(9_800)));
-        // A press long before the unplug is a genuine user command.
-        assert!(!is_device_change_resume(10_000, Some(8_500)));
+        assert!(is_device_change_resume(
+            10_000,
+            Some(10_000 - window_ms + 1)
+        ));
+        assert!(is_device_change_resume(10_000, Some(10_000 + window_ms)));
+        // The regression this pins: the CoreAudio property event can precede
+        // the OS media Play by more than PLAY_DEFER (Bluetooth teardown), and
+        // must still be suppressed.
+        assert!(is_device_change_resume(10_000, Some(9_500)));
+        // Outside the window: a genuine user command.
+        assert!(!is_device_change_resume(
+            10_000,
+            Some(10_000 - window_ms - 1)
+        ));
         assert!(!is_device_change_resume(10_000, Some(7_900)));
-        // A forward clock step must not poison every later press.
+        // A far-future clock step must not poison every later press (the
+        // window is not open-ended; small forward steps are accepted).
         assert!(!is_device_change_resume(10_000, Some(10_000_000)));
         // No device change ever recorded.
         assert!(!is_device_change_resume(10_000, None));
