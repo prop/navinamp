@@ -187,8 +187,13 @@
 
   .info {
     /* Cap the details block so long values wrap inside the menu's
-       viewport-capped width (album titles/quality can be long). */
+       viewport-capped width (album titles/quality can be long). Also cap
+       the height: a many-row card must not push the menu's actions below
+       the fold — the block scrolls separately instead (the menu body
+       scrolls too, but the actions should stay reachable without it). */
     max-width: calc(360px * var(--s, 1));
+    max-height: calc(220px * var(--s, 1));
+    overflow-y: auto;
     box-sizing: border-box;
     padding: calc(3px * var(--s, 1)) calc(10px * var(--s, 1)) calc(5px * var(--s, 1));
   }

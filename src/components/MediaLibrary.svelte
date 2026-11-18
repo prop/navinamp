@@ -1714,7 +1714,14 @@
       t.trackNo != null
         ? `track ${t.discNo != null ? `${t.discNo}.` : ""}${t.trackNo}`
         : "";
-    add("length", [fmt(t.durationSecs), trackNo].filter(Boolean).join(" · "));
+    // Unscanned/zero-duration rows have nothing useful to show: omit the
+    // row rather than render a confident "0:00".
+    add(
+      "length",
+      [t.durationSecs > 0 ? fmt(t.durationSecs) : "", trackNo]
+        .filter(Boolean)
+        .join(" · "),
+    );
 
     add(
       "quality",
