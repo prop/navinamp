@@ -39,6 +39,10 @@ const PREFS_FILE: &str = "audio.json";
 /// running) and are the values persisted across restarts.
 pub struct Audio {
     engine: Mutex<Option<EngineHandle>>,
+    /// Wall-clock ms (UNIX epoch) of the last output-device change, written
+    /// by the macOS default-device listener even before the engine exists
+    /// (the engine's own stamp is only reachable once it has started).
+    last_device_change_ms: std::sync::atomic::AtomicU64,
     eq: Mutex<EqState>,
     volume: Mutex<f32>,
     /// Desktop "now playing" notification preference (menu + frontend gate).
@@ -55,6 +59,7 @@ impl Default for Audio {
     fn default() -> Self {
         Self {
             engine: Mutex::new(None),
+            last_device_change_ms: std::sync::atomic::AtomicU64::new(0),
             eq: Mutex::new(EqState::default()),
             volume: Mutex::new(1.0),
             notify_track: Mutex::new(true),
@@ -257,15 +262,21 @@ fn persist(state: &Audio) {
     }
 }
 
-/// Wall-clock ms of the last output-device route change/removal, if the
-/// engine has been started and has seen one.
+/// Wall-clock ms of the last output-device route change/removal, from
+/// whichever source saw it first: the engine's stream callback or the app's
+/// macOS default-device listener (which also covers the pre-first-play gap
+/// when no engine exists yet).
 pub fn last_output_device_change_ms(state: &Audio) -> Option<u64> {
-    state
-        .engine
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|engine| engine.last_output_device_change_ms())
+    let app_stamp = state
+        .last_device_change_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let engine_stamp = state.engine.lock().ok().and_then(|engine| {
+        engine
+            .as_ref()
+            .and_then(|e| e.last_output_device_change_ms())
+    });
+    let ms = app_stamp.max(engine_stamp.unwrap_or(0));
+    (ms > 0).then_some(ms)
 }
 
 /// Stamp a device change the engine's own stream could not observe (it is
@@ -274,7 +285,20 @@ pub fn last_output_device_change_ms(state: &Audio) -> Option<u64> {
 /// don't carry an uncalled helper (CI clippy runs `-D warnings`).
 #[cfg(target_os = "macos")]
 pub fn note_output_device_change(state: &Audio) {
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    // The app-level stamp always lands — the listener must feed the guard
+    // even on a never-played launch, when no engine exists to stamp.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    state
+        .last_device_change_ms
+        .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+    // The engine stamp is a convenience for its own API; a poisoned lock on
+    // CoreAudio's notification thread must never panic it.
+    if let Ok(guard) = state.engine.lock()
+        && let Some(engine) = guard.as_ref()
+    {
         engine.note_output_device_change();
     }
 }
