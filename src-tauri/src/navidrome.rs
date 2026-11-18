@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use navinamp_library::{
-    Library, RemoteAlbum, RemoteTrack, Track, album_key, remote_path, repair_tag_text,
+    Library, NativeTagRow, RemoteAlbum, RemoteTrack, Track, album_key, remote_path, repair_tag_text,
 };
 use navinamp_subsonic::{
     AlbumDetail, AlbumSummary, MusicFolder, NativeTrackTags, PlaylistSummary, SongSummary,
@@ -821,6 +821,36 @@ pub async fn navidrome_stream_url(
     Ok(client.stream_url(&remote_id, format, bitrate).to_string())
 }
 
+/// Absolute server-side file path for one Navidrome song.
+///
+/// Subsonic's `song.path` is a synthesized `fakePath` unless the player has
+/// Report Real Path enabled; the native API row carries the actual
+/// `libraryPath` + relative `path`. Used by Copy path and the track card so
+/// they never show that synthetic path.
+#[tauri::command]
+pub async fn navidrome_native_path(
+    state: State<'_, NavidromeState>,
+    server_id: Option<String>,
+    remote_id: String,
+) -> Result<String, String> {
+    let server = resolve_server(&state, server_id)?;
+    let client = ensure_client_for(&state, &server).await?;
+    let password = {
+        let guard = state.inner.lock().unwrap();
+        guard
+            .config
+            .profile(&server)
+            .ok_or_else(|| "not connected".to_string())?
+            .password
+            .clone()
+    };
+    client
+        .native_track_path(&password, &remote_id)
+        .await
+        .map_err(|e| scrub_urls(&e.to_string()))?
+        .ok_or_else(|| "server did not report a native path".to_string())
+}
+
 /// The cover-art URL for a remote art id (a song or album `coverArt` id —
 /// exactly what the sync stores in `tracks.art_id` for navidrome rows).
 /// Mirrors [`navidrome_stream_url`]: a pure builder over the connected
@@ -1568,12 +1598,20 @@ fn note_tags_unavailable(report: &mut SyncReport) {
 }
 
 /// The backfill payload for [`Library::apply_native_tags`]: `(remote_id,
-/// catalog_num, label)` triples straight from the native walk.
-fn native_tag_pairs(
-    map: &HashMap<String, NativeTrackTags>,
-) -> Vec<(String, Option<String>, Option<String>)> {
+/// catalog_num, label, absolute_path)` rows straight from the native walk.
+/// The path makes quick rescans converge too: unchanged albums never reach
+/// `map_song`, so without this column their rows would keep Subsonic's
+/// synthetic path indefinitely.
+fn native_tag_pairs(map: &HashMap<String, NativeTrackTags>) -> Vec<NativeTagRow> {
     map.iter()
-        .map(|(id, t)| (id.clone(), t.catalog_num.clone(), t.label.clone()))
+        .map(|(id, t)| {
+            (
+                id.clone(),
+                t.catalog_num.clone(),
+                t.label.clone(),
+                t.absolute_path.clone(),
+            )
+        })
         .collect()
 }
 
@@ -2063,6 +2101,11 @@ fn map_song(
     // NULL rather than guessing from album-level data. Same charset repair
     // as the other tags.
     let native = native_tags.and_then(|m| m.get(&song.id));
+    // The native walk carries the server's real file path (`libraryPath` +
+    // relative `path`); Subsonic's `path` is Navidrome's synthetic fakePath
+    // unless the player has Report Real Path enabled. Prefer the real one
+    // and fall back only when the native API was unavailable.
+    let native_path = native.and_then(|t| t.absolute_path.clone());
     let label = if native_tags.is_some() {
         native
             .and_then(|t| t.label.clone())
@@ -2081,7 +2124,7 @@ fn map_song(
         remote_id: song.id.clone(),
         server_id: server_id.to_owned(),
         remote_album_id: album.id.clone(),
-        remote_path: (!song.path.is_empty()).then(|| song.path.clone()),
+        remote_path: native_path.or_else(|| (!song.path.is_empty()).then(|| song.path.clone())),
         title: repair_tag_text(&song.title).into_owned(),
         artist: repair_tag_text(&song.artist).into_owned(),
         album_artist: repair_tag_text(&album_artist).into_owned(),
@@ -2479,6 +2522,7 @@ mod tests {
             NativeTrackTags {
                 catalog_num: Some("NORD 3".into()),
                 label: Some("Nordcore Records".into()),
+                absolute_path: Some("/music/Aphex Twin/Selected Ambient Works/01 Xtal.flac".into()),
             },
         );
         // `b` is absent from the native map: album-level values fill in.
@@ -2490,6 +2534,16 @@ mod tests {
         ];
         assert_eq!(rows[0].label.as_deref(), Some("Nordcore Records"));
         assert_eq!(rows[0].catalog_num.as_deref(), Some("NORD 3"));
+        assert_eq!(
+            rows[0].remote_path.as_deref(),
+            Some("/music/Aphex Twin/Selected Ambient Works/01 Xtal.flac"),
+            "native absolute paths win over Subsonic's fake path"
+        );
+        assert_eq!(
+            rows[1].remote_path.as_deref(),
+            Some("Aphex Twin/Selected Ambient Works/01 Xtal.flac"),
+            "missing native rows fall back to the Subsonic path"
+        );
         assert_eq!(
             rows[1].label.as_deref(),
             Some("Apollo Records"),

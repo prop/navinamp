@@ -35,6 +35,9 @@ pub struct NativeTrackTags {
     /// The file's record-label tag(s) joined for display (`"A, B"`),
     /// trimmed; `None` when the file carries none.
     pub label: Option<String>,
+    /// Absolute server path (`libraryPath` + the row's relative `path`).
+    /// `None` when the server omits the path or the library root.
+    pub absolute_path: Option<String>,
 }
 
 /// One `/api/song` row — only the fields we need; serde skips the rest.
@@ -46,6 +49,13 @@ struct NativeSong {
     catalog_num: Option<String>,
     #[serde(default)]
     tags: HashMap<String, Vec<String>>,
+    /// File path relative to the library root, as indexed by Navidrome.
+    #[serde(default)]
+    path: String,
+    /// Absolute root of the library that contains this file (e.g.
+    /// `/music`). The native API's `path` is relative to it.
+    #[serde(default, rename = "libraryPath")]
+    library_path: String,
 }
 
 impl SubsonicClient {
@@ -94,8 +104,13 @@ impl SubsonicClient {
                     id,
                     catalog_num,
                     tags,
+                    path,
+                    library_path,
                 } = song;
-                map.insert(id, native_tags_from(catalog_num, tags));
+                map.insert(
+                    id,
+                    native_tags_from(catalog_num, tags, &path, &library_path),
+                );
             }
             // The page size is a server-side default for Navidrome, so a
             // short page reliably marks the end of the list.
@@ -104,6 +119,32 @@ impl SubsonicClient {
             }
             start += PAGE;
         }
+    }
+
+    /// Absolute server-side path for one song, from the native API.
+    ///
+    /// Unlike Subsonic's `getSong.path` — which is a synthesized
+    /// `fakePath` unless the player has Report Real Path enabled — the
+    /// native row carries the library-relative `path` plus `libraryPath`,
+    /// so this is the actual file location on the server.
+    pub async fn native_track_path(
+        &self,
+        password: &str,
+        song_id: &str,
+    ) -> Result<Option<String>, SubsonicError> {
+        let jwt = self.native_login(password).await?;
+        let url = self.native_url(&format!("song/{song_id}"))?;
+        let song: NativeSong = self
+            .http
+            .get(url)
+            .header("x-nd-authorization", format!("Bearer {jwt}"))
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(native_status_error)?
+            .json()
+            .await?;
+        Ok(absolute_server_path(&song.path, &song.library_path))
     }
 
     /// JWT login (`POST /auth/login`). Navidrome mounts authentication at
@@ -166,6 +207,8 @@ fn native_status_error(err: reqwest::Error) -> SubsonicError {
 fn native_tags_from(
     catalog_num: Option<String>,
     tags: HashMap<String, Vec<String>>,
+    path: &str,
+    library_path: &str,
 ) -> NativeTrackTags {
     let label = match tags.get(RECORD_LABEL_TAG) {
         Some(labels) => {
@@ -184,7 +227,31 @@ fn native_tags_from(
         .map(str::trim)
         .filter(|c| !c.is_empty())
         .map(str::to_owned);
-    NativeTrackTags { catalog_num, label }
+    NativeTrackTags {
+        catalog_num,
+        label,
+        absolute_path: absolute_server_path(path, library_path),
+    }
+}
+
+/// Join Navidrome's library-relative `path` onto its `libraryPath` root.
+/// An already-absolute path wins over the root; empty pieces yield `None`.
+/// Navidrome normalizes song paths to forward slashes
+/// (`server/path.go` rejects backslashes), so no platform separator logic
+/// belongs here.
+fn absolute_server_path(path: &str, library_path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if path.starts_with('/') {
+        return Some(path.to_owned());
+    }
+    let root = library_path.trim().trim_end_matches('/');
+    if root.is_empty() {
+        return Some(path.to_owned());
+    }
+    Some(format!("{root}/{path}"))
 }
 
 #[cfg(test)]
@@ -280,6 +347,53 @@ mod tests {
             .await
             .expect("walk");
         assert_eq!(map["s0"], NativeTrackTags::default());
+    }
+
+    #[tokio::test]
+    async fn native_track_path_joins_library_root() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/auth/login"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "jwt"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/song/s1"))
+            .and(header("x-nd-authorization", "Bearer jwt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "s1",
+                "path": "Artist/Album/01 x.flac",
+                "libraryPath": "/music"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server).await;
+        let path = client
+            .native_track_path("p", "s1")
+            .await
+            .expect("path")
+            .expect("server path");
+        assert_eq!(path, "/music/Artist/Album/01 x.flac");
+    }
+
+    #[test]
+    fn absolute_server_path_handles_roots_and_absolutes() {
+        assert_eq!(
+            absolute_server_path("Artist/x.flac", "/music/").as_deref(),
+            Some("/music/Artist/x.flac")
+        );
+        assert_eq!(
+            absolute_server_path("/elsewhere/x.flac", "/music").as_deref(),
+            Some("/elsewhere/x.flac")
+        );
+        assert_eq!(
+            absolute_server_path("Artist/x.flac", "").as_deref(),
+            Some("Artist/x.flac")
+        );
+        assert_eq!(absolute_server_path("  ", "/music"), None);
     }
 
     #[tokio::test]

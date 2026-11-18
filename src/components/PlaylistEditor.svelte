@@ -18,7 +18,11 @@
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import { clearEqFor, getArtistEq, getTrackEq, rememberEq } from "../lib/audio/auto";
   import { librarySetRating, libraryTrack, type Track } from "../lib/library/ipc";
-  import { navidromeRate, navidromeStar } from "../lib/navidrome/ipc";
+  import {
+    navidromeNativePath,
+    navidromeRate,
+    navidromeStar,
+  } from "../lib/navidrome/ipc";
 
   interface Props {
     items: QueueItem[];
@@ -298,6 +302,8 @@
   }
 
   let menu = $state<MenuState | null>(null);
+  /** Absolute server path for the open card (native API; async fill). */
+  let menuPath = $state<string | null>(null);
   let menuInfo = $state<StarInfo | null>(null);
   let menuTrack = $state<Track | null>(null);
   const starCache = new Map<string, StarInfo>();
@@ -363,6 +369,7 @@
     } else {
       add("source", "not in library");
     }
+    add("path", menuPath);
     return rows;
   });
 
@@ -429,6 +436,16 @@
     menuTrack = cachedTrack;
     menuInfo = item.remoteId != null ? cachedStar : null;
     menu = { x: e.clientX, y: e.clientY, index, path: item.path };
+    const knownPath = item.remoteId != null ? (item.remotePath ?? item.path) : item.path;
+    menuPath = knownPath;
+    if (item.remoteId != null && !knownPath.startsWith("/")) {
+      const itemPath = item.path;
+      void navidromeNativePath(item.serverId, item.remoteId)
+        .then((path) => {
+          if (menu?.path === itemPath) menuPath = path;
+        })
+        .catch(() => undefined);
+    }
 
     // Stream rows are not library rows: skip the DB lookup entirely.
     const needsTrack = !stream && !trackCache.has(item.path);
@@ -507,12 +524,17 @@
     } else if (id === "remove") {
       onremove(m.index);
     } else if (id === "copy") {
-      // Remote rows carry the server's real file path from enqueue time
-      // (toMeta); the navidrome:// identity is the fallback for items
-      // enqueued before the row had a path. Synchronous on purpose — a
-      // cache lookup here would race the menu's async library fetch.
-      const copyPath = item.remotePath ?? item.path;
-      void navigator.clipboard.writeText(copyPath).catch((e) => {
+      // Remote rows: the native API knows the absolute server path even
+      // when the row came from a server playlist or predates the native
+      // path sync; fall back to the enqueue-time path on failure.
+      const known = item.remotePath ?? item.path;
+      const needsNative = item.remoteId != null && !known.startsWith("/");
+      void (async () => {
+        const text = needsNative
+          ? await navidromeNativePath(item.serverId, item.remoteId).catch(() => known)
+          : known;
+        await navigator.clipboard.writeText(text);
+      })().catch((e) => {
         console.warn(`[navinamp] copy path failed: ${e}`);
       });
     } else if (id === "star") {
