@@ -339,7 +339,7 @@ pub(super) fn sync_remote(
 pub(super) fn apply_native_tags(
     conn: &Connection,
     server_id: &str,
-    tags: &[(String, Option<String>, Option<String>)],
+    tags: &[crate::NativeTagRow],
 ) -> rusqlite::Result<u64> {
     let tx = conn.unchecked_transaction()?;
     let mut updated = 0u64;
@@ -353,13 +353,20 @@ pub(super) fn apply_native_tags(
                  catalog_num = COALESCE(?3, (SELECT ra.catalog_num
                                              FROM remote_albums ra
                                              WHERE ra.server_id = tracks.server_id
-                                               AND ra.album_id  = tracks.remote_album_id))
-               WHERE source = 'navidrome' AND server_id = ?1 AND remote_id = ?4",
+                                               AND ra.album_id  = tracks.remote_album_id)),
+                 remote_path = COALESCE(?4, remote_path)
+               WHERE source = 'navidrome' AND server_id = ?1 AND remote_id = ?5",
         )?;
-        for (remote_id, catalog_num, label) in tags {
-            // SQL positional order: ?2 = label, ?3 = catalog_num.
-            updated +=
-                stmt.execute(rusqlite::params![server_id, label, catalog_num, remote_id])? as u64;
+        for (remote_id, catalog_num, label, absolute_path) in tags {
+            // SQL positional order: ?2 = label, ?3 = catalog_num,
+            // ?4 = absolute_path.
+            updated += stmt.execute(rusqlite::params![
+                server_id,
+                label,
+                catalog_num,
+                absolute_path,
+                remote_id
+            ])? as u64;
         }
     }
     tx.commit()?;

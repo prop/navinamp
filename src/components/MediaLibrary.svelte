@@ -91,6 +91,7 @@
   import { registerEscape } from "../lib/window/escape";
   import {
     isSyncReport,
+    navidromeNativePath,
     navidromePlaylistTracks,
     navidromePlaylists,
     navidromeProfiles,
@@ -1688,6 +1689,62 @@
   }
   let rowMenu = $state<RowMenu | null>(null);
 
+  /**
+   * The track card: non-interactive details above the actions, mirroring the
+   * playlist editor's row menu. Per-row only — a bulk selection has no single
+   * track to describe. Label / catalog number appear only when the sync
+   * carried them ("if presented").
+   */
+  const rowMenuDetails = $derived.by(() => {
+    const m = rowMenu;
+    if (!m || m.scope !== "row") return [];
+    const t = m.track;
+    const rows: { label: string; value: string }[] = [];
+    const add = (label: string, value: string | null | undefined): void => {
+      if (value != null && value.trim() !== "") rows.push({ label, value });
+    };
+
+    add("title", t.title !== "" ? t.title : baseName(t.path));
+    add("artist", t.artist);
+    add("album", [t.album, t.year != null ? `(${t.year})` : ""].filter(Boolean).join(" "));
+    add("label", t.label);
+    add("catno", t.catalogNumber);
+    add("genre", t.genre);
+
+    const trackNo =
+      t.trackNo != null
+        ? `track ${t.discNo != null ? `${t.discNo}.` : ""}${t.trackNo}`
+        : "";
+    // Unscanned/zero-duration rows have nothing useful to show: omit the
+    // row rather than render a confident "0:00".
+    add(
+      "length",
+      [t.durationSecs > 0 ? fmt(t.durationSecs) : "", trackNo]
+        .filter(Boolean)
+        .join(" · "),
+    );
+
+    add(
+      "quality",
+      [
+        t.codec ? t.codec.toUpperCase() : "",
+        t.bitrateKbps != null ? `${t.bitrateKbps} kbps` : "",
+        t.samplerate != null ? `${(t.samplerate / 1000).toFixed(1)} kHz` : "",
+        t.channels === 1 ? "mono" : t.channels === 2 ? "stereo" : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+
+    const added = t.dateAdded > 0 ? new Date(t.dateAdded * 1000).toLocaleDateString() : "";
+    add(
+      "plays",
+      [`${t.playCount}×`, added ? `added ${added}` : ""].filter(Boolean).join(" · "),
+    );
+    add("source", t.source === REMOTE_SOURCE ? "Navidrome" : "Local");
+    return rows;
+  });
+
   const rowMenuItems = $derived.by((): ContextMenuItem[] => {
     const m = rowMenu;
     if (!m) return [];
@@ -1796,11 +1853,17 @@
         onplaynext([toMeta(t)]);
       }
     } else if (id === "copy") {
-      // Remote rows: prefer the server's real file path over the
-      // navidrome:// row identity (falls back until the next sync).
-      void navigator.clipboard.writeText(t.remotePath ?? t.path).catch((e) => {
-        onlog(`copy path failed: ${e}`);
-      });
+      // Remote rows: ask the native API for the absolute server path (the
+      // synced remotePath may predate native-path capture or be a server
+      // playlist's synthetic Subsonic path).
+      const known = t.remotePath ?? t.path;
+      const needsNative = t.remoteId != null && !known.startsWith("/");
+      void (async () => {
+        const text = needsNative
+          ? await navidromeNativePath(t.serverId, t.remoteId).catch(() => known)
+          : known;
+        await navigator.clipboard.writeText(text);
+      })().catch((e) => onlog(`copy path failed: ${e}`));
     } else if (id === "star") {
       void toggleStar(t);
     } else if (id.startsWith("rate:")) {
@@ -2995,6 +3058,7 @@
       x={rowMenu.x}
       y={rowMenu.y}
       items={rowMenuItems}
+      info={rowMenuDetails}
       {scale}
       onselect={rowMenuSelect}
       onclose={() => (rowMenu = null)} />

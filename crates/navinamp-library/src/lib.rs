@@ -119,6 +119,11 @@ pub struct Library {
     art_dir: Option<PathBuf>,
 }
 
+/// One native-API backfill row: (`remote_id`, `catalog_num`, `label`,
+/// `absolute_path`). `absolute_path` is the real server path
+/// (`libraryPath` + relative `path`); `None` keeps the stored value.
+pub type NativeTagRow = (String, Option<String>, Option<String>, Option<String>);
+
 impl Library {
     /// Opens (creating if needed) the library at `path`, applies the schema
     /// and enables WAL + a 5 s busy timeout so multiple connections — e.g.
@@ -209,17 +214,14 @@ impl Library {
         )?)
     }
 
-    /// Bulk-backfills per-track label / catalog-number columns from a
-    /// Navidrome native-API tag walk, keyed by `remote_id`, without
-    /// re-fetching album details. A track whose file carries no tag falls
-    /// back to its album's stored values, matching [`Self::upsert_remote`]
-    /// semantics — so this converges rows that a quick (unchanged-library)
-    /// sync never re-mapped. Returns the number of rows updated.
-    pub fn apply_native_tags(
-        &self,
-        server_id: &str,
-        tags: &[(String, Option<String>, Option<String>)],
-    ) -> Result<u64> {
+    /// Bulk-backfills per-track label / catalog-number columns and the real
+    /// server path from a Navidrome native-API walk, keyed by `remote_id`,
+    /// without re-fetching album details. A track whose file carries no tag
+    /// falls back to its album's stored values, matching
+    /// [`Self::upsert_remote`] semantics — so this converges rows that a
+    /// quick (unchanged-library) sync never re-mapped. Returns the number
+    /// of rows updated.
+    pub fn apply_native_tags(&self, server_id: &str, tags: &[NativeTagRow]) -> Result<u64> {
         Ok(remote::apply_native_tags(&self.conn, server_id, tags)?)
     }
 

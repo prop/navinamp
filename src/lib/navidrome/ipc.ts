@@ -164,6 +164,18 @@ export function navidromeStreamUrl(
   return invoke<string>("navidrome_stream_url", { serverId: serverId ?? null, remoteId });
 }
 
+/**
+ * Absolute server-side file path for one Navidrome song, from the native
+ * API (`libraryPath` + relative `path`). Subsonic's `song.path` is a
+ * synthetic display path unless the player enables Report Real Path.
+ */
+export function navidromeNativePath(
+  serverId: string | null | undefined,
+  remoteId: string,
+): Promise<string> {
+  return invoke<string>("navidrome_native_path", { serverId: serverId ?? null, remoteId });
+}
+
 /** Scrobble: `submission=false` = "now playing", `true` = counted listen. */
 export function navidromeScrobble(
   serverId: string | null | undefined,
