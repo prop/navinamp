@@ -95,6 +95,48 @@ fn db(label: &str) -> (common::Scratch, Library) {
 }
 
 #[test]
+fn native_path_backfill_updates_unchanged_rows() {
+    let (_s, library) = db("remote-native-path-backfill");
+    library
+        .sync_remote(S, vec![rt("t1", "Human Behaviour")], false)
+        .unwrap();
+
+    // A quick rescan skips unchanged albums, so the native path must be
+    // written by the tag backfill instead of map_song.
+    let pairs = vec![(
+        "t1".to_string(),
+        None,
+        None,
+        Some("/music/Björk/Debut/01 Human Behaviour.mp3".to_string()),
+    )];
+    library.apply_native_tags(S, &pairs).unwrap();
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    assert_eq!(
+        tracks[0].remote_path.as_deref(),
+        Some("/music/Björk/Debut/01 Human Behaviour.mp3")
+    );
+
+    // A later native walk that omits the path keeps the stored one.
+    let missing = vec![("t1".to_string(), None, None, None)];
+    library.apply_native_tags(S, &missing).unwrap();
+    let tracks = library
+        .tracks_filtered(&TrackFilter {
+            source: Some("navidrome".into()),
+            ..TrackFilter::default()
+        })
+        .unwrap();
+    assert_eq!(
+        tracks[0].remote_path.as_deref(),
+        Some("/music/Björk/Debut/01 Human Behaviour.mp3")
+    );
+}
+
+#[test]
 fn sync_inserts_remote_rows_with_derived_paths() {
     let (_s, library) = db("remote-insert");
     let report = library
@@ -779,8 +821,9 @@ fn apply_native_tags_backfills_rows_and_falls_back_to_the_album() {
                     "t1".into(),
                     Some("NORD 3".into()),
                     Some("Nordcore Records".into()),
+                    None,
                 ),
-                ("t2".into(), None, None),
+                ("t2".into(), None, None, None),
             ],
         )
         .unwrap();
@@ -811,7 +854,7 @@ fn apply_native_tags_backfills_rows_and_falls_back_to_the_album() {
 
     // Unknown ids touch nothing.
     let updated = library
-        .apply_native_tags(S, &[("ghost".into(), None, None)])
+        .apply_native_tags(S, &[("ghost".into(), None, None, None)])
         .unwrap();
     assert_eq!(updated, 0);
 }

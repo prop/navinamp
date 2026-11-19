@@ -91,6 +91,7 @@
   import { registerEscape } from "../lib/window/escape";
   import {
     isSyncReport,
+    navidromeNativePath,
     navidromePlaylistTracks,
     navidromePlaylists,
     navidromeProfiles,
@@ -1852,11 +1853,17 @@
         onplaynext([toMeta(t)]);
       }
     } else if (id === "copy") {
-      // Remote rows: prefer the server's real file path over the
-      // navidrome:// row identity (falls back until the next sync).
-      void navigator.clipboard.writeText(t.remotePath ?? t.path).catch((e) => {
-        onlog(`copy path failed: ${e}`);
-      });
+      // Remote rows: ask the native API for the absolute server path (the
+      // synced remotePath may predate native-path capture or be a server
+      // playlist's synthetic Subsonic path).
+      const known = t.remotePath ?? t.path;
+      const needsNative = t.remoteId != null && !known.startsWith("/");
+      void (async () => {
+        const text = needsNative
+          ? await navidromeNativePath(t.serverId, t.remoteId).catch(() => known)
+          : known;
+        await navigator.clipboard.writeText(text);
+      })().catch((e) => onlog(`copy path failed: ${e}`));
     } else if (id === "star") {
       void toggleStar(t);
     } else if (id.startsWith("rate:")) {

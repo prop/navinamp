@@ -188,6 +188,7 @@ pub fn run() {
             navidrome::navidrome_sync,
             navidrome::navidrome_stream_url,
             navidrome::navidrome_art_url,
+            navidrome::navidrome_native_path,
             navidrome::navidrome_scrobble,
             navidrome::navidrome_star,
             navidrome::navidrome_rate,
