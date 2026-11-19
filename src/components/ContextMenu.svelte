@@ -53,6 +53,11 @@
 
   let { x, y, items, info = [], scale = 1, onselect, onclose }: Props = $props();
 
+  /** Suppress the Close separator when the actions already end with one. */
+  const hasTrailingSeparator = $derived(
+    items.length > 0 && items[items.length - 1]?.separator === true,
+  );
+
   let el = $state<HTMLDivElement | null>(null);
   // Initial placement in real viewport pixels; the effect below clamps it
   // after measuring. The component remounts per open, so capturing x/y once
@@ -111,43 +116,55 @@
   style="left:{left}px; top:{top}px; max-width:calc(100vw - {8 * scale}px); max-height:calc(100vh - {8 * scale}px); --s:{scale};"
   role="menu">
   {#if info.length > 0}
-    <div class="info" role="group" aria-label="track details">
-      {#each info as row, i (i)}
-        <div class="irow">
-          <span class="ilabel">{row.label}</span>
-          <span class="ivalue" title={row.value}>{row.value}</span>
-        </div>
-      {/each}
+    <!-- Only the details scroll: the actions and Close stay reachable even
+         when the menu is taller than a small skinned window. -->
+    <div class="info-scroll">
+      <div class="info" role="group" aria-label="track details">
+        {#each info as row, i (i)}
+          <div class="irow">
+            <span class="ilabel">{row.label}</span>
+            <span class="ivalue" title={row.value}>{row.value}</span>
+          </div>
+        {/each}
+      </div>
     </div>
     <div class="sep" role="separator"></div>
   {/if}
-  {#each items as item, i (i)}
-    {#if item.separator}
+  <div class="actions">
+    {#each items as item, i (i)}
+      {#if item.separator}
+        <div class="sep" role="separator"></div>
+      {:else if item.rating !== undefined}
+        <div class="rating" role="group" aria-label="rating">
+          <span class="rlabel">rating</span>
+          <span class="stars">
+            {#each [1, 2, 3, 4, 5] as n (n)}
+              <button
+                class="star"
+                class:on={item.rating >= n}
+                title={item.rating === n ? `${n} stars (click to clear)` : `${n} star${n === 1 ? "" : "s"}`}
+                onclick={() => onselect(item.rating === n ? "rate:0" : `rate:${n}`)}>★</button>
+            {/each}
+          </span>
+        </div>
+      {:else}
+        <button
+          class="item"
+          class:danger={item.danger}
+          role="menuitem"
+          disabled={item.disabled}
+          onclick={() => onselect(item.id)}>
+          {item.label}
+        </button>
+      {/if}
+    {/each}
+  </div>
+  <div class="close-row">
+    {#if !hasTrailingSeparator}
       <div class="sep" role="separator"></div>
-    {:else if item.rating !== undefined}
-      <div class="rating" role="group" aria-label="rating">
-        <span class="rlabel">rating</span>
-        <span class="stars">
-          {#each [1, 2, 3, 4, 5] as n (n)}
-            <button
-              class="star"
-              class:on={item.rating >= n}
-              title={item.rating === n ? `${n} stars (click to clear)` : `${n} star${n === 1 ? "" : "s"}`}
-              onclick={() => onselect(item.rating === n ? "rate:0" : `rate:${n}`)}>★</button>
-          {/each}
-        </span>
-      </div>
-    {:else}
-      <button
-        class="item"
-        class:danger={item.danger}
-        role="menuitem"
-        disabled={item.disabled}
-        onclick={() => onselect(item.id)}>
-        {item.label}
-      </button>
     {/if}
-  {/each}
+    <button class="item close" role="menuitem" onclick={onclose}>Close</button>
+  </div>
 </div>
 
 <style>
@@ -168,8 +185,15 @@
     font-size: calc(11px * var(--s, 1));
     color: #c8c8c8;
     user-select: none;
-    /* The playlist window is only ~230px tall; a details block + actions can
-       exceed it, so the menu scrolls instead of clipping. */
+    display: flex;
+    flex-direction: column;
+    /* The details block scrolls; actions + Close stay visible. */
+    overflow: hidden;
+  }
+
+  .info-scroll {
+    flex: 0 1 auto;
+    min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;
@@ -177,23 +201,34 @@
   }
 
   /* Match the playlist's thin scrollbar on WebKit too. */
-  .menu::-webkit-scrollbar {
+  .info-scroll::-webkit-scrollbar,
+  .actions::-webkit-scrollbar {
     width: calc(6px * var(--s, 1));
   }
 
-  .menu::-webkit-scrollbar-thumb {
+  .info-scroll::-webkit-scrollbar-thumb,
+  .actions::-webkit-scrollbar-thumb {
     background: #2f4f33;
   }
 
-  .info {
-    /* Cap the details block so long values wrap inside the menu's
-       viewport-capped width (album titles/quality can be long). Also cap
-       the height: a many-row card must not push the menu's actions below
-       the fold — the block scrolls separately instead (the menu body
-       scrolls too, but the actions should stay reachable without it). */
-    max-width: calc(360px * var(--s, 1));
-    max-height: calc(220px * var(--s, 1));
+  .actions {
+    flex: 0 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #161616;
+  }
+
+  .close-row {
+    flex: 0 0 auto;
+  }
+
+  .info {
+    /* Cap the details block's width so long values wrap inside the menu's
+       viewport-capped width; its height/scroll is owned by `.info-scroll`
+       (the flex child), so the actions and Close stay reachable. */
+    max-width: calc(360px * var(--s, 1));
     box-sizing: border-box;
     padding: calc(3px * var(--s, 1)) calc(10px * var(--s, 1)) calc(5px * var(--s, 1));
   }
@@ -229,6 +264,10 @@
     padding: calc(5px * var(--s, 1)) calc(10px * var(--s, 1));
     font: inherit;
     cursor: pointer;
+  }
+
+  .item.close {
+    color: #909098;
   }
 
   .item:hover:not(:disabled) {
