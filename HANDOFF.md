@@ -74,7 +74,12 @@
   `audio.json`, shared with the skinned PRESETS cycle; the classic EQ graph
   now draws the live response curve
 - Context menus (playlist + library rows): Play/Remove/Enqueue, star,
-  rating, Copy path; the stock webview menu is replaced on those rows
+  rating, Copy path; the stock webview menu is replaced on those rows.
+  Menus are portaled to the window body and scale their own text; the
+  track-card details (and actions on very short windows) scroll
+  independently while the action list and a pinned Close row stay visible.
+  Manual check at 1.25/1.5: details scroll, actions/Close reachable,
+  Escape/outside-click/Close all dismiss.
 - Library loads lazily: startup fetches only stats/roots/views; the table
   pages 500 rows on entry and appends on scroll; artist/genre/album tree
   lists load when a group expands and render only the visible window;

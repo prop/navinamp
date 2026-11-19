@@ -53,6 +53,11 @@
 
   let { x, y, items, info = [], scale = 1, onselect, onclose }: Props = $props();
 
+  /** Suppress the Close separator when the actions already end with one. */
+  const hasTrailingSeparator = $derived(
+    items.length > 0 && items[items.length - 1]?.separator === true,
+  );
+
   let el = $state<HTMLDivElement | null>(null);
   // Initial placement in real viewport pixels; the effect below clamps it
   // after measuring. The component remounts per open, so capturing x/y once
@@ -155,7 +160,9 @@
     {/each}
   </div>
   <div class="close-row">
-    <div class="sep" role="separator"></div>
+    {#if !hasTrailingSeparator}
+      <div class="sep" role="separator"></div>
+    {/if}
     <button class="item close" role="menuitem" onclick={onclose}>Close</button>
   </div>
 </div>
@@ -194,28 +201,34 @@
   }
 
   /* Match the playlist's thin scrollbar on WebKit too. */
-  .info-scroll::-webkit-scrollbar {
+  .info-scroll::-webkit-scrollbar,
+  .actions::-webkit-scrollbar {
     width: calc(6px * var(--s, 1));
   }
 
-  .info-scroll::-webkit-scrollbar-thumb {
+  .info-scroll::-webkit-scrollbar-thumb,
+  .actions::-webkit-scrollbar-thumb {
     background: #2f4f33;
   }
 
-  .actions,
+  .actions {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #161616;
+  }
+
   .close-row {
     flex: 0 0 auto;
   }
 
   .info {
-    /* Cap the details block so long values wrap inside the menu's
-       viewport-capped width (album titles/quality can be long). Also cap
-       the height: a many-row card must not push the menu's actions below
-       the fold — the block scrolls separately instead (the menu body
-       scrolls too, but the actions should stay reachable without it). */
+    /* Cap the details block's width so long values wrap inside the menu's
+       viewport-capped width; its height/scroll is owned by `.info-scroll`
+       (the flex child), so the actions and Close stay reachable. */
     max-width: calc(360px * var(--s, 1));
-    max-height: calc(220px * var(--s, 1));
-    overflow-y: auto;
     box-sizing: border-box;
     padding: calc(3px * var(--s, 1)) calc(10px * var(--s, 1)) calc(5px * var(--s, 1));
   }
