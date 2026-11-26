@@ -821,20 +821,48 @@ pub async fn navidrome_stream_url(
     Ok(client.stream_url(&remote_id, format, bitrate).to_string())
 }
 
+/// Gate for every call into Navidrome's native API. Its JWT login posts the
+/// plaintext password (`native_login`), unlike Subsonic's salted-token auth,
+/// so it must not travel over plain `http://`: the call is refused and the
+/// caller goes without the native API, exactly as it would for a server
+/// that has none.
+fn allow_native_api(client: &SubsonicClient) -> Result<(), String> {
+    if client.uses_https() {
+        return Ok(());
+    }
+    Err(format!(
+        "the Navidrome native-API sign-in is refused over plain HTTP ({}): it sends the \
+         password itself — use an https:// server URL",
+        scrub_urls(&client.server_url())
+    ))
+}
+
 /// Absolute server-side file path for one Navidrome song.
 ///
 /// Subsonic's `song.path` is a synthesized `fakePath` unless the player has
 /// Report Real Path enabled; the native API row carries the actual
 /// `libraryPath` + relative `path`. Used by Copy path and the track card so
-/// they never show that synthetic path.
+/// they never show that synthetic path. Refused for plain-HTTP profiles
+/// ([`allow_native_api`]); the callers then fall back to the path they have.
 #[tauri::command]
 pub async fn navidrome_native_path(
     state: State<'_, NavidromeState>,
     server_id: Option<String>,
     remote_id: String,
 ) -> Result<String, String> {
-    let server = resolve_server(&state, server_id)?;
-    let client = ensure_client_for(&state, &server).await?;
+    native_path(&state, server_id.as_deref(), &remote_id).await
+}
+
+/// [`navidrome_native_path`] on `&NavidromeState`, so the plain-HTTP refusal
+/// can be tested without a Tauri app.
+async fn native_path(
+    state: &NavidromeState,
+    server_id: Option<&str>,
+    remote_id: &str,
+) -> Result<String, String> {
+    let server = resolve_server(state, server_id.map(str::to_owned))?;
+    let client = ensure_client_for(state, &server).await?;
+    allow_native_api(&client)?;
     let password = {
         let guard = state.inner.lock().unwrap();
         guard
@@ -845,7 +873,7 @@ pub async fn navidrome_native_path(
             .clone()
     };
     client
-        .native_track_path(&password, &remote_id)
+        .native_track_path(&password, remote_id)
         .await
         .map_err(|e| scrub_urls(&e.to_string()))?
         .ok_or_else(|| "server did not report a native path".to_string())
@@ -1570,11 +1598,8 @@ async fn fetch_native_tags(
     password: &str,
     library_id: Option<&str>,
 ) -> Option<HashMap<String, NativeTrackTags>> {
-    if !client.uses_https() {
-        eprintln!(
-            "navinamp navidrome: skipping native label/catalog tag fetch over non-HTTPS {}",
-            scrub_urls(&client.server_url())
-        );
+    if let Err(reason) = allow_native_api(client) {
+        eprintln!("navinamp navidrome: skipping native label/catalog tag fetch: {reason}");
         return None;
     }
     match client.native_track_tags(password, library_id).await {
@@ -2215,6 +2240,10 @@ pub(crate) fn scrub_urls(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{ErrorKind, Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -2646,5 +2675,166 @@ mod tests {
             "https://secure.example:4533/rest/stream.view?id=t1"
         ));
         assert!(!insecure_tls_for_url(&state, "not a url"));
+    }
+
+    /// A plain-HTTP Navidrome stand-in on 127.0.0.1. It answers the Subsonic
+    /// `ping` that `SubsonicClient::connect` sends, records the request line
+    /// of everything it receives, and answers anything else with `{}`.
+    struct RecordingServer {
+        base: String,
+        requests: Arc<Mutex<Vec<String>>>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl RecordingServer {
+        fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server = Self {
+                base: format!("http://{}", listener.local_addr().unwrap()),
+                requests: Arc::new(Mutex::new(Vec::new())),
+                stop: Arc::new(AtomicBool::new(false)),
+            };
+            let (requests, stop) = (Arc::clone(&server.requests), Arc::clone(&server.stop));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let (mut stream, _) = match listener.accept() {
+                        Ok(accepted) => accepted,
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(2));
+                            continue;
+                        }
+                        Err(_) => break,
+                    };
+                    let Some(line) = read_request_line(&mut stream) else {
+                        continue;
+                    };
+                    requests.lock().unwrap().push(line.clone());
+                    let body = if line.starts_with("GET /rest/ping.view") {
+                        r#"{"subsonic-response":{"status":"ok","version":"1.16.1"}}"#
+                    } else {
+                        "{}"
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            });
+            server
+        }
+
+        /// Request lines received so far, e.g. `GET /rest/ping.view?… HTTP/1.1`.
+        fn request_lines(&self) -> Vec<String> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for RecordingServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The request line of one HTTP request, read up to the end of its head.
+    /// The body, if any, is drained first so the client can still read the
+    /// answer.
+    fn read_request_line(stream: &mut TcpStream) -> Option<String> {
+        stream.set_nonblocking(false).ok()?;
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => request.push(byte[0]),
+            }
+        }
+        let head = String::from_utf8_lossy(&request).into_owned();
+        if let Some(length) = content_length(&head) {
+            let mut body = vec![0u8; length];
+            let _ = stream.read_exact(&mut body);
+        }
+        head.lines().next().map(str::to_owned)
+    }
+
+    fn content_length(head: &str) -> Option<usize> {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())
+                .flatten()
+        })
+    }
+
+    /// The native-API sign-in posts the plaintext password, so a plain-HTTP
+    /// profile must never reach it: the path lookup refuses first and sends
+    /// nothing. The direct call at the end is the control: without the gate
+    /// the same client does post the password. (An `https://` profile passes
+    /// the gate; that half cannot be exercised against a plain mock.)
+    #[test]
+    fn native_path_never_signs_in_over_plain_http() {
+        let server = RecordingServer::start();
+        let client = tauri::async_runtime::block_on(SubsonicClient::connect(
+            &server.base,
+            "u",
+            "hunter2",
+            false,
+        ))
+        .expect("connect against the mock");
+        let state = NavidromeState::default();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.config.profiles.push(StoredProfile {
+                id: "p1".into(),
+                url: server.base.clone(),
+                user: "u".into(),
+                password: "hunter2".into(),
+                ..StoredProfile::default()
+            });
+            inner.config.active_id = Some("p1".into());
+            inner.clients.insert("p1".into(), Arc::new(client));
+        }
+        let after_connect = server.request_lines();
+        assert_eq!(after_connect.len(), 1, "{after_connect:?}");
+        assert!(
+            after_connect[0].starts_with("GET /rest/ping.view"),
+            "{after_connect:?}"
+        );
+
+        let error = tauri::async_runtime::block_on(native_path(&state, Some("p1"), "song-1"))
+            .expect_err("a plain-HTTP server must be refused");
+
+        // The property that matters: the refusal happens before any request.
+        let requests = server.request_lines();
+        assert_eq!(
+            requests.len(),
+            after_connect.len(),
+            "the lookup must not send anything: {requests:?}"
+        );
+        assert!(error.contains("plain HTTP"), "{error}");
+        assert!(
+            !error.contains("hunter2"),
+            "the password must stay out of the error: {error}"
+        );
+        assert!(
+            !error.contains(&server.base),
+            "the server URL is scrubbed: {error}"
+        );
+
+        // Control: the ungated call on the same client reaches `/auth/login`.
+        let client = Arc::clone(state.inner.lock().unwrap().clients.get("p1").unwrap());
+        let control = tauri::async_runtime::block_on(client.native_track_path("hunter2", "song-1"));
+        assert!(control.is_err(), "the mock issues no token");
+        let requests = server.request_lines();
+        assert_eq!(requests.len(), after_connect.len() + 1, "{requests:?}");
+        assert!(
+            requests
+                .last()
+                .is_some_and(|line| line.starts_with("POST /auth/login")),
+            "{requests:?}"
+        );
     }
 }
