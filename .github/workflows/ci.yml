@@ -133,6 +133,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # If `npm ci` fails with `EACCES … _cacache`, the runner's npm cache
+      # has root-owned directories (a job once ran as root). Move the cache
+      # aside and rerun the job:
+      #   mv ~/.npm/_cacache ~/.npm/_cacache.root-owned-backup
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -206,6 +210,10 @@ jobs:
         # prepare step above — only non-empty values are exported.
         # Two jobs keeps the 2-core/8 GB mini responsive enough for the
         # runner's heartbeat while rustc works (4 parallel jobs starve it).
+        # If the job still stalls, build locally and upload by hand:
+        #   CARGO_BUILD_JOBS=2 npm run tauri build -- --bundles app
+        # then package with the hdiutil command below and
+        # `gh release upload vX.Y.Z <dmg> --clobber`.
         env:
           CARGO_BUILD_JOBS: 2
         run: npm ci && npm run tauri build -- --bundles app
