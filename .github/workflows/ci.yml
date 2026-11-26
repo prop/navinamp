@@ -378,6 +378,8 @@ jobs:
       - name: All three platforms published
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout in this job: name the repository for `gh`.
+          GH_REPO: ${{ github.repository }}
         run: |
           assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
           echo "$assets"
