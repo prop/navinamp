@@ -62,6 +62,14 @@ const MEDIA_SEEK_STEP_SECS: f64 = 5.0;
 /// player. A paused-state `play` waits [`PLAY_DEFER`] and is dropped when a
 /// device change landed within [`DEVICE_CHANGE_WINDOW`] of the command.
 const DEVICE_CHANGE_WINDOW: Duration = Duration::from_secs(2);
+/// A paused-state play inside this window after a device change is treated as
+/// the *late* system resume — but only the first one per change (see
+/// [`paused_play_decision`]). macOS can take many seconds to settle
+/// after a Bluetooth teardown before sending the auto-play: the reported case
+/// measured 15.9 s between the route change and the command. A fixed widening
+/// of the symmetric window would swallow every genuine press for that whole
+/// span; the one-shot latch bounds the cost to a single ignored press.
+const DEVICE_CHANGE_QUIET: Duration = Duration::from_secs(60);
 /// Imperceptible delay that lets a device-change event overtake the command.
 const PLAY_DEFER: Duration = Duration::from_millis(250);
 
@@ -95,6 +103,10 @@ struct MediaInner {
     /// Deferred paused-state play commands (see [`defer_paused_play`]); the
     /// worker is started on first use.
     defer_tx: Option<mpsc::Sender<u64>>,
+    /// Device-change stamp that already swallowed one *late* paused play
+    /// (see [`is_late_device_change_resume`]); a new change restarts the
+    /// one-shot.
+    quiet_suppressed_for: Option<u64>,
 }
 
 /// Last-known player state pushed by the player window.
@@ -257,6 +269,52 @@ fn is_device_change_resume(command_ms: u64, changed_ms: Option<u64>) -> bool {
     changed_ms.is_some_and(|changed| changed.abs_diff(command_ms) <= window_ms)
 }
 
+/// What the device-change guard does with one deferred paused-state play.
+/// The worker emits **only** for [`PausedPlay::Forward`] — the decision is
+/// the emit gate, not merely a log label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PausedPlay {
+    /// Inside the certain symmetric window: definitely the system resume.
+    SuppressCertain,
+    /// The first play of a route-change *episode* inside the quiet window —
+    /// macOS can take many seconds to send its auto-play.
+    SuppressLate { change: u64 },
+    /// A genuine press: forward to the player.
+    Forward,
+}
+
+/// Decide one deferred paused-state play.
+///
+/// `consumed` is the change stamp whose quiet-window one-shot has already
+/// fired. CoreAudio reports one physical route change through two paths (the
+/// property listener and the stream error callback), producing stamps a few
+/// milliseconds apart — a stamp within [`PLAY_DEFER`] of `consumed` is the
+/// same episode and must not re-arm the one-shot, or a second genuine press
+/// would be swallowed for one physical change.
+fn paused_play_decision(
+    command_ms: u64,
+    changed_ms: Option<u64>,
+    consumed: Option<u64>,
+) -> PausedPlay {
+    if is_device_change_resume(command_ms, changed_ms) {
+        return PausedPlay::SuppressCertain;
+    }
+    let quiet_ms = DEVICE_CHANGE_QUIET.as_millis() as u64;
+    let episode_ms = PLAY_DEFER.as_millis() as u64;
+    match changed_ms {
+        Some(changed) => {
+            let consumed_this_episode =
+                consumed.is_some_and(|done| done.abs_diff(changed) <= episode_ms);
+            if !consumed_this_episode && changed <= command_ms && command_ms - changed <= quiet_ms {
+                PausedPlay::SuppressLate { change: changed }
+            } else {
+                PausedPlay::Forward
+            }
+        }
+        None => PausedPlay::Forward,
+    }
+}
+
 fn emit_media_command(app: &AppHandle, mapped: MappedCommand) {
     let _ = app.emit(
         "media-command",
@@ -301,12 +359,29 @@ fn spawn_deferred_play_worker(app: AppHandle, rx: mpsc::Receiver<u64>) {
                         Err(_) => break, // timeout or sender gone
                     }
                 }
-                let changed = audio::last_output_device_change_ms(&app.state::<audio::Audio>());
+                let hub = app.state::<MediaHub>();
+                let mut quiet_consumed = hub
+                    .inner
+                    .lock()
+                    .ok()
+                    .and_then(|inner| inner.quiet_suppressed_for);
                 // One emit per queued press: duplicates are harmless (PLAY is
                 // a no-op once playing) and collapsing them would discard the
                 // ordering guarantee this worker exists for.
                 for command_ms in batch {
-                    let suppressed = is_device_change_resume(command_ms, changed);
+                    // Fresh read per command: the quiet window's premise is
+                    // that the stamp can be seconds old, so a batch must not
+                    // pin one stale read for all of its commands.
+                    let changed = audio::last_output_device_change_ms(&app.state::<audio::Audio>());
+                    let decision = paused_play_decision(command_ms, changed, quiet_consumed);
+                    let suppressed = decision != PausedPlay::Forward;
+                    let late = matches!(decision, PausedPlay::SuppressLate { .. });
+                    if let PausedPlay::SuppressLate { change } = decision {
+                        quiet_consumed = Some(change);
+                        if let Ok(mut inner) = hub.inner.lock() {
+                            inner.quiet_suppressed_for = Some(change);
+                        }
+                    }
                     // The whole guard is invisible otherwise: log the decision
                     // so a resumed-on-device-change report can be diagnosed
                     // from stderr (Finder launch: `open --stderr …`).
@@ -319,11 +394,16 @@ fn spawn_deferred_play_worker(app: AppHandle, rx: mpsc::Receiver<u64>) {
                                 "after"
                             };
                             eprintln!(
-                                "navinamp media: paused play {} — device change {delta} ms {side} the command",
+                                "navinamp media: paused play {} — device change {delta} ms {side} the command{}",
                                 if suppressed {
                                     "suppressed"
                                 } else {
                                     "forwarded"
+                                },
+                                if late {
+                                    " (first play in the quiet window: system resume)"
+                                } else {
+                                    ""
                                 },
                             )
                         }
@@ -708,5 +788,65 @@ mod tests {
         assert!(!is_device_change_resume(10_000, Some(10_000_000)));
         // No device change ever recorded.
         assert!(!is_device_change_resume(10_000, None));
+    }
+
+    #[test]
+    fn quiet_window_swallows_only_the_first_late_play() {
+        let change = 10_000u64;
+        // The reported case: the system resume arrived 15.9 s after the
+        // route change — suppressed, and the decision carries the stamp the
+        // worker records in the hub.
+        assert_eq!(
+            paused_play_decision(25_900, Some(change), None),
+            PausedPlay::SuppressLate { change }
+        );
+        // The one-shot: a second play within the same episode (the worker
+        // stored the stamp) is forwarded — this is the arm the emit gate
+        // reads, so a regression to "suppressed is just a log label" fails
+        // here.
+        assert_eq!(
+            paused_play_decision(30_000, Some(change), Some(change)),
+            PausedPlay::Forward
+        );
+        // The same physical route change reported twice (property listener +
+        // stream error, stamps a few ms apart) is ONE episode: the second
+        // stamp must not re-arm the one-shot.
+        assert_eq!(
+            paused_play_decision(
+                30_000,
+                Some(change + PLAY_DEFER.as_millis() as u64 - 1),
+                Some(change)
+            ),
+            PausedPlay::Forward
+        );
+        // A genuinely newer route change (outside the episode tolerance)
+        // gets its own one-shot.
+        let later = change + 1_000;
+        assert_eq!(
+            paused_play_decision(later + 15_000, Some(later), Some(change)),
+            PausedPlay::SuppressLate { change: later }
+        );
+        // Inside the certain window: suppressed regardless of the latch.
+        assert_eq!(
+            paused_play_decision(10_200, Some(change), Some(change)),
+            PausedPlay::SuppressCertain
+        );
+        // Outside the quiet window: real presses are never swallowed.
+        let quiet_ms = DEVICE_CHANGE_QUIET.as_millis() as u64;
+        assert_eq!(
+            paused_play_decision(change + quiet_ms + 1, Some(change), None),
+            PausedPlay::Forward
+        );
+        // No recorded change, or a stamp far in the future (a clock step):
+        // forwarded. (A near-future stamp is inside the certain window and
+        // is suppressed by design.)
+        assert_eq!(
+            paused_play_decision(25_900, None, None),
+            PausedPlay::Forward
+        );
+        assert_eq!(
+            paused_play_decision(9_000, Some(10_000_000), None),
+            PausedPlay::Forward
+        );
     }
 }
