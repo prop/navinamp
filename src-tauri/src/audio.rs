@@ -262,6 +262,19 @@ fn persist(state: &Audio) {
     }
 }
 
+/// The engine's own playing flag — the state every OS media decision is
+/// made on. The media hub's snapshot is only as fresh as the renderer's
+/// last transition push and is never consulted for this. `None` when no
+/// engine has been started yet (callers treat that as "not playing": with
+/// no engine nothing can be playing). Takes the engine mutex for the
+/// duration of one atomic status read.
+pub fn engine_playing(state: &Audio) -> Option<bool> {
+    let engine = state.engine.lock().ok()?;
+    engine
+        .as_ref()
+        .map(|engine| engine.status() == PlaybackStatus::Playing)
+}
+
 /// Wall-clock ms of the last output-device route change/removal, from
 /// whichever source saw it first: the engine's stream callback or the app's
 /// macOS default-device listener (which also covers the pre-first-play gap

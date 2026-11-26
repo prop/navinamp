@@ -57,18 +57,26 @@ const POSITION_PUSH_SECS: f64 = 1.0;
 /// `souvlaki`'s undetermined Seek events move by this many seconds.
 const MEDIA_SEEK_STEP_SECS: f64 = 5.0;
 
-/// macOS emits a Play command when the default output device changes (e.g.
-/// Bluetooth headphones disconnect), which would otherwise resume a paused
-/// player. A paused-state `play` waits [`PLAY_DEFER`] and is dropped when a
-/// device change landed within [`DEVICE_CHANGE_WINDOW`] of the command.
+/// Defence against a system-generated Play on a route change: a paused-state
+/// `play` waits [`PLAY_DEFER`] and is dropped when a device change landed
+/// within [`DEVICE_CHANGE_WINDOW`] of the command.
+///
+/// This is NOT what resumes a paused player on a Bluetooth disconnect — that
+/// was the system's **Pause**, which the player's toggle-style PAUSE action
+/// used to turn back into playback. That is fixed twice over: the player
+/// window routes a transport `pause` to a plain (idempotent) pause, and
+/// [`map_event`] drops a Pause for an already-paused player. A system Play near a route change has never been observed in a
+/// captured log, so this guard is kept only as a bounded defence; every OS
+/// event is logged in [`on_media_event`], which will show one if it exists.
 const DEVICE_CHANGE_WINDOW: Duration = Duration::from_secs(2);
 /// A paused-state play inside this window after a device change is treated as
-/// the *late* system resume — but only the first one per change (see
-/// [`paused_play_decision`]). macOS can take many seconds to settle
-/// after a Bluetooth teardown before sending the auto-play: the reported case
-/// measured 15.9 s between the route change and the command. A fixed widening
-/// of the symmetric window would swallow every genuine press for that whole
-/// span; the one-shot latch bounds the cost to a single ignored press.
+/// a possible *late* system resume — but only the first one per change (see
+/// [`paused_play_decision`]). The 15.9 s play that motivated this window
+/// turned out to be indistinguishable from a user press: the confirmed
+/// device-change resume was the Pause toggle, not a Play. The latch is kept
+/// as a bounded defence, and bounds its own cost to a single ignored press —
+/// a genuine press shortly after plugging headphones in still works on the
+/// second attempt.
 const DEVICE_CHANGE_QUIET: Duration = Duration::from_secs(60);
 /// Imperceptible delay that lets a device-change event overtake the command.
 const PLAY_DEFER: Duration = Duration::from_millis(250);
@@ -169,7 +177,15 @@ fn map_event(event: &MediaControlEvent, playing: Option<bool>) -> Option<MappedC
     };
     match event {
         MediaControlEvent::Play => Some(command("play")),
-        MediaControlEvent::Pause => Some(command("pause")),
+        // Idempotent: a Pause for an already-paused player is dropped.
+        // "Pause, the output device went away" is exactly what macOS sends
+        // when headphones disconnect, and the player's PAUSE *skin action*
+        // is a toggle (the classic button) — routing a system Pause through
+        // it resumed a player the user had already paused. The player window
+        // now routes a transport `pause` to a plain pause instead, so this
+        // rule is a second, independent line of defence rather than the
+        // only thing standing between a redundant Pause and a resume.
+        MediaControlEvent::Pause => (playing != Some(false)).then(|| command("pause")),
         MediaControlEvent::Stop => Some(command("stop")),
         MediaControlEvent::Next => Some(command(CMD_NEXT)),
         MediaControlEvent::Previous => Some(command("prev")),
@@ -277,7 +293,7 @@ enum PausedPlay {
     /// Inside the certain symmetric window: definitely the system resume.
     SuppressCertain,
     /// The first play of a route-change *episode* inside the quiet window —
-    /// macOS can take many seconds to send its auto-play.
+    /// a possible late system resume (never observed; see the module docs).
     SuppressLate { change: u64 },
     /// A genuine press: forward to the player.
     Forward,
@@ -425,21 +441,30 @@ fn spawn_deferred_play_worker(app: AppHandle, rx: mpsc::Receiver<u64>) {
         });
 }
 
+/// The state every OS media decision is made on: the engine's, never the
+/// media hub's snapshot (which is only as fresh as the renderer's last
+/// transition push). With no engine yet nothing can be playing, so that is
+/// `Some(false)` — there is deliberately no fallback to the stale snapshot.
+fn engine_state(engine: Option<bool>) -> Option<bool> {
+    Some(engine.unwrap_or(false))
+}
+
 fn on_media_event(app: &AppHandle, event: MediaControlEvent) {
-    let playing = app
-        .state::<MediaHub>()
-        .inner
-        .lock()
-        .map(|inner| inner.snap.playing)
-        .unwrap_or(None);
+    let playing = engine_state(audio::engine_playing(&app.state::<audio::Audio>()));
     let Some(mapped) = map_event(&event, playing) else {
+        // Every OS media event is logged: the device-change resume hid for
+        // three fixes behind a command this function forwarded silently.
+        eprintln!("navinamp media: OS event {event:?} dropped — playing {playing:?}");
         return;
     };
+    eprintln!(
+        "navinamp media: OS event {event:?} → {} — playing {playing:?}",
+        mapped.command
+    );
     if mapped.command == "play" && playing == Some(false) {
-        // Paused: macOS asks media apps to resume on default-device changes
-        // (it fires when Bluetooth headphones disconnect). The worker gives
-        // the device event a moment to arrive, then drops the command if one
-        // did.
+        // Paused: a Play here may be the system's own device-change resume
+        // rather than a press. The worker gives the device event a moment to
+        // arrive, then drops the command when one did.
         defer_paused_play(app, now_ms());
         return;
     }
@@ -665,6 +690,54 @@ mod tests {
         assert!(
             !playback_dirty(Some(&playing), &unknown),
             "playing unknown -> no push"
+        );
+    }
+
+    #[test]
+    fn pause_for_an_already_paused_player_is_dropped() {
+        // The player's PAUSE action is a toggle, so a redundant system Pause
+        // would resume a paused player. macOS sends exactly that Pause when
+        // an output device disappears (headphones disconnecting).
+        assert_eq!(
+            map_event(&MediaControlEvent::Pause, Some(false)),
+            None,
+            "already paused: must not toggle back to playing"
+        );
+        // While playing the Pause is forwarded (it pauses, as intended).
+        assert_eq!(
+            map_event(&MediaControlEvent::Pause, Some(true)),
+            mapped("pause", None)
+        );
+        // Unknown state: keep the previous behaviour (the player decides).
+        assert_eq!(
+            map_event(&MediaControlEvent::Pause, None),
+            mapped("pause", None)
+        );
+        // Play is unaffected by the idempotency rule: a paused-state Play is
+        // still forwarded to the device-change guard.
+        assert_eq!(
+            map_event(&MediaControlEvent::Play, Some(false)),
+            mapped("play", None)
+        );
+    }
+
+    #[test]
+    fn no_engine_never_falls_back_to_a_stale_snapshot() {
+        // Before any engine exists nothing can be playing: the decision
+        // state is `Some(false)`, never the hub's last renderer push. A
+        // Pause on that path is dropped, so even a stale `true` snapshot
+        // cannot turn a redundant system Pause into a resume.
+        assert_eq!(engine_state(None), Some(false));
+        assert_eq!(engine_state(Some(true)), Some(true));
+        assert_eq!(
+            map_event(&MediaControlEvent::Pause, engine_state(None)),
+            None
+        );
+        // A Play with no engine is treated as a paused-state play and goes
+        // to the device-change guard like any other.
+        assert_eq!(
+            map_event(&MediaControlEvent::Play, engine_state(None)),
+            mapped("play", None)
         );
     }
 

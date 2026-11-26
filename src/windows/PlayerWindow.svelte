@@ -521,7 +521,6 @@
   // (remote seek buttons / scrubbers) are absolute or relative seeks.
   const MEDIA_TO_ACTION: Record<string, string> = {
     play: "PLAY",
-    pause: "PAUSE",
     stop: "STOP",
     next: "NEXT",
     prev: "PREV",
@@ -533,6 +532,16 @@
     }
     if (c === "seekTo") {
       seekTo(secs ?? 0);
+      return;
+    }
+    // A transport `pause` is a plain pause — never the skin's PAUSE action,
+    // which toggles. macOS sends a Pause when an output device disappears
+    // (headphones disconnecting); routed through the toggle, that command
+    // resumed a player the user had already paused. The engine's own Pause
+    // is idempotent, so this needs no view of the playback state at all —
+    // not this window's polled `audio.status`, which lags the engine.
+    if (c === "pause") {
+      void cmd("audio_pause");
       return;
     }
     skinAction(MEDIA_TO_ACTION[c]);
