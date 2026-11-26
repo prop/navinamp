@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.18.0](https://github.com/prop/navinamp/compare/v0.17.0...v0.18.0) (2026-11-26)
+
+
+### Features
+
+* **library:** show the track card in the row context menu ([fac944f](https://github.com/prop/navinamp/commit/fac944f11006fafe784601bed43c141887b3cd68))
+* **library:** show the track card in the row context menu ([df8458a](https://github.com/prop/navinamp/commit/df8458ad452858f27461c86913ebecff9d561a71))
+* **navidrome:** absolute native paths for copy, track card and library order ([0b13f90](https://github.com/prop/navinamp/commit/0b13f904fcd0e6926de4df522023ed2c20708e89))
+* **navidrome:** use the absolute native path for copy and the track card ([3dd881a](https://github.com/prop/navinamp/commit/3dd881a86daa67d9d4882aa84099a6dae442e578))
+
+
+### Bug Fixes
+
+* **audio:** stamp device changes from CoreAudio while the stream is suspended ([24c1d0c](https://github.com/prop/navinamp/commit/24c1d0c4f8d4baa6dc669864288406ef5f24bbe1))
+* **audio:** stamp device changes from CoreAudio while the stream is suspended ([e5699b6](https://github.com/prop/navinamp/commit/e5699b6c9394ea8064143cea1016399ade23dbd5))
+* **library:** cap the track card height, omit empty length rows ([433242c](https://github.com/prop/navinamp/commit/433242cadfc478b82ea632e19319a7d09211bd26))
+* **media:** a system Pause must not toggle a paused player back to playing ([62d4d06](https://github.com/prop/navinamp/commit/62d4d066524a86b0d17016b884b12732c7b8e21c))
+* **media:** a system Pause must not toggle a paused player back to playing ([f96c9ce](https://github.com/prop/navinamp/commit/f96c9ce91208c90d02224d35a39117ee5434bd32))
+* **media:** make the device-change resume window symmetric and log the decision ([1a0148c](https://github.com/prop/navinamp/commit/1a0148c8558af0bb26fe7020d565a161f4d2afd3))
+* **media:** make the device-change resume window symmetric and log the decision ([05efe71](https://github.com/prop/navinamp/commit/05efe7188f2196601594241ed346843d0c188387))
+* **media:** swallow the first late system resume after a device change ([c1a3c4e](https://github.com/prop/navinamp/commit/c1a3c4e8f68fc9a98f10fce909d9618746a80940))
+* **media:** swallow the first late system resume after a device change ([49edb74](https://github.com/prop/navinamp/commit/49edb74438f5bd98796d01459cb40f3ce8e6d60e))
+* **menu:** keep actions and a Close row visible in small windows ([1936d84](https://github.com/prop/navinamp/commit/1936d84e6d97f3f9700051b2f4f895b510d839c4))
+* **menu:** keep actions and a Close row visible in small windows ([bfb3056](https://github.com/prop/navinamp/commit/bfb305657c889b991eab2842d82a34ba145407d8))
+* **menu:** remove a dismissed context menu for good ([d4b688d](https://github.com/prop/navinamp/commit/d4b688d86c7e87d4869c4bf775e6117acbbc8c85))
+* **menu:** remove a dismissed context menu for good ([f4c95e1](https://github.com/prop/navinamp/commit/f4c95e1476e0e846050f31a0069eec5b43768602))
+* **menu:** review follow-ups — scrollable actions, single Close separator ([0d49844](https://github.com/prop/navinamp/commit/0d498449b12c5b9fc05eb95f7d827c5825e2de0a))
+
 ## [0.17.0](https://github.com/prop/navinamp/compare/v0.16.0...v0.17.0) (2026-11-15)
 
 
