@@ -30,11 +30,12 @@ Installers for macOS, Windows, and Linux are attached to GitHub Releases:
 On macOS, open the `.dmg` and copy `NaVinaMP.app` to `/Applications`.
 
 All installers are x86-64 builds; on Apple Silicon Macs the app runs through
-Rosetta 2. None of them is code-signed with a developer certificate. The
-macOS app is ad-hoc signed and not notarized, so Gatekeeper does not accept
-it: if macOS refuses to open it, allow the app under **System Settings →
-Privacy & Security** (**System Preferences → Security & Privacy** on macOS 12
-or earlier).
+Rosetta 2. At present none of them is code-signed with a developer
+certificate. The macOS app is ad-hoc signed and not notarized (CI signs and
+notarizes it only when Apple credentials are configured), so Gatekeeper does
+not accept it: if macOS refuses to open it, allow the app under
+**System Settings → Privacy & Security** (**System Preferences → Security &
+Privacy** on macOS 12 or earlier).
 
 ## Highlights
 
@@ -56,6 +57,8 @@ or earlier).
 - **Playlist**
   - Follows the current track (on by default)
   - "Play next" in the row menus of the playlist and the library
+  - URL streams through **Add URL**; YouTube links need your own `yt-dlp`
+    install, which is never bundled
 - **Playback engine**
   - Gapless playback
   - ReplayGain
@@ -71,8 +74,8 @@ or earlier).
   - Curated popular-skins pack
 - **Search**
   - SIMPLE (full-text) and ADVANCED (field rules) modes
-  - SEMANTIC search by meaning, with embeddings from the configured AI
-    provider
+  - SEMANTIC search by meaning, with embeddings from an OpenAI-compatible
+    provider (Anthropic has no embeddings API)
   - AI search: describe the music and the model writes the rules
   - Rule-based smart views and optional Discogs catalog lookups
 - **Desktop integration**
@@ -181,7 +184,7 @@ come from Navidrome's own API rather than from Subsonic, so other Subsonic
 servers do not have them. The same API supplies the real file path that
 **Copy path** puts on the clipboard.
 
-### Publishing and scrobbbling
+### Publishing and scrobbling
 
 Remote tracks support:
 
@@ -193,8 +196,9 @@ Remote tracks support:
 ## Data and settings files
 
 NaVinaMP keeps its files in two directories named after the bundle
-identifier, `com.prop.navinamp`. They are the same directory on macOS and
-Windows, and separate directories on Linux:
+identifier, `com.prop.navinamp`. With the current Tauri and `dirs` versions
+they are the same directory on macOS and Windows, and separate directories on
+Linux:
 
 | | macOS | Linux | Windows |
 |---|---|---|---|
@@ -217,6 +221,8 @@ Windows, and separate directories on Linux:
 - `windows.json`: position, size, visibility, windowshade layout, and
   always-on-top state of the windows
 - `ai.json`: AI search provider settings, including API keys
+- `streams.json`: the path of the `yt-dlp` executable, written when you set
+  one in the Add URL dialog
 - `skins/`: installed skin archives
 
 A few interface preferences, such as the selected skin, the UI scale, and the
@@ -232,18 +238,20 @@ these files.
 - The stored Navidrome password is also used to sign in to Navidrome's own
   API, for label, catalog number, and file path lookups. That sign-in sends
   the password itself rather than a salted token, so prefer an `https://`
-  server URL.
+  server URL. The sync skips it for `http://` servers, but **Copy path** and
+  the playlist row menu do not.
 - Stream URLs contain Subsonic authentication tokens. NaVinaMP does not log
   them and scrubs them from user-facing errors, but do not paste stream URLs
   publicly.
 - Servers using self-signed certificates must enable
   **allow self-signed certificates** for that profile. This applies to both
   library sync and streaming.
-- With AI features enabled, library metadata goes to the configured provider:
-  AI search sends a compact digest (counts, genres, sampled artist names, and
-  the names of saved servers), and SEMANTIC indexing sends each track's
-  title, artist, album, genre, and year (or the file name for an untagged
-  track).
+- With AI features enabled, library metadata goes to the configured provider.
+  AI search sends a compact digest: counts, genres, and sampled artist names,
+  plus for each saved server its display name (`user@host` unless you set a
+  label), its id, and its track count. SEMANTIC indexing sends each track's
+  title, artist, album, genre, and year, or the file name without its
+  extension when all of those are empty.
 
 ## Skins
 
@@ -289,6 +297,10 @@ workflow then builds and attaches the installers listed under
 others on GitHub-hosted runners. A final job fails the run if any of the six
 files is missing.
 
+Release-please does not update `Cargo.lock`. After merging, run
+`cargo update -w`, which updates the workspace members only, and commit the
+changed version lines in a separate PR; otherwise `--locked` builds fail.
+
 [release-please]: https://github.com/googleapis/release-please
 [Conventional Commits]: https://www.conventionalcommits.org/
 
@@ -305,7 +317,8 @@ crates/navinamp-skin     Winamp skin parsing and validation
 crates/navinamp-llm      LLM adapters for AI search
 assets/                  Brand assets and the fallback skin's sources
 scripts/                 CI runner bootstrap, cache cleaning, skin curation
-.github/                 CI (tests and release builds) and release-please
+.github/                 CI (tests and release builds), release-please, and the
+                         release version-stamping action
 ```
 
 ## Contributing
