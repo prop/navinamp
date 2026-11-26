@@ -22,6 +22,11 @@ installers for macOS (`.dmg`), Windows (`.msi` and `-setup.exe`), and Linux
 (`.deb`, `.rpm`, and `.AppImage`). On macOS, open the `.dmg` and copy
 `NaVinaMP.app` to `/Applications`.
 
+Released builds need no toolchain. macOS uses its built-in WebKit. Windows
+needs the WebView2 runtime, which the installer downloads when it is
+missing. Linux needs WebKitGTK 4.1 and GTK 3, which the `.deb` declares as
+dependencies.
+
 All builds are x86-64; the macOS app runs on Apple Silicon through Rosetta 2.
 At present none is code-signed with a developer certificate: the macOS app
 is ad-hoc signed and not notarized, so if Gatekeeper refuses it, allow the
@@ -68,8 +73,9 @@ The **Window** menu toggles the three extra windows and Always on Top
 **Notify on Track Change** (on by default) and **Resume Playback on Launch**
 (off by default).
 
-## Getting started
+## Building from source
 
+None of this is needed to run a released build; see [Download](#download).
 You need Node.js 20.19+ or 22.12+ with npm, Rust stable, and the
 [Tauri 2 prerequisites][tauri-prereq].
 
