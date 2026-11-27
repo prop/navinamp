@@ -18,8 +18,9 @@
   <a href="https://github.com/prop/navinamp/releases/latest"><strong>Download for macOS, Windows, or Linux</strong></a>
 </p>
 
-<!-- The screenshot of the app goes here, directly under the download link:
-     <p align="center"><img src="assets/screenshot.png" alt="NaVinaMP playing a track in the classic Winamp skin, with the equalizer, playlist, and music library open"></p> -->
+<p align="center">
+  <img src="assets/screenshot.png" alt="NaVinaMP playing a track in the classic Winamp skin, with the equalizer, playlist, and music library open">
+</p>
 
 ## Highlights
 
