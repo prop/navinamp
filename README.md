@@ -27,14 +27,16 @@
 ### Your music in one library
 
 Local folders and Navidrome servers are browsed as one library, with one
-search over both. Favorites and ratings are synced to the server.
+search over both. Favorites and ratings on Navidrome tracks sync back to
+your server.
 
 ### Make it look like your Winamp
 
 The original Winamp 2.91 skin is the default, and any classic `.wsz` skin
-loads from the Media Library's **SKIN** tab: copy the file into the skins
-folder and press the rescan button there. The player, playlist, equalizer,
-and library windows snap together and move as one.
+can take its place: copy the file into the skins folder, press the rescan
+button (↻) in the Media Library's **SKIN** tab, select the new skin, and
+press **APPLY**. The player, playlist, equalizer, and library windows snap
+together and move as one.
 
 ### Play an album front to back
 
@@ -53,14 +55,15 @@ playing and next track, and URL streams, with YouTube links through your own
 ## Play your first track
 
 **From a folder.** Open the **Media Library** and press **Scan folder…** above
-the track list, then pick the folder that holds your music. Tracks appear as
-they are found. Double-click one to play it.
+the track list, then pick the folder that holds your music. The tracks are
+listed when the scan finishes; until then, the progress shows in the same
+place. Double-click a track to play it.
 
-**From Navidrome.** In the Media Library, choose **NAVIDROME → SERVER STATUS**
-and press **+ ADD SERVER**. Enter the server address and your account, then
-press **ADD & CONNECT**. The library syncs on its own, and its tracks appear
-next to your local ones. The password is stored in plain text; see
-[Privacy and credentials](#privacy-and-credentials).
+**From Navidrome.** In the toolbar of the **Media Library**, press
+**NAVIDROME**. Enter your server's address, your username, and your
+password, then press **ADD & CONNECT**. The library syncs on its own, and
+its tracks appear next to your local ones. The password is stored in plain
+text; see [Privacy and credentials](#privacy-and-credentials).
 
 ## Download
 
