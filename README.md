@@ -5,128 +5,103 @@
 <h1 align="center">NaVinaMP</h1>
 
 <p align="center">
-  A Winamp-inspired desktop music player for local libraries and Navidrome.
+  A Winamp-style player for your local music and your Navidrome library.
 </p>
 
----
+<p align="center">
+  Browse both collections together, queue an album, and play it gaplessly.<br>
+  The original Winamp 2.91 skin comes bundled, and you can load your favorite
+  <code>.wsz</code> skin.
+</p>
 
-NaVinaMP is a desktop music player built with **Tauri 2**, **Svelte 5**, and
-**Rust**. It combines a classic four-window player layout with a modern
-library: local folders, Navidrome servers, smart views, skins, an equalizer,
-gapless playback, and AI-assisted search.
+<p align="center">
+  <a href="https://github.com/prop/navinamp/releases/latest"><strong>Download for macOS, Windows, or Linux</strong></a>
+</p>
 
-## Download
-
-Each release on <https://github.com/prop/navinamp/releases> carries
-installers for macOS (`.dmg`), Windows (`.msi` and `-setup.exe`), and Linux
-(`.deb`, `.rpm`, and `.AppImage`). On macOS, open the `.dmg` and copy
-`NaVinaMP.app` to `/Applications`.
-
-Released builds need no toolchain. macOS uses its built-in WebKit. Windows
-needs the WebView2 runtime, which the installer downloads when it is
-missing. Linux needs WebKitGTK 4.1 and GTK 3, which the `.deb` declares as
-dependencies.
-
-All builds are x86-64; the macOS app runs on Apple Silicon through Rosetta 2.
-At present none is code-signed with a developer certificate: the macOS app
-is ad-hoc signed and not notarized, so if Gatekeeper refuses it, allow the
-app under **System Settings → Privacy & Security** (**System Preferences →
-Security & Privacy** on macOS 12 or earlier).
+<p align="center">
+  <img src="assets/screenshot.png" alt="NaVinaMP playing a track in the classic Winamp skin, with the equalizer, playlist, and music library open">
+</p>
 
 ## Highlights
 
-- **Four-window Winamp-style interface**
-  - Player, playlist editor, media library, and equalizer
-  - Windowshade mode, always on top, and edge snapping that moves docked
-    windows together
-- **Local music library**
-  - Incremental scanning by folder
-  - Artists, albums, genres, ratings, favorites, and smart views
-- **Navidrome / Subsonic support**
-  - Multiple saved servers in one combined local and remote library
-  - Quick and full rescans, server playlists, smart-view publishing
-  - Ratings, favorites, and scrobbles synced with the server
-- **Playback**
-  - Gapless playback and ReplayGain
-  - 10-band equalizer with user presets and auto-headroom, and a spectrum
-    analyzer
-  - Queue and playback position restored on the next launch
-  - Remote streams reconnect instead of skipping the track
-- **Playlist and search**
-  - Follow current track, "Play next", and URL streams, including YouTube
-    links through your own `yt-dlp` install
-  - SIMPLE (full-text), ADVANCED (field rules), SEMANTIC (embeddings from an
-    OpenAI-compatible provider), and AI search that writes the rules, with
-    optional Discogs catalog lookups
-- **Skins**
-  - Classic Winamp 2 `.wsz` skins, with the original 2.91 base skin bundled
-    as the default, a built-in fallback, and a curated popular-skins pack
-- **Desktop integration**
-  - Media keys, Now Playing metadata, and desktop notifications
-  - Global shortcuts for now playing (Ctrl+⌘O or Ctrl+Alt+O) and next track
-    (Ctrl+⌘N or Ctrl+Alt+N)
-  - `Alt+L` toggles the Media Library, `Alt+S` cycles the UI scale, and
-    ⌘/Ctrl+U adds a URL in the playlist
+### Your music in one library
 
-The **Window** menu toggles the three extra windows and Always on Top
-(⌘⇧L, ⌘⇧E, ⌘⇧P, ⌘⇧T; Ctrl+Shift+… elsewhere) and holds two preferences:
-**Notify on Track Change** (on by default) and **Resume Playback on Launch**
-(off by default).
+Local folders and Navidrome servers are browsed as one library, with one
+search over both. Favorites and ratings on Navidrome tracks sync back to
+your server.
 
-## Building from source
+### Make it look like your Winamp
 
-None of this is needed to run a released build; see [Download](#download).
-You need Node.js 20.19+ or 22.12+ with npm, Rust stable, and the
-[Tauri 2 prerequisites][tauri-prereq].
+The original Winamp 2.91 skin is the default, and any classic `.wsz` skin
+can take its place: copy the file into the skins folder, press the rescan
+button (↻) in the Media Library's **SKIN** tab, select the new skin, and
+press **APPLY**. The player, playlist, equalizer, and library windows snap
+together and move as one.
 
-```sh
-npm install
-npm run tauri dev      # development
-npm run tauri build    # installers for the current platform
-```
+### Play an album front to back
 
-CI runs these on every pull request:
+Gapless playback with ReplayGain and a 10-band equalizer. The queue and your
+position in a track survive a restart.
 
-```sh
-npm run build
-cargo test --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-```
+Search goes further when you want it: full-text and field rules, semantic
+search by meaning, and AI search that writes the rules for you, with optional
+Discogs lookups. AI and semantic search send some library metadata to the
+provider you configure; see [Privacy and credentials](#privacy-and-credentials).
 
-There is no JavaScript test runner or type-check step.
+Also built in: media keys, desktop notifications, global shortcuts for now
+playing and next track, and URL streams, with YouTube links through your own
+`yt-dlp` install.
+
+## Play your first track
+
+**From a folder.** Open the **Media Library** and press **Scan folder…** above
+the track list, then pick the folder that holds your music. The tracks are
+listed when the scan finishes; until then, the progress shows in the same
+place. Double-click a track to play it.
+
+**From Navidrome.** In the toolbar of the **Media Library**, press
+**NAVIDROME**. Enter your server's address, your username, and your
+password, then press **ADD & CONNECT**. The library syncs on its own, and
+its tracks appear next to your local ones. The password is stored in plain
+text; see [Privacy and credentials](#privacy-and-credentials).
+
+## Download
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Installer | `.dmg` | `.msi`, `-setup.exe` | `.deb`, `.rpm`, `.AppImage` |
+| Needs at runtime | nothing beyond macOS | WebView2, downloaded by the installer when missing | WebKitGTK 4.1 and GTK 3, installed by the `.deb` |
+
+All builds are x86-64; on Apple Silicon Macs the app runs through Rosetta 2.
+The latest release is at <https://github.com/prop/navinamp/releases/latest>.
+
+<details>
+<summary>Installation help</summary>
+
+- **macOS:** open the `.dmg` and copy `NaVinaMP.app` to `/Applications`.
+- **Windows and Linux:** run the installer for your system.
+
+At present the installers are not code-signed with a developer certificate.
+On macOS the app is ad-hoc signed and not notarized, so Gatekeeper refuses
+it at first: allow the app under **System Settings → Privacy & Security**
+(**System Preferences → Security & Privacy** on macOS 12 or earlier).
+
+</details>
 
 ## Navidrome
 
-Open the **Media Library** window, choose **NAVIDROME → SERVER STATUS**, and
-add a server. NaVinaMP supports multiple saved Navidrome/Subsonic servers;
-their libraries are synced into one combined local database.
+NaVinaMP supports multiple saved Navidrome and Subsonic servers; their
+libraries are synced into one combined local database.
 
 - **Quick rescan** fetches only new or changed albums; **Full rescan**
   re-fetches every album.
 - Remote tracks support now-playing and submission scrobbles, star/unstar,
   rating sync, and publishing smart views as Navidrome playlists.
 - A Navidrome server also provides label and catalog number for albums and
-  for the track card in a row's context menu, plus the real file path
-  behind **Copy path**. These come from Navidrome's own API, over `https://`
-  only.
+  for the track card in a row's context menu, plus the real file path behind
+  **Copy path**. These come from Navidrome's own API, over `https://` only.
 
-## Data and settings files
-
-NaVinaMP keeps its files in two directories named `com.prop.navinamp`. With
-the current Tauri and `dirs` versions they are one directory on macOS
-(`~/Library/Application Support/`) and Windows (`%APPDATA%`), and two on
-Linux (`~/.config/` and `~/.local/share/`).
-
-| Directory | Contents |
-|---|---|
-| `<app_data_dir>` | `navinamp.db` (library), `library-roots.json`, `art-cache/`, `navidrome.json` (servers), `queue.json`, `playback.json` |
-| `<app_config_dir>` | `audio.json` (volume, EQ, preferences), `windows.json`, `ai.json` (AI provider), `streams.json` (`yt-dlp` path), `skins/` |
-
-A few interface preferences, such as the selected skin and the UI scale,
-are kept in the webview's local storage instead.
-
-## Security notes
+## Privacy and credentials
 
 - Navidrome credentials are stored **in plaintext** at
   `<app_data_dir>/navidrome.json`, and AI search keys and the optional
@@ -145,65 +120,23 @@ are kept in the webview's local storage instead.
   artist, album, genre, and year, or the bare file name when all of those
   are empty.
 
-## Skins
+NaVinaMP keeps its files in two directories named `com.prop.navinamp`. With
+the current Tauri and `dirs` versions they are one directory on macOS
+(`~/Library/Application Support/`) and Windows (`%APPDATA%`), and two on
+Linux (`~/.config/` and `~/.local/share/`).
 
-NaVinaMP loads classic Winamp 2 `.wsz` skins. The original Winamp 2.91 base
-skin ships with the app and is the default; a minimal fallback is built in.
-The Media Library's **SKIN** tab lists installed skins, rescans the folder
-below, and downloads a curated pack from the Winamp Skin Museum on
-archive.org only when you ask.
-
-```text
-<app_config_dir>/skins
-```
-
-The selected skin is remembered by the webview, not in that folder.
-
-## Releases
-
-Releases are generated with [release-please] from
-[Conventional Commits] on `master`:
-
-| Commit message | Version bump |
+| Directory | Contents |
 |---|---|
-| `fix: …` | patch |
-| `feat: …` | minor |
-| `feat!: …` / `BREAKING CHANGE:` | major |
-| `chore:`, `ci:`, `docs:`, `refactor:` | none |
+| `<app_data_dir>` | `navinamp.db` (library), `library-roots.json`, `art-cache/`, `navidrome.json` (servers), `queue.json`, `playback.json` |
+| `<app_config_dir>` | `audio.json` (volume, EQ, preferences), `windows.json`, `ai.json` (AI provider), `streams.json` (`yt-dlp` path), `skins/` |
 
-Merging the release PR bumps the version, updates `CHANGELOG.md`, and
-creates the tag and the GitHub release. Two follow-ups are needed each
-time: the tag is created with `GITHUB_TOKEN`, which starts no workflow, and
-release-please does not touch `Cargo.lock`.
-
-1. Run the **CI** workflow on the new tag (Actions → CI → Run workflow). It
-   builds and attaches the installers.
-2. Run `cargo update -w` and commit the result, otherwise `--locked` builds
-   fail.
-
-[release-please]: https://github.com/googleapis/release-please
-[Conventional Commits]: https://www.conventionalcommits.org/
-[tauri-prereq]: https://v2.tauri.app/start/prerequisites/
-
-## Project layout
-
-```text
-src/                     Svelte 5 frontend: window views, components, player queue
-src-tauri/               Tauri shell: IPC commands, audio bridge, windows, menus
-src-tauri/resources/     Bundled base skin and the popular-skins manifest
-crates/navinamp-audio    Playback engine: decode, DSP, EQ, output, remote streams
-crates/navinamp-library  Scanner, SQLite library, queries, remote sync
-crates/navinamp-subsonic Subsonic/OpenSubsonic client and Navidrome's native API
-crates/navinamp-skin     Winamp skin parsing and validation
-crates/navinamp-llm      LLM adapters for AI search
-assets/                  Brand assets and the fallback skin's sources
-scripts/, .github/       CI scripts, workflows, release-please, version stamping
-```
+A few interface preferences, such as the selected skin and the UI scale, are
+kept in the webview's local storage instead.
 
 ## Contributing
 
-Every change goes through a pull request from a topic branch and is merged
-after CI passes. [AGENTS.md](AGENTS.md) has the workflow.
+Building from source, the checks CI runs, how releases are made, and the code
+layout are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
