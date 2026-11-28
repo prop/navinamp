@@ -341,8 +341,13 @@
     position: absolute;
     inset: 0;
     z-index: 20;
-    display: grid;
-    place-items: center;
+    /* Flex, not grid: while a grid row is being sized, a percentage
+       max-height on the item counts for nothing, so a panel taller than the
+       window ran past its bottom edge and took the footer with it. Against
+       a flex container's fixed height the percentage holds. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: rgba(0, 0, 0, 0.55);
   }
 

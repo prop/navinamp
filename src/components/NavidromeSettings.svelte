@@ -14,6 +14,11 @@
    * from `navidrome_connect` (the backend's ping error) show inline; a
    * missing backend command degrades via `friendlyIpcError` — never a
    * crash.
+   *
+   * A successful connect (add, reconnect or update) closes the dialog: the
+   * action is complete and the SERVER STATUS card behind it shows the
+   * result. A failed one keeps it open, with the error under the form. The
+   * other actions (switch, rename, remove, preferences) leave it open.
    */
   import { friendlyIpcError } from "../lib/library/ipc";
   import { registerEscape } from "../lib/window/escape";
@@ -197,8 +202,10 @@
         `navidrome: connected to ${status.profileLabel ?? status.url}` +
           `${status.serverVersion ? ` (server ${status.serverVersion})` : ""}`,
       );
+      onclose();
     } catch (e) {
-      // Auth failures arrive as the backend's ping error — shown inline.
+      // Auth failures arrive as the backend's ping error — shown inline,
+      // and the dialog stays open so they can be corrected.
       formError = friendlyIpcError("navidrome connect", e);
     } finally {
       connecting = false;
@@ -377,7 +384,10 @@
 
 <div class="overlay" role="dialog" aria-modal="true" aria-label="navidrome settings">
   <div class="panel">
-    <header class="phdr">NAVIDROME SETTINGS</header>
+    <header class="phdr">
+      <span>NAVIDROME SETTINGS</span>
+      <button class="x" onclick={onclose} title="close">×</button>
+    </header>
 
     <div class="pbody">
       <div class="block">
@@ -595,8 +605,13 @@
     position: absolute;
     inset: 0;
     z-index: 20;
-    display: grid;
-    place-items: center;
+    /* Flex, not grid: while a grid row is being sized, a percentage
+       max-height on the item counts for nothing, so a panel taller than the
+       window ran past its bottom edge and took the footer with it. Against
+       a flex container's fixed height the percentage holds. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: rgba(0, 0, 0, 0.55);
   }
 
@@ -611,12 +626,26 @@
   }
 
   .phdr {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 4px 8px;
     font-size: 10px;
     letter-spacing: 0.18em;
     color: #808080;
     background: #101010;
     border-bottom: 1px solid #2a2a2a;
+  }
+
+  .phdr span {
+    flex: 1;
+  }
+
+  .x {
+    border-color: transparent;
+    background: transparent;
+    color: #707070;
+    padding: 0 4px;
   }
 
   .pbody {
