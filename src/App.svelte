@@ -18,8 +18,11 @@
   import PlaylistWindow from "./windows/PlaylistWindow.svelte";
   import { cycleUiScale, initWindowBus } from "./lib/window/bus.svelte";
   import { LABEL } from "./lib/window/identity";
+  import { installOverflowScroll } from "./lib/window/scroll";
 
   initWindowBus();
+  // A window made smaller than its page must still reach all of it.
+  installOverflowScroll();
 
   /** Alt+S cycles the global UI scale from every window. */
   function onKeydown(e: KeyboardEvent): void {
@@ -93,5 +96,19 @@
     padding: 0;
     background: #000;
     overflow: hidden;
+  }
+
+  /* The one exception: while the window is smaller than its page (the user
+     resized it) the page scrolls, so nothing is cut off for good.
+     lib/window/scroll.ts sets the class once the overflow has lasted a
+     moment and removes it as soon as the content fits again. */
+  :global(html.clipped) {
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #2f4f33 #000;
+  }
+
+  :global(html.clipped body) {
+    overflow: visible;
   }
 </style>
