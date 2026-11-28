@@ -10,6 +10,10 @@
    * Homebrew and common local installs, with an explicit override for unusual
    * setups. Nothing is bundled; YouTube support is opt-in by installing the
    * helper.
+   *
+   * While a URL is being resolved nothing closes the dialog: the ×, CANCEL
+   * and Escape are disabled, because the result or the error has to be seen.
+   * A resolve is bounded by the backend's 60 s timeout (streams.rs).
    */
   import { onMount } from "svelte";
 

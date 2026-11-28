@@ -23,7 +23,8 @@
    * While a connect is running the dialog cannot be dismissed: the header
    * ×, CLOSE and Escape are disabled, as in the Add URL dialog. The connect's
    * outcome decides what happens to the dialog, and one that finishes after
-   * the dialog was closed would close whatever the host shows by then.
+   * the dialog was closed would close whatever the host shows by then. A
+   * connect is bounded by the backend's 30 s request timeout.
    */
   import { friendlyIpcError } from "../lib/library/ipc";
   import { registerEscape } from "../lib/window/escape";

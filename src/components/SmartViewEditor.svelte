@@ -109,6 +109,9 @@
   let deleting = $state(false);
   let publishing = $state(false);
 
+  // CANCEL and Escape wait for a running save, delete or publish, so its
+  // result is seen. All three are bounded: SQLite's 5 s busy timeout, and
+  // the 30 s request timeout for the server.
   function requestCancel(): void {
     if (!saving && !deleting && !publishing) oncancel();
   }
