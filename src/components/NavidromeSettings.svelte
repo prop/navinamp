@@ -19,6 +19,11 @@
    * action is complete and the SERVER STATUS card behind it shows the
    * result. A failed one keeps it open, with the error under the form. The
    * other actions (switch, rename, remove, preferences) leave it open.
+   *
+   * While a connect is running the dialog cannot be dismissed: the header
+   * ×, CLOSE and Escape are disabled, as in the Add URL dialog. The connect's
+   * outcome decides what happens to the dialog, and one that finishes after
+   * the dialog was closed would close whatever the host shows by then.
    */
   import { friendlyIpcError } from "../lib/library/ipc";
   import { registerEscape } from "../lib/window/escape";
@@ -49,7 +54,13 @@
 
   let { onclose, onchanged, onlog }: Props = $props();
 
-  $effect(() => registerEscape(onclose));
+  // Escape is disabled while connecting, like the × and CLOSE: see the note
+  // at the top of the file.
+  $effect(() =>
+    registerEscape(() => {
+      if (!connecting) onclose();
+    }),
+  );
 
   let status = $state.raw<NavidromeStatus | null>(null);
   let statusError = $state<string | null>(null);
@@ -386,7 +397,7 @@
   <div class="panel">
     <header class="phdr">
       <span>NAVIDROME SETTINGS</span>
-      <button class="x" onclick={onclose} title="close">×</button>
+      <button class="x" onclick={onclose} disabled={connecting} title="close">×</button>
     </header>
 
     <div class="pbody">
@@ -595,7 +606,7 @@
     </div>
 
     <footer class="pbar">
-      <button onclick={onclose}>CLOSE</button>
+      <button onclick={onclose} disabled={connecting}>CLOSE</button>
     </footer>
   </div>
 </div>
@@ -646,6 +657,10 @@
     background: transparent;
     color: #707070;
     padding: 0 4px;
+  }
+
+  .x:disabled {
+    opacity: 0.35;
   }
 
   .pbody {
@@ -921,8 +936,12 @@
     cursor: pointer;
   }
 
-  .pbar button:hover {
+  .pbar button:hover:not(:disabled) {
     border-color: #3ccb4e;
     color: #3ccb4e;
+  }
+
+  .pbar button:disabled {
+    opacity: 0.35;
   }
 </style>
