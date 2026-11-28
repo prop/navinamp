@@ -216,8 +216,14 @@
     position: fixed;
     inset: 0;
     z-index: 50;
-    display: grid;
-    place-items: center;
+    /* Flex, not grid: while a grid row is being sized, a percentage
+       max-height on the item counts for nothing, so a panel taller than the
+       window (the path editor and a long error) ran past its bottom edge and
+       took the footer with it. Against a flex container's fixed height the
+       percentage holds. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: rgba(0, 0, 0, 0.6);
     font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
   }
