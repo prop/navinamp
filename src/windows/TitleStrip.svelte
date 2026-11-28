@@ -12,9 +12,16 @@
    * With `playlistTheme`, the strip is the folded playlist's current-track
    * line instead of window chrome: it uses the playlist editor's font and
    * pledit colors, matching the PE shade bar in classic Winamp.
+   *
+   * The `×` at the right end closes the window. It is a sibling of the strip,
+   * laid over its end, because the foldable strip is a `<button>` itself and
+   * a press on it would start a drag. Only the secondary windows use the
+   * strip, and they only ever hide, so nothing here can quit the app.
    */
   import type { SkinTheme } from "../lib/skin/theme";
+  import { windowSetVisible } from "../lib/window/bus.svelte";
   import { dragWindow } from "../lib/window/drag";
+  import { LABEL } from "../lib/window/identity";
 
   interface Props {
     title: string;
@@ -24,14 +31,21 @@
     onfold?: () => void;
     /** Playlist shade colors; set only for the folded playlist track line. */
     playlistTheme?: SkinTheme;
+    /** What the close button does; the default hides this window. */
+    onclose?: () => void;
   }
-  let { title, note, onfold, playlistTheme }: Props = $props();
+  let { title, note, onfold, playlistTheme, onclose }: Props = $props();
 
   const playlistStyle = $derived(
     playlistTheme
       ? `--strip-fg:${playlistTheme.normal};--strip-bg:${playlistTheme.normalbg}`
       : undefined,
   );
+
+  function close(): void {
+    if (onclose) onclose();
+    else windowSetVisible(LABEL, false).catch(() => undefined);
+  }
 </script>
 
 {#snippet content()}
@@ -41,34 +55,44 @@
   {/if}
 {/snippet}
 
-{#if onfold}
-  <button
-    type="button"
-    class="strip foldable"
-    class:playlist={playlistTheme != null}
-    style={playlistStyle}
-    use:dragWindow
-    aria-label={`${title} — press Enter to fold or unfold`}
-    title="Drag to move — double-click folds the window"
-    ondblclick={onfold}
-    onclick={(e) => {
-      // detail 0 = keyboard activation (Enter/Space); mouse clicks wait for
-      // the classic double-click.
-      if (e.detail === 0) onfold?.();
-    }}>
-    {@render content()}
-  </button>
-{:else}
-  <header
-    class="strip"
-    class:playlist={playlistTheme != null}
-    style={playlistStyle}
-    use:dragWindow>
-    {@render content()}
-  </header>
-{/if}
+<div class="chrome">
+  {#if onfold}
+    <button
+      type="button"
+      class="strip foldable"
+      class:playlist={playlistTheme != null}
+      style={playlistStyle}
+      use:dragWindow
+      aria-label={`${title} — press Enter to fold or unfold`}
+      title="Drag to move — double-click folds the window"
+      ondblclick={onfold}
+      onclick={(e) => {
+        // detail 0 = keyboard activation (Enter/Space); mouse clicks wait for
+        // the classic double-click.
+        if (e.detail === 0) onfold?.();
+      }}>
+      {@render content()}
+    </button>
+  {:else}
+    <header
+      class="strip"
+      class:playlist={playlistTheme != null}
+      style={playlistStyle}
+      use:dragWindow>
+      {@render content()}
+    </header>
+  {/if}
+  <button type="button" class="x" onclick={close} title="close" aria-label={`Close ${title}`}>×</button>
+</div>
 
 <style>
+  /* The strip fills this box; the close button is laid over its right end. */
+  .chrome {
+    position: relative;
+    width: 100%;
+    flex: none;
+  }
+
   .strip {
     display: flex;
     align-items: center;
@@ -77,7 +101,8 @@
     width: 100%;
     box-sizing: border-box;
     height: 14px;
-    padding: 0 8px;
+    /* Room on the right for the close button. */
+    padding: 0 24px 0 8px;
     background: #101010;
     border: 1px solid #2a2a2a;
     user-select: none;
@@ -92,6 +117,32 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+  }
+
+  .x {
+    /* Sized, not stretched between top and bottom: WebKit does not stretch
+       an absolutely positioned <button> (it came out 8px tall). Fits inside
+       the strip's 14px border box. */
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    width: 18px;
+    height: 12px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #707070;
+    font: 11px/1 Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
+  }
+
+  .x:hover,
+  .x:focus-visible {
+    color: #3ccb4e;
+    outline: none;
   }
 
   /* Pixel font + tracked caps: the classic skinned-titlebar look. */

@@ -3067,7 +3067,11 @@
 
 <style>
   .ml {
-    position: relative; /* hosts the editor overlay */
+    /* A positioned root for the pane's own children. The settings dialogs
+       are not positioned against it: they are fixed to the viewport, so that
+       a window made smaller than the pane cannot push their footers
+       off-screen. */
+    position: relative;
     width: 640px;
     box-sizing: border-box;
     display: flex;

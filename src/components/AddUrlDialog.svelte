@@ -10,6 +10,10 @@
    * Homebrew and common local installs, with an explicit override for unusual
    * setups. Nothing is bundled; YouTube support is opt-in by installing the
    * helper.
+   *
+   * While a URL is being resolved nothing closes the dialog: the ×, CANCEL
+   * and Escape are disabled, because the result or the error has to be seen.
+   * A resolve is bounded by the backend's 60 s timeout (streams.rs).
    */
   import { onMount } from "svelte";
 
@@ -216,8 +220,14 @@
     position: fixed;
     inset: 0;
     z-index: 50;
-    display: grid;
-    place-items: center;
+    /* Flex, not grid: while a grid row is being sized, a percentage
+       max-height on the item counts for nothing, so a panel taller than the
+       window (the path editor and a long error) ran past its bottom edge and
+       took the footer with it. Against a flex container's fixed height the
+       percentage holds. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: rgba(0, 0, 0, 0.6);
     font-family: Tahoma, "Segoe UI", Geneva, Verdana, sans-serif;
   }

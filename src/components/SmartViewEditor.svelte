@@ -109,6 +109,9 @@
   let deleting = $state(false);
   let publishing = $state(false);
 
+  // CANCEL and Escape wait for a running save, delete or publish, so its
+  // result is seen. All three are bounded: SQLite's 5 s busy timeout, and
+  // the 30 s request timeout for the server.
   function requestCancel(): void {
     if (!saving && !deleting && !publishing) oncancel();
   }
@@ -548,7 +551,11 @@
 
 <style>
   .overlay {
-    position: absolute;
+    /* Fixed to the viewport, not absolute to the panel: the Media Library
+       does not reflow when its window is made smaller, so in a window
+       shorter than the panel the dialog has to be bounded by what is
+       actually visible, or its footer ends up below the window. */
+    position: fixed;
     inset: 0;
     z-index: 20;
     /* Flex, not grid: while a grid row is being sized, a percentage
