@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.18.1](https://github.com/prop/navinamp/compare/v0.18.0...v0.18.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **navidrome:** close the server settings once a server connects ([6c55958](https://github.com/prop/navinamp/commit/6c55958a480a5eb22e40720efa0a2b7140bf03d1))
+* **navidrome:** close the server settings once a server connects ([7180545](https://github.com/prop/navinamp/commit/71805456e1837ecacae869ce137126dce2f509dd))
+* **navidrome:** keep the server settings from closing while connecting ([32ca338](https://github.com/prop/navinamp/commit/32ca33863115c1dd6d59f84dd346c232ff5f1059))
+* **navidrome:** never sign in to the native API over plain HTTP ([a49d207](https://github.com/prop/navinamp/commit/a49d207848fd8cd8b2e99f64d2f53e540c2a3cde))
+* **navidrome:** never sign in to the native API over plain HTTP ([0453c6a](https://github.com/prop/navinamp/commit/0453c6a142bf1f3cbbd54f7f29234a877b5e65c0))
+
 ## [0.18.0](https://github.com/prop/navinamp/compare/v0.17.0...v0.18.0) (2026-11-26)
 
 
